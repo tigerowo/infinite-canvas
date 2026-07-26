@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/config"
+	"github.com/tigerowo/infinite-canvas/service"
 	"github.com/google/uuid"
 )
 
@@ -84,9 +84,10 @@ func UploadReferenceMedia(w http.ResponseWriter, r *http.Request) {
 		Fail(w, referenceMediaSizeMessage(mimeType))
 		return
 	}
+	signedPath := service.SignedReferenceMediaPath(id)
 	OK(w, referenceMediaUploadResult{
 		ID:       id,
-		URL:      fmt.Sprintf("%s/api/media/references/%s", publicBaseURL, id),
+		URL:      publicBaseURL + signedPath,
 		MimeType: mimeType,
 		Bytes:    bytes,
 	})
@@ -96,6 +97,15 @@ func ReferenceMedia(w http.ResponseWriter, r *http.Request, id string) {
 	if id == "" || id != filepath.Base(id) || strings.Contains(id, "..") {
 		http.NotFound(w, r)
 		return
+	}
+	if !service.VerifyResourceAccess("reference:"+id, r.URL.Query().Get("exp"), r.URL.Query().Get("sig")) {
+		// allow owner/admin bearer as fallback for authenticated app reads
+		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		user, ok := service.CurrentAuthUser(strings.TrimSpace(token))
+		if !ok || user.Role == "" {
+			FailWithStatus(w, http.StatusUnauthorized, "未授权访问参考素材")
+			return
+		}
 	}
 	path := filepath.Join(referenceMediaDir(), id)
 	file, err := os.Open(path)
@@ -112,7 +122,7 @@ func ReferenceMedia(w http.ResponseWriter, r *http.Request, id string) {
 	if mimeType := mimeTypeByReferenceMediaExt(filepath.Ext(id)); mimeType != "" {
 		w.Header().Set("Content-Type", mimeType)
 	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
 	http.ServeContent(w, r, id, info.ModTime(), file)
 }
 

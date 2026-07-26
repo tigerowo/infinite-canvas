@@ -213,7 +213,7 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
 	}
-	url := "/api/files/" + objectID + "/content"
+	url := SignedFileContentPath(objectID)
 	if publicURL != "" {
 		url = publicURL
 	}

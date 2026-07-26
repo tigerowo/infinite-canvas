@@ -13,7 +13,7 @@ import (
 func AdminAuth(c *gin.Context) {
 	user, ok := authUser(c)
 	if !ok || user.Role != model.UserRoleAdmin {
-		handler.Fail(c.Writer, "未登录或权限不足")
+		handler.FailWithStatus(c.Writer, http.StatusUnauthorized, "未登录或权限不足")
 		c.Abort()
 		return
 	}
@@ -24,7 +24,7 @@ func AdminAuth(c *gin.Context) {
 func UserAuth(c *gin.Context) {
 	user, ok := authUser(c)
 	if !ok || user.Role == model.UserRoleGuest {
-		handler.Fail(c.Writer, "未登录或权限不足")
+		handler.FailWithStatus(c.Writer, http.StatusUnauthorized, "未登录或权限不足")
 		c.Abort()
 		return
 	}

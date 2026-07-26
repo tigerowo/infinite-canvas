@@ -64,7 +64,8 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     const url = typeof input === "string" ? getProxyUrl(input) : input;
     let blob: Blob;
     if (typeof url === "string") {
-        const response = await fetch(url);
+        const token = useUserStore.getState().token;
+        const response = await fetch(url, token && url.includes("/api/proxy-image") ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
         if (!response.ok) {
             const payload = await response.json().catch(() => null) as { msg?: string } | null;
             throw new Error(payload?.msg || `代理图片拉取失败：${response.status}`);
@@ -91,7 +92,9 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
 }
 
 export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {
-    const response = await fetch(getProxyUrl(url));
+    const token = useUserStore.getState().token;
+    const proxyUrl = getProxyUrl(url);
+    const response = await fetch(proxyUrl, token && proxyUrl.includes("/api/proxy-image") ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
     if (!response.ok) {
         const payload = await response.json().catch(() => null) as { msg?: string } | null;
         throw new Error(payload?.msg || "代理图片拉取失败：" + response.status);
@@ -100,7 +103,6 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
     const config = await loadStorageConfig();
     const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
     if (!canUseGlobalStorage(config) && !userProvider) throw new Error("服务端对象存储未启用");
-    const token = useUserStore.getState().token;
     if (!token) throw new Error("服务端存储需要先登录");
     const formData = new FormData();
     formData.append("file", blob, filename || "image-" + nanoid() + "." + imageExtension(blob.type));
@@ -132,9 +134,10 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
         }
         const cachedUrl = serverUrls.get(id);
         if (cachedUrl) return cachedUrl;
-        const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
+        const token = useUserStore.getState().token;
+        const info = await apiGet<{ publicUrl?: string; contentUrl?: string }>(`/api/files/${encodeURIComponent(id)}`, undefined, token || undefined).catch(() => null);
         if (!info) return fallback;
-        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        const url = info.publicUrl || info.contentUrl || `/api/files/${encodeURIComponent(id)}/content`;
         serverUrls.set(id, url);
         return url;
     }
@@ -208,7 +211,8 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
         if (url.startsWith("data:")) return url;
         try {
             const proxyUrl = getProxyUrl(url);
-            const response = await fetch(proxyUrl);
+            const token = useUserStore.getState().token;
+            const response = await fetch(proxyUrl, token && proxyUrl.includes("/api/proxy-image") ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
             if (!response.ok) {
                 lastError = `读取参考图失败：${response.status}`;
                 continue;

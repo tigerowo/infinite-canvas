@@ -33,7 +33,9 @@ export async function uploadAssetMediaFile(file: File, prefix = "asset-media"): 
 }
 
 export async function downloadRemoteMedia(url: string) {
-    const response = await fetch(proxiedMediaUrl(url));
+    const proxyUrl = proxiedMediaUrl(url);
+    const token = useUserStore.getState().token;
+    const response = await fetch(proxyUrl, token && proxyUrl.includes("/api/proxy-image") ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
     if (!response.ok) throw new Error(`视频下载失败：${response.status}`);
     const blob = await response.blob();
     if (blob.type.includes("json") || blob.type.startsWith("text/")) {
@@ -103,9 +105,10 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
         if (fallback && !fallback.startsWith("blob:")) return fallback;
-        const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
+        const token = useUserStore.getState().token;
+        const info = await apiGet<{ publicUrl?: string; contentUrl?: string }>(`/api/files/${encodeURIComponent(id)}`, undefined, token || undefined).catch(() => null);
         if (!info) return fallback;
-        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        const url = info.publicUrl || info.contentUrl || `/api/files/${encodeURIComponent(id)}/content`;
         return url;
     }
     return fallback;

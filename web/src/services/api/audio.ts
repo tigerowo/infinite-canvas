@@ -25,8 +25,8 @@ export type CanvasAudioTask = {
 export type CanvasAudioTaskOptions = { nodeId?: string; sourceId?: string; clientTaskId?: string };
 
 function usesAccountProxy(config: AiConfig) {
-    const token = useUserStore.getState().token;
-    return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
+    // Local channels always browser-direct; server proxy of user BaseURL is forbidden (SSRF).
+    return config.channelMode === "remote";
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -41,13 +41,6 @@ function aiHeaders(config: AiConfig) {
         return {
             ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
-            "Content-Type": "application/json",
-        };
-    }
-    if (token) {
-        return {
-            Authorization: `Bearer ${token}`,
-            ...(channelIdForActiveModel(config) ? { "X-User-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
             "Content-Type": "application/json",
         };
     }

@@ -8,7 +8,9 @@
         "build": "next build",
         "start": "next start",
         "format": "prettier --write .",
-        "format:check": "prettier --check ."
+        "format:check": "prettier --check .",
+        "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+        "test": "echo \"No frontend unit tests yet\" && exit 0"
     },
     "dependencies": {
         "@ant-design/icons": "^6.1.1",

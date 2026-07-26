@@ -102,7 +102,7 @@ func New() *gin.Engine {
 	})
 	v1.GET("/user-data/assets", gin.WrapF(handler.UserAssetData))
 	v1.POST("/user-data/assets", gin.WrapF(handler.SaveUserAssetData))
-	api.GET("/proxy-image", gin.WrapF(handler.ProxyImage))
+	api.GET("/proxy-image", middleware.UserAuth, gin.WrapF(handler.ProxyImage))
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", gin.WrapF(handler.AdminLogin))

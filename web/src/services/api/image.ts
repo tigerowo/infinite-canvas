@@ -433,8 +433,8 @@ function withPromptGuard(config: AiConfig, prompt: string) {
 }
 
 function usesAccountProxy(config: AiConfig) {
-    const token = useUserStore.getState().token;
-    return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
+    // Local channels always browser-direct; server proxy of user BaseURL is forbidden (SSRF).
+    return config.channelMode === "remote";
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -450,14 +450,6 @@ function aiHeaders(config: AiConfig, contentType?: string) {
         return {
             Authorization: `Bearer ${token}`,
             ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
-            ...(contentType ? { "Content-Type": contentType } : {}),
-        };
-    }
-    if (token) {
-        const userChannelId = channelIdForActiveModel(config);
-        return {
-            Authorization: `Bearer ${token}`,
-            ...(userChannelId ? { "X-User-Model-Channel-ID": userChannelId } : {}),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }

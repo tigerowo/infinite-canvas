@@ -14,7 +14,7 @@ import (
 type Config struct {
 	Port                string `env:"PORT" envDefault:"8080"`
 	AdminUsername       string `env:"ADMIN_USERNAME" envDefault:"admin"`
-	AdminPassword       string `env:"ADMIN_PASSWORD" envDefault:"infinite-canvas"`
+	AdminPassword       string `env:"ADMIN_PASSWORD"`
 	JWTSecret           string `env:"JWT_SECRET" envDefault:"infinite-canvas"`
 	JWTExpireHours      int    `env:"JWT_EXPIRE_HOURS" envDefault:"168"`
 	StorageDriver       string `env:"STORAGE_DRIVER" envDefault:"sqlite"`
@@ -77,4 +77,17 @@ func randomSecret() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// IsInsecureAdminPassword reports empty or well-known default admin passwords.
+func IsInsecureAdminPassword(password string) bool {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return true
+	}
+	switch strings.ToLower(password) {
+	case "infinite-canvas", "admin", "password", "123456", "12345678":
+		return true
+	}
+	return len(password) < 8
 }

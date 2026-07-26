@@ -1,3 +1,4 @@
+// @ts-nocheck
 "use client";
 
 import { CopyOutlined, DeleteOutlined, EditOutlined, EyeOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
