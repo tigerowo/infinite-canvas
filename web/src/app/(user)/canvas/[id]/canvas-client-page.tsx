@@ -1,8 +1,7 @@
-// @ts-nocheck
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
+import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import dynamic from "next/dynamic";
 import { useParams, useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, Globe2, Home, ImageIcon, Images, Layers3, List, Menu, MessageSquare, Music2, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Settings2, Trash2, Undo2, Upload, Video } from "lucide-react";
@@ -878,7 +877,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         const map = new Map<string, CanvasVideoResourceOption[]>();
         nodes.forEach((node) => {
             if (node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Config) return;
-            const options: CanvasVideoResourceOption[] = connections.flatMap((connection) => {
+            const options: CanvasVideoResourceOption[] = connections.flatMap<CanvasVideoResourceOption>((connection) => {
                 if (connection.toNodeId !== node.id) return [];
                 const source = nodeById.get(connection.fromNodeId);
                 if (!source) return [];
@@ -2883,7 +2882,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             }
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
-            const prompt = (isPanorama ? savedImageMetadata?.panoramaFinalPrompt : savedImageMetadata?.prompt || context?.prompt || "").trim();
+            const prompt = (isPanorama ? savedImageMetadata?.panoramaFinalPrompt || "" : savedImageMetadata?.prompt || context?.prompt || "").trim();
             const requestPrompt = isPanorama ? prompt : applyCameraPrompt(prompt, savedImageMetadata?.cameraControl || node.metadata?.cameraControl);
             if (!prompt) {
                 message.warning("找不到提示词，无法重试");
@@ -3563,7 +3562,7 @@ function FullscreenPreview({ src, alt, isPanorama, onClose, hasPrev, hasNext, on
         return () => el.removeEventListener("wheel", handleWheel);
     });
 
-    const handleWheel = (e: ReactWheelEvent) => {
+    const handleWheel = (e: WheelEvent) => {
         e.stopPropagation();
         e.preventDefault();
         setZoom((z) => {
@@ -4105,7 +4104,7 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 mimeType: task.mimeType || "image/png",
                 progress: 100,
                 imageTaskResultId: task.id,
-                panoramaProjection: isPanorama ? "equirectangular" : undefined,
+                panoramaProjection: isPanorama ? ("equirectangular" as const) : undefined,
             },
         };
     });

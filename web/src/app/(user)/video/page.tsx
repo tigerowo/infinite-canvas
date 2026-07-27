@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 import axios from "axios";
 
@@ -627,7 +626,7 @@ export default function VideoPage() {
             const settled = await Promise.allSettled(pendingLogs.map((log) => runVideoTask(log, snapshot)));
             const nextLogs = settled
                 .map((item) => (item.status === "fulfilled" ? item.value : null))
-                .filter((item): item is GenerationLog => Boolean(item));
+                .filter((item): item is NonNullable<typeof item> => Boolean(item));
             const storedLogs = await readStoredLogs();
             setLogs(storedLogs);
             const createdCount = nextLogs.filter((item) => item.status === "生成中").length;
@@ -1290,6 +1289,7 @@ function WorkbenchPanel({
     layout: WorkbenchLayout;
     currentLayout: WorkbenchLayout;
     prompt: string;
+    negativePrompt?: string;
     references: ReferenceImage[];
     firstFrame: ReferenceImage | null;
     lastFrame: ReferenceImage | null;
@@ -2306,7 +2306,7 @@ function parseTaskTimestamp(value: unknown) {
     return 0;
 }
 
-function isClientVideoTaskId(id?: string | null) {
+function isClientVideoTaskId(id?: string | null): id is string {
     return typeof id === "string" && id.startsWith("client_video_task_");
 }
 
@@ -2541,7 +2541,7 @@ async function safeResolveMediaUrl(storageKey: string, fallback: string) {
     }
 }
 
-async function safeResolveImageUrl(storageKey: string, fallback: string) {
+async function safeResolveImageUrl(storageKey: string | undefined, fallback: string) {
     try {
         return await resolveImageUrl(storageKey, fallback);
     } catch {
@@ -2692,6 +2692,7 @@ function buildLog({ prompt, model, config, references, firstFrame, lastFrame, vi
         videoMultiShot: config.videoMultiShot,
         videoShotType: config.videoShotType,
         videoMultiPrompt: normalizeKlingMultiPrompts(config.videoMultiPrompt),
+        videoElementList: config.videoElementList,
         videoGenerateAudio: config.videoGenerateAudio,
         videoWatermark: config.videoWatermark,
         videoCharacterOrientation: normalizeCharacterOrientation(config.videoCharacterOrientation),

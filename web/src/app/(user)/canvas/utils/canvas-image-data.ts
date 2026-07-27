@@ -1,6 +1,6 @@
 "use client";
 
-import { useUserStore } from "@/stores/use-user-store";
+import { getProxyUrl } from "@/services/image-storage";
 
 export type ImageCropRect = {
     x: number;
@@ -166,24 +166,16 @@ function drawResizeCanvas(source: CanvasImageSource, sourceWidth: number, source
     return canvas;
 }
 
-async function loadImage(dataUrl: string) {
-    const image = new Image();
-    let src = dataUrl;
-    if (dataUrl.startsWith("http")) {
-        const token = useUserStore.getState().token;
-        const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(dataUrl)}`;
-        const response = await fetch(proxyUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-        if (!response.ok) {
-            throw new Error(`代理图片拉取失败：${response.status}`);
+function loadImage(dataUrl: string) {
+    return new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        let src = dataUrl;
+        if (dataUrl.startsWith("http")) {
+            src = getProxyUrl(dataUrl);
+            image.crossOrigin = "anonymous";
         }
-        const blob = await response.blob();
-        src = URL.createObjectURL(blob);
-        image.crossOrigin = "anonymous";
-    }
-    await new Promise<void>((resolve, reject) => {
-        image.onload = () => resolve();
+        image.onload = () => resolve(image);
         image.onerror = (err) => reject(err);
         image.src = src;
     });
-    return image;
 }

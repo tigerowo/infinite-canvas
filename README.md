@@ -67,8 +67,8 @@ go run .
 
 # 另开一个终端窗口
 cd web
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 本地源码构建运行：

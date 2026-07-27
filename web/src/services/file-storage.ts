@@ -4,7 +4,7 @@ import localforage from "localforage";
 import { nanoid } from "nanoid";
 
 import { apiGet } from "@/services/api/request";
-import { canUseGlobalStorage, loadUserStorageProvider, type StorageConfig, type UserStorageProvider } from "@/services/image-storage";
+import { canUseGlobalStorage, getProxyUrl, loadUserStorageProvider, type StorageConfig, type UserStorageProvider } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
@@ -33,9 +33,7 @@ export async function uploadAssetMediaFile(file: File, prefix = "asset-media"): 
 }
 
 export async function downloadRemoteMedia(url: string) {
-    const proxyUrl = proxiedMediaUrl(url);
-    const token = useUserStore.getState().token;
-    const response = await fetch(proxyUrl, token && proxyUrl.includes("/api/proxy-image") ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+    const response = await fetch(getProxyUrl(url));
     if (!response.ok) throw new Error(`视频下载失败：${response.status}`);
     const blob = await response.blob();
     if (blob.type.includes("json") || blob.type.startsWith("text/")) {
@@ -78,12 +76,6 @@ async function loadStorageConfig() {
     return storageConfigPromise;
 }
 
-function proxiedMediaUrl(url: string) {
-    if (!url.startsWith("http://") && !url.startsWith("https://")) return url;
-    if (typeof window !== "undefined" && url.includes(window.location.host)) return url;
-    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
-}
-
 export function clearStorageConfigCache() {
     storageConfigPromise = null;
 }
@@ -105,10 +97,9 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
         if (fallback && !fallback.startsWith("blob:")) return fallback;
-        const token = useUserStore.getState().token;
-        const info = await apiGet<{ publicUrl?: string; contentUrl?: string }>(`/api/files/${encodeURIComponent(id)}`, undefined, token || undefined).catch(() => null);
+        const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
         if (!info) return fallback;
-        const url = info.publicUrl || info.contentUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
         return url;
     }
     return fallback;

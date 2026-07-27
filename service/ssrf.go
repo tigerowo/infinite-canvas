@@ -1,103 +1,92 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
 
-// ValidatePublicHTTPURL rejects non-http(s) schemes and hosts that resolve to private/link-local/metadata addresses.
-func ValidatePublicHTTPURL(raw string) error {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return fmt.Errorf("url 参数不能为空")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		return fmt.Errorf("无效的 url")
-	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return fmt.Errorf("仅允许 http/https")
-	}
-	if parsed.User != nil {
-		return fmt.Errorf("url 不允许包含用户信息")
-	}
-	host := parsed.Hostname()
-	if host == "" {
-		return fmt.Errorf("无效的 url")
-	}
-	if isBlockedHostname(host) {
-		return fmt.Errorf("禁止访问内网或本地地址")
-	}
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		// literal IP parse fallback
-		if ip := net.ParseIP(host); ip != nil {
-			if isBlockedIP(ip) {
-				return fmt.Errorf("禁止访问内网或本地地址")
+var safeProxyHTTPClient = newSafeProxyHTTPClient()
+
+func SafeProxyHTTPClient() *http.Client {
+	return safeProxyHTTPClient
+}
+func newSafeProxyHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = safeProxyDialContext
+	return &http.Client{
+		Transport: transport,
+		Timeout:   5 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) > 5 {
+				return errors.New("重定向次数过多")
+			}
+			scheme := strings.ToLower(req.URL.Scheme)
+			if scheme != "http" && scheme != "https" {
+				return errors.New("重定向地址无效")
 			}
 			return nil
-		}
-		return fmt.Errorf("无法解析目标主机")
+		},
 	}
-	if len(ips) == 0 {
-		return fmt.Errorf("无法解析目标主机")
-	}
-	for _, ip := range ips {
-		if isBlockedIP(ip) {
-			return fmt.Errorf("禁止访问内网或本地地址")
-		}
-	}
-	return nil
 }
 
-func isBlockedHostname(host string) bool {
-	h := strings.ToLower(strings.TrimSpace(host))
-	switch h {
-	case "localhost", "localhost.localdomain", "metadata", "metadata.google.internal":
-		return true
+func safeProxyDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
 	}
-	if strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".local") || strings.HasSuffix(h, ".internal") {
-		return true
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil || len(ips) == 0 {
+		return nil, errors.New("无法解析目标地址")
 	}
-	if ip := net.ParseIP(h); ip != nil {
-		return isBlockedIP(ip)
+	for _, item := range ips {
+		if isBlockedProxyIP(item.IP) {
+			return nil, errors.New("禁止访问本地或内网地址")
+		}
 	}
-	return false
+	dialer := net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	var lastErr error
+	for _, item := range ips {
+		conn, err := dialer.DialContext(
+			ctx,
+			network,
+			net.JoinHostPort(item.String(), port),
+		)
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("无法连接目标地址: %w", lastErr)
 }
 
-func isBlockedIP(ip net.IP) bool {
+func isBlockedProxyIP(ip net.IP) bool {
 	if ip == nil {
 		return true
 	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+	if ip.IsLoopback() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsUnspecified() {
 		return true
 	}
-	// CGNAT / common cloud metadata ranges
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 169 && ip4[1] == 254 {
-			return true
-		}
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return true
-		}
-		if ip4[0] == 0 {
-			return true
-		}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
 	}
-	return false
-}
-
-// SafeImageProxyClient returns an HTTP client for image proxying with short timeout and no redirects.
-func SafeImageProxyClient() *http.Client {
-	return &http.Client{
-		Timeout: 15 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	// 100.64.0.0/10，包括部分云平台 metadata 地址。
+	if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+		return true
 	}
+	return ip4[0] == 0
 }

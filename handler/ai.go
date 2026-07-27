@@ -22,8 +22,8 @@ const userModelChannelHeader = "X-User-Model-Channel-ID"
 func selectAIRequestChannel(user model.AuthUser, modelName string, channelID string, userChannelID string) (model.ModelChannel, string, error) {
 	userChannelID = strings.TrimSpace(userChannelID)
 	if userChannelID != "" {
-		// Local channels must be called from the browser; server-side proxy enables SSRF via user BaseURL.
-		return model.ModelChannel{}, userChannelID, fmt.Errorf("本地渠道禁止服务端代发，请使用浏览器直连")
+		channel, err := service.SelectUserLocalModelChannelForModel(user.ID, modelName, userChannelID)
+		return channel, userChannelID, err
 	}
 	if !service.UserCanUseRemoteModelChannel(user) {
 		return model.ModelChannel{}, "", fmt.Errorf("当前账号未开放云端渠道")
@@ -35,7 +35,7 @@ func selectAIRequestChannel(user model.AuthUser, modelName string, channelID str
 func failAIChannelSelect(w http.ResponseWriter, err error, fallback string) {
 	message := strings.TrimSpace(err.Error())
 	switch message {
-	case "当前账号未开放云端渠道", "请先登录", "缺少模型名称", "缺少模型渠道", "本地渠道不存在", "本地渠道配置不完整", "本地渠道不支持该模型", "指定模型渠道不可用", "本地渠道禁止服务端代发，请使用浏览器直连":
+	case "当前账号未开放云端渠道", "请先登录", "缺少模型名称", "缺少模型渠道", "本地渠道不存在", "本地渠道配置不完整", "本地渠道不支持该模型", "指定模型渠道不可用":
 		Fail(w, message)
 	default:
 		Fail(w, fallback)

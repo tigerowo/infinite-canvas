@@ -433,8 +433,8 @@ function withPromptGuard(config: AiConfig, prompt: string) {
 }
 
 function usesAccountProxy(config: AiConfig) {
-    // Local channels always browser-direct; server proxy of user BaseURL is forbidden (SSRF).
-    return config.channelMode === "remote";
+    const token = useUserStore.getState().token;
+    return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -450,6 +450,14 @@ function aiHeaders(config: AiConfig, contentType?: string) {
         return {
             Authorization: `Bearer ${token}`,
             ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
+            ...(contentType ? { "Content-Type": contentType } : {}),
+        };
+    }
+    if (token) {
+        const userChannelId = channelIdForActiveModel(config);
+        return {
+            Authorization: `Bearer ${token}`,
+            ...(userChannelId ? { "X-User-Model-Channel-ID": userChannelId } : {}),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }
@@ -827,7 +835,7 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
 
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
     const taskChannelId = channelIdForActiveModel(config);
-    const taskChannelHeader = config.channelMode === "remote" && taskChannelId ? { "X-Model-Channel-ID": taskChannelId } : {};
+    const taskChannelHeader: Record<string, string> = config.channelMode === "remote" && taskChannelId ? { "X-Model-Channel-ID": taskChannelId } : {};
     const tokenHeaders = { ...aiHeaders(config), ...taskChannelHeader };
     const jsonHeaders = { ...aiHeaders(config, "application/json"), ...taskChannelHeader };
     const meta = { nodeId: options.nodeId || "", source: options.source || "canvas", sourceId: options.sourceId || "", clientTaskId: options.clientTaskId || "", prompt, channelId: taskChannelId };

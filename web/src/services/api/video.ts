@@ -31,8 +31,8 @@ export class VideoRequestError extends Error {
 }
 
 function usesAccountProxy(config: AiConfig) {
-    // Local channels always browser-direct; server proxy of user BaseURL is forbidden (SSRF).
-    return config.channelMode === "remote";
+    const token = useUserStore.getState().token;
+    return config.channelMode === "remote" || (config.channelMode === "local" && Boolean(token));
 }
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -62,6 +62,7 @@ function aiHeaders(config: AiConfig) {
     const token = useUserStore.getState().token;
     if (config.channelMode === "remote" && !token) throw new Error("请先登录后再使用云端渠道");
     if (config.channelMode === "remote") return { Authorization: `Bearer ${token}`, ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}) };
+    if (token) return { Authorization: `Bearer ${token}`, ...(channelIdForActiveModel(config) ? { "X-User-Model-Channel-ID": channelIdForActiveModel(config) } : {}) };
     return { Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}` };
 }
 

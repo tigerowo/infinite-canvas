@@ -33,28 +33,21 @@ type userExtra struct {
 }
 
 func EnsureDefaultAdmin() error {
-	username := strings.TrimSpace(config.Cfg.AdminUsername)
-	password := strings.TrimSpace(config.Cfg.AdminPassword)
-	if username == "" && password == "" {
+	if strings.TrimSpace(config.Cfg.AdminUsername) == "" || strings.TrimSpace(config.Cfg.AdminPassword) == "" {
 		return nil
 	}
-	if config.IsInsecureAdminPassword(password) {
-		return errors.New("拒绝使用默认/弱管理员口令：请在 .env 设置至少 8 位的 ADMIN_PASSWORD（不可为 infinite-canvas 等常见弱口令）")
-	}
-	if username == "" {
-		return errors.New("ADMIN_USERNAME 不能为空")
-	}
+	WarnDefaultSecurityConfig()
 	hasAdmin, err := repository.HasAdmin()
 	if err != nil || hasAdmin {
 		return err
 	}
-	hash, err := hashPassword(password)
+	hash, err := hashPassword(config.Cfg.AdminPassword)
 	if err != nil {
 		return err
 	}
 	_, err = repository.SaveUser(model.User{
 		ID:        newID("user"),
-		Username:  username,
+		Username:  strings.TrimSpace(config.Cfg.AdminUsername),
 		Password:  hash,
 		Role:      model.UserRoleAdmin,
 		AffCode:   newAffCode(),

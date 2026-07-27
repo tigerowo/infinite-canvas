@@ -10,8 +10,6 @@ import (
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
-const proxyImageMaxBytes = 15 << 20
-
 // StorageConfig 返回公开存储配置。
 func StorageConfig(w http.ResponseWriter, r *http.Request) {
 	config, err := service.PublicStorageConfig()
@@ -107,10 +105,6 @@ func DeleteFile(w http.ResponseWriter, r *http.Request, id string) {
 
 // FileContent 获取文件内容。
 func FileContent(w http.ResponseWriter, r *http.Request, id string) {
-	if !authorizeFileAccess(r, id) {
-		FailWithStatus(w, http.StatusUnauthorized, "未登录或无权访问该文件")
-		return
-	}
 	download, err := service.DownloadStorageObject(id)
 	if err != nil {
 		FailError(w, err)
@@ -121,37 +115,18 @@ func FileContent(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	w.Header().Set("Content-Type", download.Object.MimeType)
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	_, _ = w.Write(download.Data)
 }
 
 // FileInfo 获取文件元数据。
 func FileInfo(w http.ResponseWriter, r *http.Request, id string) {
-	if !authorizeFileAccess(r, id) {
-		FailWithStatus(w, http.StatusUnauthorized, "未登录或无权访问该文件")
-		return
-	}
 	object, err := service.StorageObjectInfo(id)
 	if err != nil {
 		FailError(w, err)
 		return
 	}
-	payload := map[string]any{
-		"id":         object.ID,
-		"providerId": object.ProviderID,
-		"bucket":     object.Bucket,
-		"objectKey":  object.ObjectKey,
-		"publicUrl":  object.PublicURL,
-		"mimeType":   object.MimeType,
-		"bytes":      object.Bytes,
-		"width":      object.Width,
-		"height":     object.Height,
-		"sha256":     object.SHA256,
-		"createdBy":  object.CreatedBy,
-		"createdAt":  object.CreatedAt,
-		"contentUrl": service.SignedFileContentPath(object.ID),
-	}
-	OK(w, payload)
+	OK(w, object)
 }
 
 // AdminMeasureStorageProvider 管理员统计存储容量。
@@ -172,20 +147,19 @@ func AdminMeasureStorageProvider(w http.ResponseWriter, r *http.Request) {
 	OK(w, result)
 }
 
-// ProxyImage 代理图片请求（解决跨域和机器人检测问题）。需登录，并做 SSRF 防护。
+// ProxyImage 代理图片请求（解决跨域和机器人检测问题）。
 func ProxyImage(w http.ResponseWriter, r *http.Request) {
-	if _, ok := service.UserFromContext(r.Context()); !ok {
-		FailWithStatus(w, http.StatusUnauthorized, "未登录或权限不足")
-		return
-	}
 	targetURL := r.URL.Query().Get("url")
-	if err := service.ValidatePublicHTTPURL(targetURL); err != nil {
-		FailWithStatus(w, http.StatusForbidden, err.Error())
+	if targetURL == "" {
+		Fail(w, "url 参数不能为空")
 		return
 	}
-
-	client := service.SafeImageProxyClient()
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		Fail(w, "无效的 url")
+		return
+	}
+	client := service.SafeProxyHTTPClient()
+	req, err := http.NewRequest(http.MethodGet, targetURL, nil)
 	if err != nil {
 		FailError(w, err)
 		return
@@ -193,6 +167,8 @@ func ProxyImage(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -205,52 +181,25 @@ func ProxyImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentType := resp.Header.Get("Content-Type")
-	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0])), "image/") {
-		FailWithStatus(w, http.StatusUnsupportedMediaType, "仅允许代理图片内容")
+	isImage := strings.HasPrefix(contentType, "image/")
+	var data []byte
+	if isImage {
+		data, err = io.ReadAll(resp.Body)
+		if err != nil {
+			FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败")
+			return
+		}
+	}
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(resp.StatusCode)
+	if isImage {
+		_, _ = w.Write(data)
 		return
 	}
-	limited := io.LimitReader(resp.Body, proxyImageMaxBytes+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
-		FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败")
-		return
-	}
-	if len(data) > proxyImageMaxBytes {
-		FailWithStatus(w, http.StatusRequestEntityTooLarge, "代理图片过大")
-		return
-	}
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "private, max-age=3600")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(data)
+	_, _ = io.Copy(w, resp.Body)
 }
-
-func authorizeFileAccess(r *http.Request, id string) bool {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return false
-	}
-	if service.VerifyResourceAccess("file:"+id, r.URL.Query().Get("exp"), r.URL.Query().Get("sig")) {
-		return true
-	}
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if strings.TrimSpace(token) == "" {
-		return false
-	}
-	user, ok := service.CurrentAuthUser(token)
-	if !ok || user.Role == model.UserRoleGuest {
-		return false
-	}
-	if user.Role == model.UserRoleAdmin {
-		return true
-	}
-	object, err := service.StorageObjectInfo(id)
-	if err != nil {
-		return false
-	}
-	if object.CreatedBy == "" || object.CreatedBy == "anonymous" {
-		return true
-	}
-	return object.CreatedBy == user.ID
-}
-
