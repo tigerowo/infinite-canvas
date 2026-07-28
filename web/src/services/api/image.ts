@@ -358,20 +358,21 @@ function isEventStreamResponse(response: Response) {
 }
 
 async function parseImagesStreamResponse(response: Response, mime: string): Promise<GeneratedImage[]> {
-    const completedItems: Record<string, unknown>[] = [];
+    const imageItems = new Map<string, Record<string, unknown>>();
     let resultPayload: ImageApiResponse | null = null;
     const events = await readJsonServerSentEvents(response, (event) => {
-        const type = typeof event.type === "string" ? event.type : "";
         const object = typeof event.object === "string" ? event.object : "";
         if (object === "image.generation.result" || object === "image.edit.result") {
             resultPayload = event as ImageApiResponse;
         }
-        if (type === "image_generation.completed" || type === "image_edit.completed") {
-            completedItems.push(event);
+        if (resolveImageDataUrl(event, mime)) {
+            const imageIndex =
+                typeof event.image_index === "number" || typeof event.image_index === "string" ? String(event.image_index) : `event-${imageItems.size}`;
+            imageItems.set(imageIndex, event);
         }
     });
     if (resultPayload) return parseImagePayload(resultPayload, mime);
-    if (completedItems.length) return parseImagePayload({ data: completedItems }, mime);
+    if (imageItems.size) return parseImagePayload({ data: Array.from(imageItems.values()) }, mime);
     throw new ImageRequestError("流式接口未返回最终图片数据", events);
 }
 
@@ -1158,7 +1159,5 @@ export async function deleteCanvasImageTask(config: AiConfig, task?: CanvasImage
     const payload = (await response.json()) as { code?: number; msg?: string };
     if (payload.code !== 0) throw new ImageRequestError(payload.msg || "删除图片任务失败", payload);
 }
-
-
 
 

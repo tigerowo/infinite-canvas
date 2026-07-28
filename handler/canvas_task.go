@@ -254,7 +254,7 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.StartedAt = current
 	task, _ = service.SaveCanvasImageTask(task)
 
-	payload, status, _, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
 	if err != nil {
 		saveFailedCanvasImageTask(task, err.Error(), err.Error())
 		return
@@ -268,7 +268,7 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		saveFailedCanvasImageTask(task, message, string(payload))
 		return
 	}
-	imageURL, mimeType, bytes, err := imageURLFromAIResponse(payload)
+	imageURL, mimeType, bytes, err := imageURLFromAIResponse(payload, responseContentType)
 	if err != nil {
 		saveFailedCanvasImageTask(task, err.Error(), string(payload))
 		return
@@ -498,11 +498,11 @@ func readWrappedTaskError(payload []byte) string {
 }
 
 func imageBytesFromAIResponse(payload []byte) ([]byte, string, error) {
-	var root any
-	if err := json.Unmarshal(payload, &root); err != nil {
+	candidates, err := imageCandidatesFromAIResponse(payload, "")
+	if err != nil {
 		return nil, "", err
 	}
-	for _, candidate := range collectImageCandidates(root, 0) {
+	for _, candidate := range candidates {
 		data, mimeType, err := imageCandidateBytes(candidate)
 		if err == nil && len(data) > 0 {
 			return data, mimeType, nil
@@ -511,12 +511,12 @@ func imageBytesFromAIResponse(payload []byte) ([]byte, string, error) {
 	return nil, "", errors.New("图片接口没有返回图片")
 }
 
-func imageURLFromAIResponse(payload []byte) (string, string, int64, error) {
-	var root any
-	if err := json.Unmarshal(payload, &root); err != nil {
+func imageURLFromAIResponse(payload []byte, contentType string) (string, string, int64, error) {
+	candidates, err := imageCandidatesFromAIResponse(payload, contentType)
+	if err != nil {
 		return "", "", 0, err
 	}
-	for _, candidate := range collectImageCandidates(root, 0) {
+	for _, candidate := range candidates {
 		if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
 			return candidate, "", 0, nil
 		}
@@ -530,6 +530,77 @@ func imageURLFromAIResponse(payload []byte) (string, string, int64, error) {
 		return "data:" + mimeType + ";base64," + candidate, mimeType, int64(len(data)), nil
 	}
 	return "", "", 0, errors.New("图片接口没有返回图片")
+}
+
+type serverSentJSONEvent struct {
+	name string
+	data any
+}
+
+func imageCandidatesFromAIResponse(payload []byte, contentType string) ([]string, error) {
+	if !isServerSentEventResponse(payload, contentType) {
+		var root any
+		if err := json.Unmarshal(payload, &root); err != nil {
+			return nil, err
+		}
+		return collectImageCandidates(root, 0), nil
+	}
+
+	events, err := parseServerSentJSONEvents(payload)
+	if err != nil {
+		return nil, err
+	}
+	var candidates []string
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		encoded, _ := json.Marshal(event.data)
+		if message := readWrappedTaskError(encoded); message != "" {
+			return nil, errors.New(message)
+		}
+		if strings.EqualFold(event.name, "error") {
+			return nil, errors.New("图片流式接口返回错误")
+		}
+		candidates = append(candidates, collectImageCandidates(event.data, 0)...)
+	}
+	return candidates, nil
+}
+
+func isServerSentEventResponse(payload []byte, contentType string) bool {
+	if strings.Contains(strings.ToLower(contentType), "text/event-stream") {
+		return true
+	}
+	trimmed := bytes.TrimSpace(payload)
+	return bytes.HasPrefix(trimmed, []byte("event:")) || bytes.HasPrefix(trimmed, []byte("data:"))
+}
+
+func parseServerSentJSONEvents(payload []byte) ([]serverSentJSONEvent, error) {
+	normalized := strings.ReplaceAll(string(payload), "\r\n", "\n")
+	events := make([]serverSentJSONEvent, 0)
+	for _, block := range strings.Split(normalized, "\n\n") {
+		name := ""
+		dataLines := make([]string, 0)
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event:"):
+				name = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			case strings.HasPrefix(line, "data:"):
+				dataLines = append(dataLines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			}
+		}
+		data := strings.TrimSpace(strings.Join(dataLines, "\n"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var decoded any
+		if err := json.Unmarshal([]byte(data), &decoded); err != nil {
+			return nil, err
+		}
+		events = append(events, serverSentJSONEvent{name: name, data: decoded})
+	}
+	if len(events) == 0 {
+		return nil, errors.New("图片流式接口没有返回可解析事件")
+	}
+	return events, nil
 }
 
 func collectImageCandidates(value any, depth int) []string {
@@ -643,5 +714,4 @@ func readCanvasTaskSources(r *http.Request) []string {
 	}
 	return result
 }
-
 
