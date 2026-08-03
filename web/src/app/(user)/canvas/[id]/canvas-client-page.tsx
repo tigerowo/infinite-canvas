@@ -2182,7 +2182,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const prompt = `参考图中蓝色高亮覆盖区域是需要修改的位置，蓝色只是编辑标记，不要保留在最终图像中。只修改蓝色高亮区域，其他区域的构图、人物、文字、光影和风格保持不变。修改要求：${userPrompt}`;
             const childId = nanoid();
             const clientTaskId = `client_image_task_${childId}`;
-            const markedReference = { id: `${node.id}-marked`, name: `${node.title || node.id}-marked.png`, type: "image/png", dataUrl: payload.markedDataUrl };
+            const markedReference = { id: `${node.id}-marked`, name: `image-${node.id}-marked.png`, type: "image/png", dataUrl: payload.markedDataUrl };
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, [markedReference]);
             const childNode: CanvasNodeData = {
                 id: childId,
@@ -2258,7 +2258,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             const title = buildAngleLabel(params);
             const prompt = buildAnglePrompt(params);
-            const referenceImages = [{ id: node.id, name: `${node.title || node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }];
+            const referenceImages = [{ id: node.id, name: `image-${node.id}.png`, type: node.metadata.mimeType || "image/png", dataUrl: node.metadata.content, storageKey: node.metadata.storageKey }];
             const generationMetadata = buildImageGenerationMetadata("edit", generationConfig, 1, referenceImages);
             const clientTaskId = `client_image_task_${childId}`;
             const startedAt = Date.now();
@@ -2503,7 +2503,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 if (mode === "image" && isPanoramaNodeType(sourceNode?.type)) {
                     const panoramaSourcePrompt = prompt.trim();
                     const sourceReference: ReferenceImage[] = sourceNode?.metadata?.content
-                        ? [{ id: sourceNode.id, name: (sourceNode.title || sourceNode.id) + ".png", type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
+                        ? [{ id: sourceNode.id, name: `image-${sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                         : [];
                     const referenceImages = [...sourceReference, ...generationContext.referenceImages];
                     const panoramaPrompt = buildPanoramaPrompt(effectivePrompt, referenceImages.length > 0);
@@ -2651,7 +2651,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const isEmptyImageNode = isImageNode && !sourceNode?.metadata?.content;
                     const sourceReference =
                         isImageNode && sourceNode?.metadata?.content
-                            ? [{ id: sourceNode.id, name: `${sourceNode.title || sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
+                            ? [{ id: sourceNode.id, name: `image-${sourceNode.id}.png`, type: sourceNode.metadata.mimeType || "image/png", dataUrl: sourceNode.metadata.content, storageKey: sourceNode.metadata.storageKey }]
                             : [];
                     const referenceImages = sourceReference.length ? sourceReference : generationContext.referenceImages;
                     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
@@ -4827,7 +4827,7 @@ function sourceNodeReferenceImages(node: CanvasNodeData | null) {
     return [
         {
             id: node.id,
-            name: `${node.title || node.id}.png`,
+            name: `image-${node.id}.png`,
             type: node.metadata.mimeType || "image/png",
             dataUrl: node.metadata.content,
             storageKey: node.metadata.storageKey,

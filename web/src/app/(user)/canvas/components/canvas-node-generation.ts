@@ -243,7 +243,7 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
     if (!isCanvasImageNodeType(node.type) || !node.metadata?.content) return null;
     return {
         id: node.id,
-        name: `${node.title || node.id}.png`,
+        name: `image-${node.id}.png`,
         type: node.metadata.mimeType || "image/png",
         dataUrl: node.metadata.content,
         storageKey: node.metadata.storageKey,
@@ -262,7 +262,7 @@ function readReferenceVideo(node: CanvasNodeData): ReferenceVideo | null {
     if (node.type !== CanvasNodeType.Video || !node.metadata?.content) return null;
     return {
         id: node.id,
-        name: `${node.title || node.id}.mp4`,
+        name: `video-${node.id}.mp4`,
         type: node.metadata.mimeType || "video/mp4",
         url: node.metadata.content,
         storageKey: node.metadata.storageKey,
@@ -277,7 +277,7 @@ function readReferenceAudio(node: CanvasNodeData): ReferenceAudio | null {
     if (node.type !== CanvasNodeType.Audio || !node.metadata?.content) return null;
     return {
         id: node.id,
-        name: `${node.title || node.id}.mp3`,
+        name: `audio-${node.id}.mp3`,
         type: node.metadata.mimeType || "audio/mpeg",
         url: node.metadata.content,
         storageKey: node.metadata.storageKey,
