@@ -5,6 +5,25 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+## 选中节点的连线改为流动虚线动效
+
+### 可测试变更
+
+- `canvas-connections.tsx`：active 连线（选中/悬停单个节点时的相连线 + 被选中的连线）从「实心蓝线 3px + 稀疏电流点（2,18）」改为「淡蓝基线（35% 透明度）+ 流动虚线 overlay」：
+  - 虚线规格 `strokeDasharray="6,14"`（疏朗不密集）、圆角端点、1.2s 线性流动
+  - 复用现有 `canvas-connection-flow` keyframes（dashoffset -20 与 6+14 周期 20 对齐，无缝循环）
+  - 光晕降为 6px/40% 透明度，整体更轻
+- `canvas-connections.tsx` 的 `ActiveConnectionPath`（从节点拖拽连线出去的预览线）：同步为同款规格——`strokeDasharray` 5,5→6,14、线宽 3→2.5、动画 0.6s→1.2s、光晕与已建成连线一致
+- `globals.css`：删除不再使用的 `canvas-connection-electric` keyframes（与 flow 重复）
+
+### 验证步骤
+
+1. 单击选中一个有连线的节点，确认相连线变为流动虚线（疏朗、不密集），淡蓝基线 + 蓝色虚线向目标方向流动
+2. 悬停节点时同样触发；多选节点时不触发（与原有行为一致）
+3. 单击选中连线本身，同样有流动虚线效果
+4. 从节点拖拽连线出去时，预览线与选中态的流动虚线规格一致（6,14 疏朗虚线、同样流速和光晕）
+5. 深色/浅色主题下虚线和光晕都清晰可辨
+
 ## 图片节点默认智能比例、模型下拉项加大、上传框 60×90
 
 ### 可测试变更
@@ -1236,5 +1255,57 @@ description: 当前版本已实现但仍需人工验证的变更项
 5. 选择 gpt-image-1 模型，设置数量为 10 张，发起生成，确认 10 张图片正常返回（并发 10 次单张请求）
 6. 确认画布图片节点设置弹窗不显示数量滑块（showCount=false 不受影响）
 7. 确认画布生成仍固定 1 张
+
+## 模型下拉框副标题描述
+
+为模型下拉菜单选项接入"描述"副标题，hover 时在模型名下方淡入显示。后台在「模型开放与定价」表格中按模型填写描述（单行 30 字以内）。
+
+### 可测试变更
+
+- 后端 `PublicModelChannelSetting` 新增 `ModelInfos []ModelInfo` 字段（与 `ModelCosts` / `ModelCapabilities` 平级的独立列表），每项含 `model` / `description`
+- 后端 `normalizeModelInfos` 规整：按 `AvailableModels` 过滤冗余项，同模型去重保留首个，描述 trim 后按 30 字截断
+- 前端 `AdminPublicModelChannelSettings` 类型新增 `modelInfos` 字段；新增 `AdminModelInfo` 类型
+- 前端 `AiConfig` 新增 `modelInfos` 字段；`resolveEffectiveConfig` 远程模式透传 `modelChannel.modelInfos`，本地模式返回空数组；`merge` 兜底
+- 前端 `ModelPicker` 的 `channelOptions` 构建时从 `config.modelInfos` 按 model 名查找 description，作为 `subtitle` 传给 `ModelLabel`
+- `ModelLabel` 组件原已预留 `subtitle` prop（hover 时 `opacity-0 → opacity-55` 淡入），本次仅接通数据，不改 UI 表现
+- 管理后台「模型开放与定价」表格新增「描述」列（Input，`maxLength={30}`），放在「模型」列后、「开放」列前
+- `modelInfos` 完全由 React state 管理（`useState`），不注册 antd Form.Item，避免 form store 读取数组字段丢失；`saveSettings` 时直接从 state 注入到 `rawValues.public.modelChannel.modelInfos`
+- 共享助手 `settings-shared.ts` 新增 `normalizeModelInfos` / `setModelDescription`（直接用 `setModelInfos(prev => ...)` 更新 state）/ `modelInfoDescription`；`emptySettings` 默认 `modelInfos: []`
+
+### 涉及文件
+
+后端：
+- `Go/model/setting.go`：新增 `ModelInfo` 结构体；`PublicModelChannelSetting` 新增 `ModelInfos` 字段
+- `Go/service/settings.go`：新增 `normalizeModelInfos` 函数；`normalizePublicSettingWithChannels` 调用 + nil 兜底
+
+前端类型：
+- `next/src/services/api/admin.ts`：新增 `AdminModelInfo` 类型；`AdminPublicModelChannelSettings` 新增 `modelInfos` 字段
+
+前端 store：
+- `next/src/stores/use-config-store.ts`：`AiConfig` 新增 `modelInfos` 字段；`defaultConfig` / `resolveEffectiveConfig` / `merge` 同步处理
+
+前端下拉菜单：
+- `next/src/components/model-picker.tsx`：`channelOptions` 附带 description；`ModelPickerPortal` options 类型新增 `description?`；`ModelLabel` 调用传入 `subtitle={option.description}`
+
+后台管理 UI：
+- `next/src/app/(admin)/admin/model-pricing/page.tsx`：新增 `modelInfos` state；`loadSettings` / `saveSettings` 加载保存；表格新增「描述」列；`saveSettings` 从 state 注入 `modelInfos`
+
+共享助手：
+- `next/src/app/(admin)/admin/settings-shared.ts`：新增 `AdminModelInfo` 导入；`emptySettings` 默认 `modelInfos: []`；新增 `normalizeModelInfos` / `setModelDescription` / `modelInfoDescription`
+
+文档：
+- `docs/backend/backend-database.md`：`modelChannel` 字段表新增 `modelInfos`；新增「`modelInfos` 每项字段」说明表
+
+### 验证步骤
+
+1. 进入管理后台「模型开放与定价」，确认「模型开放与定价」表格在「模型」列后新增「描述」列
+2. 为某个模型在「描述」列输入介绍文案（如"豆包视频模型"），保存后刷新确认持久化
+3. 输入超过 30 字的文案，确认输入框 `maxLength=30` 限制无法继续输入
+4. 清空某模型描述并保存，刷新确认该模型不再有描述（`normalizeModelInfos` 剔除空描述项）
+5. 进入画布或生图/视频/音频工作台，打开模型下拉，悬停某个配置过描述的模型选项，确认模型名下方淡入显示描述文案
+6. 悬停未配置描述的模型选项，确认副标题位置为空（不显示）
+7. 切换浅色/深色主题，确认副标题文字颜色（`opacity-55`）适配主题
+8. 取消勾选某模型的「开放」开关并保存，刷新后确认该模型从 `modelInfos` 中被剔除（后端 `normalizeModelInfos` 按 `availableModels` 过滤）
+9. 重新勾选开放并保存，确认需要重新填写描述（被剔除的项不会自动恢复）
 
 

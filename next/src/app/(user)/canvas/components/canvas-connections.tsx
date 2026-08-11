@@ -52,13 +52,11 @@ export function ConnectionPath({
             <path
                 d={pathD}
                 stroke={active ? activeColor : theme.node.muted}
-                strokeWidth={active ? 3 : 2}
-                strokeOpacity={active ? undefined : 0.82}
+                strokeWidth={active ? 2.5 : 2}
+                strokeOpacity={active ? 0.35 : 0.82}
                 fill="none"
                 style={{
-                    filter: active ? `drop-shadow(0 0 8px ${activeColor}66)` : undefined,
                     pointerEvents: "none",
-                    animation: active ? "canvas-connection-breathe 1.6s ease-in-out infinite" : undefined,
                 }}
             />
             {active ? (
@@ -68,11 +66,11 @@ export function ConnectionPath({
                     strokeWidth="2.5"
                     fill="none"
                     strokeLinecap="round"
-                    strokeDasharray="4,12"
+                    strokeDasharray="6,14"
                     style={{
-                        filter: `drop-shadow(0 0 6px ${activeColor})`,
+                        filter: `drop-shadow(0 0 6px ${activeColor}66)`,
                         pointerEvents: "none",
-                        animation: "canvas-connection-electric 0.8s linear infinite",
+                        animation: "canvas-connection-flow 1.2s linear infinite",
                     }}
                 />
             ) : null}
@@ -100,13 +98,13 @@ export function ActiveConnectionPath({ node, handle, mouseWorld, target }: { nod
             <path
                 d={pathD}
                 stroke="#2f80ff"
-                strokeWidth="3"
+                strokeWidth="2.5"
                 fill="none"
-                strokeDasharray="5,5"
+                strokeDasharray="6,14"
                 strokeLinecap="round"
                 style={{
-                    filter: `drop-shadow(0 0 6px #2f80ff88)`,
-                    animation: "canvas-connection-flow 0.6s linear infinite",
+                    filter: `drop-shadow(0 0 6px #2f80ff66)`,
+                    animation: "canvas-connection-flow 1.2s linear infinite",
                 }}
             />
         </g>

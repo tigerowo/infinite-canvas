@@ -38,7 +38,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             config.channelMode === "remote"
                 ? config.publicChannels.map((channel) => ({ id: channel.id, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
                 : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
-        const models = channels.flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, model })));
+        const infos = config.modelInfos || [];
+        const models = channels.flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, model, description: infos.find((item) => item.model === model)?.description || "" })));
         if (!capability) return models;
         return models.filter((item) => filterModelsByCapability([item.model], capability).length > 0);
     }, [capability, config]);
@@ -134,7 +135,7 @@ function ModelPickerPortal({ buttonRect, panelRef, theme, options, currentModel,
     buttonRect: DOMRect;
     panelRef: React.RefObject<HTMLDivElement | null>;
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
-    options: { key: string; channelId: string; channelName?: string; model: string }[];
+    options: { key: string; channelId: string; channelName?: string; model: string; description?: string }[];
     currentModel: string;
     onSelect: (model: string, channelId?: string) => void;
     emptyText: string;
@@ -182,7 +183,7 @@ function ModelPickerPortal({ buttonRect, panelRef, theme, options, currentModel,
                                 onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}
                                 onClick={(event) => { event.stopPropagation(); onSelect(option.model, option.channelId); }}
                             >
-                                <ModelLabel model={option.model} />
+                                <ModelLabel model={option.model} subtitle={option.description} />
                                 {active ? <Check className="size-3 shrink-0 opacity-70" /> : null}
                             </button>
                         );

@@ -477,28 +477,9 @@
     background-color: #171717 !important;
 }
 
-/* 画布连线流动电流（拖拽连线时） */
+/* 画布连线流动虚线（拖拽连线时 + 选中/悬停节点的已建成连线，dashoffset 与 dasharray 周期 20 对齐） */
 @keyframes canvas-connection-flow {
     to {
         stroke-dashoffset: -20;
-    }
-}
-
-/* 画布连线呼吸亮起（悬停节点时已建成连线） */
-@keyframes canvas-connection-breathe {
-    0%, 100% {
-        stroke-opacity: 0.7;
-        filter: drop-shadow(0 0 5px var(--canvas-active-stroke, #2f80ff)66);
-    }
-    50% {
-        stroke-opacity: 1;
-        filter: drop-shadow(0 0 14px var(--canvas-active-stroke, #2f80ff));
-    }
-}
-
-/* 画布连线流动电流（选中/悬停节点时已建成连线上叠加的流动光流） */
-@keyframes canvas-connection-electric {
-    to {
-        stroke-dashoffset: -16;
     }
 }
