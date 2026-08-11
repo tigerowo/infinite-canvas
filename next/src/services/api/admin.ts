@@ -157,6 +157,7 @@ export type AdminPublicModelChannelSettings = {
     availableModels: string[];
     modelCosts: AdminModelCost[];
     modelCapabilities: AdminModelCapability[];
+    modelInfos: AdminModelInfo[];
     channels: AdminPublicModelChannelInfo[];
     defaultImageModel: string;
     defaultVideoModel: string;
@@ -178,6 +179,11 @@ export type AdminPublicModelChannelSettings = {
 export type AdminModelCost = {
     model: string;
     credits: number;
+};
+
+export type AdminModelInfo = {
+    model: string;
+    description: string;
 };
 
 export type AdminVideoModeOption = {

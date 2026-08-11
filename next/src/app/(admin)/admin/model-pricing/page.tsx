@@ -5,11 +5,11 @@ import { App, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Row, 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchAdminSettings, saveAdminSettings, type AdminModelCapability, type AdminModelCost, type AdminSettings } from "@/services/api/admin";
+import { fetchAdminSettings, saveAdminSettings, type AdminModelCapability, type AdminModelCost, type AdminModelInfo, type AdminSettings } from "@/services/api/admin";
 import { modelMatchesCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
-import { collectChannelModels, emptySettings, finalizeSettingsForSave, modelCostCredits, normalizeSettings, setModelCost } from "../settings-shared";
+import { collectChannelModels, emptySettings, finalizeSettingsForSave, modelCostCredits, modelInfoDescription, normalizeSettings, setModelCost, setModelDescription } from "../settings-shared";
 
 // 模型能力可选项：与前端 image-settings-panel / video-settings-panel 保持一致
 const IMAGE_ASPECT_OPTIONS = [
@@ -149,6 +149,7 @@ export default function AdminModelPricingPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [modelCapabilities, setModelCapabilities] = useState<AdminModelCapability[]>([]);
+    const [modelInfos, setModelInfos] = useState<AdminModelInfo[]>([]);
     const [channels, setChannels] = useState<AdminSettings["private"]["channels"]>([]);
     const availableModels = (Form.useWatch(["public", "modelChannel", "availableModels"], form) || []) as string[];
     const allowCustomChannel = Form.useWatch(["public", "modelChannel", "allowCustomChannel"], form);
@@ -217,6 +218,7 @@ export default function AdminModelPricingPage() {
             setChannels(data.private.channels);
             setModelCosts(data.public.modelChannel.modelCosts);
             setModelCapabilities(caps);
+            setModelInfos(data.public.modelChannel.modelInfos);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取设置失败");
         } finally {
@@ -232,11 +234,15 @@ export default function AdminModelPricingPage() {
         if (!token) return;
         setIsSaving(true);
         try {
-            const values = finalizeSettingsForSave(form.getFieldsValue(true) as AdminSettings);
+            const rawValues = form.getFieldsValue(true) as AdminSettings;
+            // modelInfos 通过 state 管理，避免 form store 读取丢失
+            rawValues.public.modelChannel.modelInfos = modelInfos;
+            const values = finalizeSettingsForSave(rawValues);
             const saved = normalizeSettings(await saveAdminSettings(token, values));
             form.setFieldsValue(saved);
             setModelCosts(saved.public.modelChannel.modelCosts);
             setModelCapabilities(saved.public.modelChannel.modelCapabilities);
+            setModelInfos(saved.public.modelChannel.modelInfos);
             message.success("已保存");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "保存失败");
@@ -326,10 +332,25 @@ export default function AdminModelPricingPage() {
                                         {
                                             title: "模型",
                                             dataIndex: "model",
+                                            width: 200,
                                             render: (value: string) => (
-                                                <Typography.Text style={{ maxWidth: 320 }} ellipsis={{ tooltip: value }}>
+                                                <Typography.Text style={{ maxWidth: 180 }} ellipsis={{ tooltip: value }}>
                                                     {value}
                                                 </Typography.Text>
+                                            ),
+                                        },
+                                        {
+                                            title: "描述",
+                                            key: "description",
+                                            width: 320,
+                                            render: (_, row) => (
+                                                <Input
+                                                    size="small"
+                                                    placeholder="模型介绍文案（选填）"
+                                                    maxLength={30}
+                                                    value={modelInfoDescription(modelInfos, row.model)}
+                                                    onChange={(e) => setModelDescription(setModelInfos, row.model, e.target.value)}
+                                                />
                                             ),
                                         },
                                         {

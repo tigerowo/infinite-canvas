@@ -1,4 +1,5 @@
-import type { AdminModelCapability, AdminModelChannel, AdminModelCost, AdminSettings, AdminStorageProvider } from "@/services/api/admin";
+import type React from "react";
+import type { AdminModelCapability, AdminModelChannel, AdminModelCost, AdminModelInfo, AdminSettings, AdminStorageProvider } from "@/services/api/admin";
 
 // 全量 settings 空默认值，供各设置页 Form initialValues 与归一化兜底使用。
 export const emptySettings: AdminSettings = {
@@ -7,6 +8,7 @@ export const emptySettings: AdminSettings = {
             availableModels: [],
             modelCosts: [],
             modelCapabilities: [],
+            modelInfos: [],
             channels: [],
             defaultImageModel: "",
             defaultVideoModel: "",
@@ -42,6 +44,7 @@ export function normalizePublicSetting(setting: Partial<AdminSettings["public"]>
             availableModels: setting.modelChannel?.availableModels || [],
             modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || []),
             modelCapabilities: normalizeModelCapabilities(setting.modelChannel?.modelCapabilities || []),
+            modelInfos: normalizeModelInfos(setting.modelChannel?.modelInfos || []),
             channels: setting.modelChannel?.channels || [],
             allowCustomChannel: setting.modelChannel?.allowCustomChannel !== false,
             allowUserRemoteChannel: setting.modelChannel?.allowUserRemoteChannel === true,
@@ -66,6 +69,13 @@ export function normalizePublicSetting(setting: Partial<AdminSettings["public"]>
 
 export function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChannel"]["modelCosts"][number]>[]) {
     return items.filter((item) => item.model).map((item) => ({ model: item.model || "", credits: Math.max(0, Number(item.credits) || 0) }));
+}
+
+export function normalizeModelInfos(items: Partial<AdminModelInfo>[]): AdminModelInfo[] {
+    return items.filter((item) => item.model).map((item) => {
+        const description = (item.description || "").trim();
+        return { model: item.model || "", description: description.slice(0, 30) };
+    });
 }
 
 export function normalizeModelCapabilities(items: Partial<AdminModelCapability>[]): AdminModelCapability[] {
@@ -167,6 +177,19 @@ export function setModelCost(form: any, setModelCosts: (items: AdminModelCost[])
     next.push({ model, credits: Math.max(0, credits) });
     form.setFieldValue(["public", "modelChannel", "modelCosts"], next);
     setModelCosts(next);
+}
+
+export function setModelDescription(setModelInfos: React.Dispatch<React.SetStateAction<AdminModelInfo[]>>, model: string, description: string) {
+    const trimmed = description.slice(0, 30);
+    setModelInfos((prev) => {
+        const next = prev.filter((item) => item.model !== model);
+        if (trimmed) next.push({ model, description: trimmed });
+        return next;
+    });
+}
+
+export function modelInfoDescription(items: AdminModelInfo[], model: string) {
+    return items.find((item) => item.model === model)?.description || "";
 }
 
 // 收集所有启用渠道的模型，用于「系统可用模型」多选 options。

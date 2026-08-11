@@ -110,6 +110,21 @@
 ## 2026-08-03 教训
 - 工作区曾被整体回退（git checkout + 删未跟踪文件）导致未提交修复全部丢失；以后有修复应尽快提交或备份
 
+## 2026-08-11 教训（模型描述 modelInfos 调试）
+
+**1. antd Form 数组字段不要注册 Form.Item**
+- `modelCosts` / `modelCapabilities` / `modelInfos` 等数组类型字段，若在 Form 下注册 `<Form.Item name={[...]} hidden><InputNumber/></Form.Item>`，会导致 form store 中该字段值被 InputNumber 控件破坏（数组被当成单个值处理），`getFieldsValue(true)` 返回错误数据
+- 正确做法（参考项目现有 `modelCosts` / `modelCapabilities`）：**不注册 Form.Item**，只靠 `form.setFieldsValue(data)` 存入，保存时 `form.getFieldsValue(true)` 取出（`true` 会返回所有已 set 的字段，包括未注册的）
+- 若需实时编辑，建议用独立 React state（`useState`）管理，`onChange` 时同步更新 state，`saveSettings` 时从 state 注入到 `rawValues`，不依赖 form store 读取
+
+**2. 后端 Go 代码改动必须重新编译并重启服务**
+- 后端返回的 JSON 完全没有新字段（连空数组都没有），说明后端还是旧版本
+- 前端 TypeScript 是热更新，但后端 Go 不是——`go run` / 编译后运行 / Docker 都需要停止后重新启动才能生效
+- 排查"字段丢失"类问题：先看后端响应 JSON 是否包含该字段，若不包含则一定是后端未重启
+
+**3. 前端过滤与后端规整不要重复**
+- 后端 `normalizeModelInfos` 已按 `AvailableModels` 过滤，前端 `finalizeSettingsForSave` 不需要再做一遍（删掉前端过滤逻辑，避免双重过滤导致的边界问题）
+
 ## 2026-08-03 合并 feat/model-capabilities → main（commit e9cbfbb）
 
 ### 完成的工作

@@ -30,6 +30,12 @@ type ModelCost struct {
 	Credits int    `json:"credits"`
 }
 
+// ModelInfo 模型展示信息（下拉框副标题，hover 时显示）。
+type ModelInfo struct {
+	Model       string `json:"model"`
+	Description string `json:"description,omitempty"`
+}
+
 // ModelCapability 模型能力配置。
 // 空字段语义：ImageAspects 空=支持全部标准比例；ImageTiers 空=仅标准档；
 // VideoResolutions 空=480p/720p/1080p 三档。
@@ -92,6 +98,7 @@ type PublicModelChannelSetting struct {
 	AvailableModels        []string                 `json:"availableModels"`
 	ModelCosts             []ModelCost              `json:"modelCosts"`
 	ModelCapabilities      []ModelCapability        `json:"modelCapabilities"`
+	ModelInfos             []ModelInfo              `json:"modelInfos"`
 	Channels               []PublicModelChannelInfo `json:"channels"`
 	DefaultImageModel      string                   `json:"defaultImageModel"`
 	DefaultVideoModel      string                   `json:"defaultVideoModel"`

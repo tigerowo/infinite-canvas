@@ -286,6 +286,7 @@ description: 当前后端主要数据表与字段说明
 | --- | --- | --- |
 | `availableModels` | string[] | 系统可用模型列表 |
 | `modelCosts` | object[] | 模型算力点配置 |
+| `modelInfos` | object[] | 模型展示信息，配置下拉框副标题描述，按模型名索引 |
 | `defaultImageModel` | string | 默认图片模型 |
 | `defaultVideoModel` | string | 默认视频模型 |
 | `defaultTextModel` | string | 默认文本模型，同时作为通用默认模型的兜底 |
@@ -302,6 +303,13 @@ description: 当前后端主要数据表与字段说明
 | --- | --- | --- |
 | `model` | string | 模型名称 |
 | `credits` | number | 每次后端模型接口调用前预扣的算力点，未配置默认不扣除 |
+
+`modelInfos` 每项字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `model` | string | 模型名称，必须存在于 `availableModels` |
+| `description` | string | 模型描述文案，作为下拉框副标题 hover 时显示；后端规整时按 30 字截断，空描述项会被剔除 |
 
 `modelCapabilities` 每项字段：
 

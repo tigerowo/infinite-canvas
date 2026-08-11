@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { apiGet } from "@/services/api/request";
-import type { AdminModelCapability, AdminPublicSettings, AdminVideoModeOption } from "@/services/api/admin";
+import type { AdminModelCapability, AdminModelInfo, AdminPublicSettings, AdminVideoModeOption } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
@@ -71,6 +71,7 @@ export type AiConfig = {
     localChannels: LocalModelChannel[];
     publicChannels: Array<{ id?: string; name?: string; baseUrl?: string; models?: string[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     modelCapabilities: AdminModelCapability[];
+    modelInfos: AdminModelInfo[];
     syncModelConfig: boolean;
     syncStorageConfig: boolean;
     activeChannelId: string;
@@ -134,6 +135,7 @@ export const defaultConfig: AiConfig = {
     localChannels: [],
     publicChannels: [],
     modelCapabilities: [],
+    modelInfos: [],
     syncModelConfig: false,
     syncStorageConfig: false,
     activeChannelId: "",
@@ -168,6 +170,7 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
             models: normalizeModelList(localChannels.flatMap((channel) => channel.models)),
             publicChannels: modelChannel?.channels || [],
             modelCapabilities: [],
+            modelInfos: [],
             apiMode: "images",
         };
     }
@@ -183,6 +186,7 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     const effectiveImageModel = imageModels.includes(config.imageModel) ? config.imageModel : fallbackImageModel;
     const effectiveVideoModel = videoModels.includes(config.videoModel) ? config.videoModel : fallbackVideoModel;
     const capabilities = modelChannel.modelCapabilities || [];
+    const modelInfos = modelChannel.modelInfos || [];
     const imageCap = capabilities.find((item) => item.model === effectiveImageModel);
     const videoCap = capabilities.find((item) => item.model === effectiveVideoModel);
     // 生图接口模式按当前生图模型所属渠道的 apiMode 解析；找不到渠道默认 images。
@@ -205,6 +209,7 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         systemPrompt: modelChannel.systemPrompt,
         publicChannels,
         modelCapabilities: capabilities,
+        modelInfos,
         apiMode: effectiveApiMode,
         size: resolveEffectiveImageSize(config.size, imageCap),
         vquality: resolveEffectiveVideoQuality(config.vquality, videoCap),
@@ -527,6 +532,7 @@ export const useConfigStore = create<ConfigStore>()(
                         textModels: filterModelsByCapability(localModels, "text"),
                         audioModels: filterModelsByCapability(localModels, "audio"),
                         modelCapabilities: Array.isArray(config.modelCapabilities) ? config.modelCapabilities : [],
+                        modelInfos: Array.isArray(config.modelInfos) ? config.modelInfos : [],
                     },
                 };
             },

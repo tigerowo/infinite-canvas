@@ -155,6 +155,9 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 	if setting.ModelChannel.ModelCapabilities == nil {
 		setting.ModelChannel.ModelCapabilities = []model.ModelCapability{}
 	}
+	if setting.ModelChannel.ModelInfos == nil {
+		setting.ModelChannel.ModelInfos = []model.ModelInfo{}
+	}
 	if strings.TrimSpace(setting.ModelChannel.SystemPrompts.Image) == "" {
 		setting.ModelChannel.SystemPrompts.Image = firstNonEmpty(setting.ModelChannel.SystemPrompt, DefaultSystemPrompts().Image)
 	}
@@ -197,6 +200,7 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		setting.ModelChannel.AvailableModels = enabledChannelModels(channels)
 	}
 	setting.ModelChannel.ModelCapabilities = normalizeModelCapabilities(setting.ModelChannel.ModelCapabilities, setting.ModelChannel.AvailableModels)
+	setting.ModelChannel.ModelInfos = normalizeModelInfos(setting.ModelChannel.ModelInfos, setting.ModelChannel.AvailableModels)
 	setting.ModelChannel.DefaultTextModel = repairDefaultModel(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, isTextModelName)
 	setting.ModelChannel.DefaultImageModel = repairDefaultModel(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, isImageModelName)
 	setting.ModelChannel.DefaultVideoModel = repairDefaultModel(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, isVideoModelName)
@@ -439,6 +443,30 @@ func normalizeModelCapabilities(items []model.ModelCapability, availableModels [
 		item.ImageAspects = uniqueModelNames(item.ImageAspects)
 		item.ImageTiers = uniqueModelNames(item.ImageTiers)
 		item.VideoResolutions = uniqueModelNames(item.VideoResolutions)
+		result = append(result, item)
+	}
+	return result
+}
+
+// normalizeModelInfos 规整模型展示信息：按 AvailableModels 过滤冗余项，同模型去重保留首个，描述截断到 30 字以内。
+func normalizeModelInfos(items []model.ModelInfo, availableModels []string) []model.ModelInfo {
+	allowed := map[string]bool{}
+	for _, modelName := range availableModels {
+		allowed[modelName] = true
+	}
+	result := []model.ModelInfo{}
+	seen := map[string]bool{}
+	for _, item := range items {
+		modelName := strings.TrimSpace(item.Model)
+		if modelName == "" || !allowed[modelName] || seen[modelName] {
+			continue
+		}
+		seen[modelName] = true
+		item.Model = modelName
+		item.Description = strings.TrimSpace(item.Description)
+		if len(item.Description) > 30 {
+			item.Description = item.Description[:30]
+		}
 		result = append(result, item)
 	}
 	return result
