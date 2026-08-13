@@ -94,9 +94,9 @@ function readTextFile(file: File, onLoad: (text: string) => void) {
     reader.readAsText(file);
 }
 
-// comfyTemplateHint 渲染模板检测结果：自动接入内容 / 手动占位符 / JSON 错误。
+// comfyTemplateHint 渲染模板检测结果：自动接入内容 / 手动占位符 / JSON 错误 / 未配置。
 function comfyTemplateHint(template: string | undefined) {
-    if (!template?.trim()) return null;
+    if (!template?.trim()) return <Tag color="orange">必填：请上传或粘贴 ComfyUI 工作流 JSON</Tag>;
     const analysis = analyzeComfyUIWorkflow(template);
     if (!analysis.valid) return <Tag color="red">JSON 格式无效，请检查</Tag>;
     if (analysis.hasPlaceholders) return <Tag color="green">已接入自定义占位符（手动配置优先）</Tag>;
@@ -1021,7 +1021,7 @@ export default function AdminSettingsPage() {
                                             }
                                             extra={
                                                 <Flex vertical gap={4}>
-                                                    <Typography.Text type="secondary">{`留空使用内置默认模板；可上传 ComfyUI 导出的 .json 工作流或直接粘贴。系统自动接入提示词/尺寸/数量/种子，采样参数与模型加载保留你导出的配置。高级用法：支持占位符 {{ckpt_name}} {{prompt}} {{width}} {{height}} {{batch_size}} {{seed}} {{steps}} {{cfg}} {{denoise}} {{negative_prompt}}，可在 ComfyUI 前端开启 Dev Mode → Save (API Format) 导出。`}</Typography.Text>
+                                                    <Typography.Text type="secondary">{`必填：上传 ComfyUI 导出的 .json 工作流或直接粘贴（无内置默认模板）。系统自动接入提示词/尺寸/数量/种子，采样参数与模型加载保留你导出的配置。高级用法：支持占位符 {{ckpt_name}} {{prompt}} {{width}} {{height}} {{batch_size}} {{seed}} {{steps}} {{cfg}} {{denoise}} {{negative_prompt}}，可在 ComfyUI 前端开启 Dev Mode → Save (API Format) 导出。`}</Typography.Text>
                                                     {comfyTemplateHint(txt2ImgTemplate)}
                                                 </Flex>
                                             }
@@ -1042,7 +1042,7 @@ export default function AdminSettingsPage() {
                                             }
                                             extra={
                                                 <Flex vertical gap={4}>
-                                                    <Typography.Text type="secondary">{`留空使用内置默认模板；模板需包含 LoadImage 节点（参考图自动接入 {{image_name}}）。`}</Typography.Text>
+                                                    <Typography.Text type="secondary">{`必填：图生图工作流（无内置默认模板）；模板需包含 LoadImage 节点（参考图自动接入 {{image_name}}）。`}</Typography.Text>
                                                     {comfyTemplateHint(img2ImgTemplate)}
                                                 </Flex>
                                             }

@@ -33,31 +33,6 @@ const (
 	comfyUIDefaultWidth    = 1024
 	comfyUIDefaultHeight   = 1024
 	comfyUIDefaultPrefix   = "infinite-canvas"
-
-	// comfyUITemplateTxt2Img 内置默认文生图 workflow 模板，适用于 CheckpointLoaderSimple
-	// 加载的 checkpoint（含 Qwen-Image / SD 系 AIO 合并模型）。数字占位符在渲染时替换为数值。
-	comfyUITemplateTxt2Img = `{
-  "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{ckpt_name}}"}},
-  "5": {"class_type": "EmptyLatentImage", "inputs": {"width": "{{width}}", "height": "{{height}}", "batch_size": "{{batch_size}}"}},
-  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
-  "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
-  "3": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler_name}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},
-  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
-  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}", "images": ["8", 0]}}
-}`
-
-	// comfyUITemplateImg2Img 内置默认图生图 workflow 模板：LoadImage 加载参考图后
-	// 经 VAEEncode 进入 KSampler，通过 denoise 控制重绘强度。
-	comfyUITemplateImg2Img = `{
-  "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_name}}"}},
-  "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{ckpt_name}}"}},
-  "2": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0], "vae": ["4", 2]}},
-  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
-  "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
-  "3": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler_name}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["2", 0]}},
-  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
-  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}", "images": ["8", 0]}}
-}`
 )
 
 func isComfyUIChannel(channel model.ModelChannel) bool {
@@ -101,7 +76,11 @@ func normalizeComfyUIImageBody(body []byte, contentType string, modelName string
 	}
 	vars["denoise"] = 1.0
 
-	graph, err := renderComfyUIWorkflow(comfyUIChannelTemplate(channel.Txt2ImgWorkflow, comfyUITemplateTxt2Img), vars)
+	template := strings.TrimSpace(channel.Txt2ImgWorkflow)
+	if template == "" {
+		return body, contentType, errors.New("ComfyUI 渠道未配置文生图工作流模板，请先在管理后台渠道中上传或粘贴模板")
+	}
+	graph, err := renderComfyUIWorkflow(template, vars)
 	if err != nil {
 		return body, contentType, errors.New("ComfyUI 文生图 workflow 模板配置错误")
 	}
@@ -158,7 +137,11 @@ func normalizeComfyUIImageEditBody(body []byte, contentType string, modelName st
 		}
 	}
 
-	graph, err := renderComfyUIWorkflow(comfyUIChannelTemplate(channel.Img2ImgWorkflow, comfyUITemplateImg2Img), vars)
+	template := strings.TrimSpace(channel.Img2ImgWorkflow)
+	if template == "" {
+		return body, contentType, errors.New("ComfyUI 渠道未配置图生图工作流模板，请先在管理后台渠道中上传或粘贴模板（需包含 LoadImage 节点）")
+	}
+	graph, err := renderComfyUIWorkflow(template, vars)
 	if err != nil {
 		return body, contentType, errors.New("ComfyUI 图生图 workflow 模板配置错误")
 	}
@@ -177,13 +160,6 @@ func comfyUIDefaultVars(ckptName string) map[string]any {
 		"denoise":         comfyUIDefaultDenoise,
 		"filename_prefix": comfyUIDefaultPrefix,
 	}
-}
-
-func comfyUIChannelTemplate(configured string, fallback string) string {
-	if strings.TrimSpace(configured) != "" {
-		return configured
-	}
-	return fallback
 }
 
 func parseComfyUISize(size string) (int, int) {

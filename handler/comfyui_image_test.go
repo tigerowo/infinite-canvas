@@ -26,6 +26,29 @@ func comfyTestChannel(baseURL string) model.ModelChannel {
 	}
 }
 
+// comfyTestTxt2ImgTemplate 测试用通用文生图模板（结构等价于原内置默认模板）。
+const comfyTestTxt2ImgTemplate = `{
+  "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{ckpt_name}}"}},
+  "5": {"class_type": "EmptyLatentImage", "inputs": {"width": "{{width}}", "height": "{{height}}", "batch_size": "{{batch_size}}"}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
+  "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
+  "3": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler_name}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}", "images": ["8", 0]}}
+}`
+
+// comfyTestImg2ImgTemplate 测试用通用图生图模板。
+const comfyTestImg2ImgTemplate = `{
+  "1": {"class_type": "LoadImage", "inputs": {"image": "{{image_name}}"}},
+  "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "{{ckpt_name}}"}},
+  "2": {"class_type": "VAEEncode", "inputs": {"pixels": ["1", 0], "vae": ["4", 2]}},
+  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{prompt}}", "clip": ["4", 1]}},
+  "7": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{negative_prompt}}", "clip": ["4", 1]}},
+  "3": {"class_type": "KSampler", "inputs": {"seed": "{{seed}}", "steps": "{{steps}}", "cfg": "{{cfg}}", "sampler_name": "{{sampler_name}}", "scheduler": "{{scheduler}}", "denoise": "{{denoise}}", "model": ["4", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["2", 0]}},
+  "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+  "9": {"class_type": "SaveImage", "inputs": {"filename_prefix": "{{filename_prefix}}", "images": ["8", 0]}}
+}`
+
 func decodeComfyGraph(t *testing.T, encoded []byte) map[string]any {
 	t.Helper()
 	var submitted struct {
@@ -52,6 +75,7 @@ func comfyNodeInputs(t *testing.T, graph map[string]any, nodeID string) map[stri
 
 func TestNormalizeComfyUIImageBody(t *testing.T) {
 	channel := comfyTestChannel("http://comfy.local:8188")
+	channel.Txt2ImgWorkflow = comfyTestTxt2ImgTemplate
 	body := []byte(`{"model":"Qwen-Image-Edit-Rapid-AIO/Qwen-Rapid-AIO-NSFW-v19.safetensors","prompt":"a cat","n":2,"size":"1024x768"}`)
 	encoded, contentType, err := normalizeComfyUIImageBody(body, "application/json", "", channel)
 	if err != nil {
@@ -100,6 +124,7 @@ func TestNormalizeComfyUIImageBody(t *testing.T) {
 
 func TestNormalizeComfyUIImageBodyDefaultSize(t *testing.T) {
 	channel := comfyTestChannel("http://comfy.local:8188")
+	channel.Txt2ImgWorkflow = comfyTestTxt2ImgTemplate
 	body := []byte(`{"model":"m","prompt":"hi"}`)
 	encoded, _, err := normalizeComfyUIImageBody(body, "application/json", "m", channel)
 	if err != nil {
@@ -122,6 +147,7 @@ func TestNormalizeComfyUIImageEditBody(t *testing.T) {
 	defer server.Close()
 
 	channel := comfyTestChannel(server.URL)
+	channel.Img2ImgWorkflow = comfyTestImg2ImgTemplate
 
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
@@ -406,6 +432,40 @@ func TestAutoWireComfyUIKeepsPlaceholderTemplate(t *testing.T) {
 	positive := comfyNodeInputs(t, graph, "6")
 	if positive["text"] != "fixed" {
 		t.Fatalf("text = %v, want 保留 fixed", positive["text"])
+	}
+}
+
+// TestComfyUIEmptyTemplateReturnsError 验证渠道未配置模板时报友好错误（无内置默认模板）。
+func TestComfyUIEmptyTemplateReturnsError(t *testing.T) {
+	channel := comfyTestChannel("http://comfy.local:8188")
+	body := []byte(`{"model":"m","prompt":"p"}`)
+	_, _, err := normalizeComfyUIImageBody(body, "application/json", "m", channel)
+	if err == nil {
+		t.Fatal("expected error for missing txt2img template")
+	}
+	if !strings.Contains(err.Error(), "文生图工作流模板") {
+		t.Fatalf("err = %v, want 模板缺失提示", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"ref.png"}`))
+	}))
+	defer server.Close()
+	channel2 := comfyTestChannel(server.URL)
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	_ = writer.WriteField("model", "m")
+	_ = writer.WriteField("prompt", "p")
+	part, _ := writer.CreateFormFile("image", "s.png")
+	_, _ = part.Write([]byte("x"))
+	_ = writer.Close()
+	_, _, err = normalizeComfyUIImageEditBody(buffer.Bytes(), writer.FormDataContentType(), "m", channel2)
+	if err == nil {
+		t.Fatal("expected error for missing img2img template")
+	}
+	if !strings.Contains(err.Error(), "图生图工作流模板") {
+		t.Fatalf("err = %v, want 图生图模板缺失提示", err)
 	}
 }
 
