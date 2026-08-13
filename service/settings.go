@@ -268,7 +268,7 @@ func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, in
 			return item, true
 		}
 	}
-	if index < len(saved) {
+	if index >= 0 && index < len(saved) {
 		return saved[index], true
 	}
 	return model.ModelChannel{}, false
@@ -474,7 +474,8 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 	if strings.TrimSpace(resolved.BaseURL) == "" {
 		return model.ModelChannel{}, safeMessageError{message: "缺少接口地址"}
 	}
-	if strings.TrimSpace(resolved.APIKey) == "" {
+	// ComfyUI 默认无认证，APIKey 可为空；其他渠道必须有 APIKey。
+	if strings.TrimSpace(resolved.APIKey) == "" && !strings.EqualFold(strings.TrimSpace(resolved.Protocol), "comfyui") {
 		return model.ModelChannel{}, safeMessageError{message: "缺少 API Key"}
 	}
 	return resolved, nil
@@ -490,6 +491,9 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 		result := kieMarketModels()
 		sort.Strings(result)
 		return result, nil
+	}
+	if strings.EqualFold(strings.TrimSpace(channel.Protocol), "comfyui") {
+		return fetchComfyUICheckpoints(channel)
 	}
 	request, err := http.NewRequest(http.MethodGet, BuildModelChannelURL(channel, "/models"), nil)
 	if err != nil {
@@ -518,6 +522,40 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 	for _, item := range payload.Data {
 		if strings.TrimSpace(item.ID) != "" {
 			result = append(result, item.ID)
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// fetchComfyUICheckpoints 从 ComfyUI /models/checkpoints 拉取可用 checkpoint 文件名列表。
+// ComfyUI 默认无认证，不发送 Authorization 头（其认证中间件会拒绝无效 Bearer）。
+func fetchComfyUICheckpoints(channel model.ModelChannel) ([]string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/")
+	if baseURL == "" {
+		return nil, safeMessageError{message: "请先填写接口地址"}
+	}
+	request, err := http.NewRequest(http.MethodGet, baseURL+"/models/checkpoints", nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := adminModelHTTPClient.Do(request)
+	if err != nil {
+		return nil, safeMessageError{message: "读取模型失败：ComfyUI 无响应或网络不可达"}
+	}
+	defer response.Body.Close()
+	body, _ := io.ReadAll(response.Body)
+	if response.StatusCode >= http.StatusBadRequest {
+		return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
+	}
+	var payload []string
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, safeMessageError{message: "ComfyUI 返回格式异常，请确认接口地址为 http://<host>:8188 且未开启认证"}
+	}
+	result := make([]string, 0, len(payload))
+	for _, item := range payload {
+		if strings.TrimSpace(item) != "" {
+			result = append(result, item)
 		}
 	}
 	sort.Strings(result)
@@ -916,7 +954,11 @@ func providerSecureHash(parts []string) string {
 func modelChannelsForModel(channels []model.ModelChannel, modelName string) []model.ModelChannel {
 	result := []model.ModelChannel{}
 	for _, channel := range channels {
-		if !channel.Enabled || channel.BaseURL == "" || channel.APIKey == "" {
+		if !channel.Enabled || channel.BaseURL == "" {
+			continue
+		}
+		// ComfyUI 默认无认证，APIKey 可为空；其他渠道必须有 APIKey。
+		if channel.APIKey == "" && !strings.EqualFold(strings.TrimSpace(channel.Protocol), "comfyui") {
 			continue
 		}
 		for _, item := range channel.Models {

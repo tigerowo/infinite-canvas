@@ -269,7 +269,7 @@ export default function AdminSettingsPage() {
             message.warning("请先填写接口地址");
             return;
         }
-        if (editingChannelIndex === null && !channel?.apiKey) {
+        if (editingChannelIndex === null && !channel?.apiKey && channelProtocol !== "comfyui") {
             message.warning("请先填写 API Key");
             return;
         }
@@ -976,13 +976,18 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item name="baseUrl" label="接口地址" rules={[{ required: true, message: "请输入接口地址" }]}>
-                                    <Input />
+                                <Form.Item
+                                    name="baseUrl"
+                                    label="接口地址"
+                                    rules={[{ required: true, message: "请输入接口地址" }]}
+                                    extra={channelProtocol === "comfyui" ? "填写 ComfyUI 服务地址，例如 http://192.168.1.100:8188（不带 /prompt 等路径，默认无认证）" : undefined}
+                                >
+                                    <Input placeholder={channelProtocol === "comfyui" ? "http://192.168.1.100:8188" : undefined} />
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item name="apiKey" label="API Key" rules={editingChannelIndex === null ? [{ required: true, message: "请输入 API Key" }] : []}>
-                                    <Input.Password placeholder={editingChannelIndex === null ? "" : "留空则沿用已保存的 API Key"} />
+                                <Form.Item name="apiKey" label="API Key" rules={channelProtocol === "comfyui" ? [] : editingChannelIndex === null ? [{ required: true, message: "请输入 API Key" }] : []}>
+                                    <Input.Password placeholder={channelProtocol === "comfyui" ? "ComfyUI 默认无需认证，可留空" : editingChannelIndex === null ? "" : "留空则沿用已保存的 API Key"} />
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
@@ -1077,7 +1082,7 @@ export default function AdminSettingsPage() {
                             <Space.Compact style={{ flex: "1 1 320px" }}>
                                 <Input value={modelSelectNewModel} placeholder="输入模型名称" onChange={(event) => setModelSelectNewModel(event.target.value)} onPressEnter={addModelInSelector} />
                                 <Button onClick={addModelInSelector}>增加模型</Button>
-                                <Button icon={<ReloadOutlined />} loading={isFetchingChannelModels} onClick={() => void fetchChannelModelList()}>
+                                <Button icon={<ReloadOutlined />} loading={isFetchingChannelModels} title={channelProtocol === "comfyui" ? "从 ComfyUI 拉取 checkpoint 模型列表" : undefined} onClick={() => void fetchChannelModelList()}>
                                     拉取模型列表
                                 </Button>
                             </Space.Compact>
