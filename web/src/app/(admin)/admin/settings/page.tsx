@@ -72,13 +72,15 @@ function analyzeComfyUIWorkflow(template: string): ComfyWorkflowAnalysis {
     const wired: string[] = [];
     if (!hasPlaceholders) {
         const found = new Set<string>();
+        const samplerTypes = new Set(["KSampler", "SamplerCustom", "SamplerCustomAdvanced"]);
+        const textEncodeTypes = new Set(["CLIPTextEncode", "TextEncodeBooguEdit", "TextEncodeBooguEditPlus", "TextEncodeQwenImageEdit", "TextEncodeQwenImageEditPlus", "TextEncodeQwenImage"]);
         for (const node of Object.values(graph)) {
             const classType = String((node as any)?.class_type || "");
             const inputs = (node as any)?.inputs || {};
-            if (classType === "KSampler") {
-                if (typeof inputs.seed !== "undefined") found.add("随机种子");
+            if (samplerTypes.has(classType)) {
+                if (typeof inputs.seed !== "undefined" || typeof inputs.noise_seed !== "undefined") found.add("随机种子");
                 const positive = Array.isArray(inputs.positive) ? String(inputs.positive[0]) : "";
-                if (positive && graph[positive]?.class_type === "CLIPTextEncode") found.add("提示词");
+                if (positive && textEncodeTypes.has(graph[positive]?.class_type)) found.add("提示词");
             }
             if (classType === "EmptyLatentImage") found.add("尺寸/数量");
             if (classType === "LoadImage") found.add("参考图");

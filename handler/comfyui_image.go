@@ -276,7 +276,8 @@ func renderComfyUIWorkflow(template string, vars map[string]any) (map[string]any
 }
 
 // autoWireComfyUITemplate 自动把画布参数接入导出的工作流（无占位符场景）：
-//   - KSampler.seed → {{seed}}，并沿 positive 链路找到 CLIPTextEncode 把 text → {{prompt}}
+//   - 采样器（KSampler / SamplerCustom 等）的 seed → {{seed}}，并沿 positive 链路
+//     找到文本编码节点把 text/prompt → {{prompt}}
 //   - EmptyLatentImage 的 width/height/batch_size → {{width}}/{{height}}/{{batch_size}}
 //   - LoadImage 的 image → {{image_name}}（图生图参考图）
 //
@@ -292,17 +293,23 @@ func autoWireComfyUITemplate(graph map[string]any) {
 			continue
 		}
 		switch toStringSafe(node["class_type"]) {
-		case "KSampler":
+		case "KSampler", "SamplerCustom", "SamplerCustomAdvanced":
 			if _, exists := inputs["seed"]; exists {
 				inputs["seed"] = "{{seed}}"
+			}
+			if _, exists := inputs["noise_seed"]; exists {
+				inputs["noise_seed"] = "{{seed}}"
 			}
 			if positive, ok := inputs["positive"].([]any); ok && len(positive) > 0 {
 				if targetID, ok := positive[0].(string); ok {
 					if target, ok := graph[targetID].(map[string]any); ok {
-						if toStringSafe(target["class_type"]) == "CLIPTextEncode" {
+						if isComfyUITextEncodeNode(toStringSafe(target["class_type"])) {
 							if targetInputs, ok := target["inputs"].(map[string]any); ok {
-								if _, exists := targetInputs["text"]; exists {
-									targetInputs["text"] = "{{prompt}}"
+								for _, field := range []string{"text", "prompt"} {
+									if _, exists := targetInputs[field]; exists {
+										targetInputs[field] = "{{prompt}}"
+										break
+									}
 								}
 							}
 						}
@@ -325,6 +332,17 @@ func autoWireComfyUITemplate(graph map[string]any) {
 			}
 		}
 	}
+}
+
+// isComfyUITextEncodeNode 判断节点是否为文本编码节点（标准 CLIPTextEncode 及
+// Boogu/Qwen-Image-Edit 等自定义变体），autoWire 接入提示词时使用。
+func isComfyUITextEncodeNode(classType string) bool {
+	switch classType {
+	case "CLIPTextEncode", "TextEncodeBooguEdit", "TextEncodeBooguEditPlus",
+		"TextEncodeQwenImageEdit", "TextEncodeQwenImageEditPlus", "TextEncodeQwenImage":
+		return true
+	}
+	return false
 }
 
 func resolveComfyUIPlaceholders(value any, vars map[string]any) (any, error) {

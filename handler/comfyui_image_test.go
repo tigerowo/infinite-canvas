@@ -469,6 +469,63 @@ func TestComfyUIEmptyTemplateReturnsError(t *testing.T) {
 	}
 }
 
+// TestAutoWireComfyUICustomEditNodes 验证 SamplerCustom + TextEncodeBooguEdit 等
+// 自定义节点也能自动接入提示词/种子（Boogu Edit 图生图模板场景）。
+func TestAutoWireComfyUICustomEditNodes(t *testing.T) {
+	template := `{
+  "2": {"class_type": "UNETLoader", "inputs": {"unet_name": "boogu_image_edit_fp8_scaled.safetensors"}},
+  "5": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+  "7": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_8b_fp8_scaled.safetensors", "type": "boogu"}},
+  "32": {"class_type": "LoadImage", "inputs": {"image": "tech_cowboy.png"}},
+  "8": {"class_type": "EmptyLatentImage", "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
+  "36": {"class_type": "TextEncodeBooguEdit", "inputs": {"prompt": "remove the hat", "negative_prompt": "", "clip": ["7", 0], "vae": ["5", 0], "images.image_1": ["32", 0]}},
+  "21": {"class_type": "SamplerCustom", "inputs": {"add_noise": true, "noise_seed": 22, "cfg": 3.5, "model": ["2", 0], "positive": ["36", 0], "negative": ["36", 1], "latent_image": ["8", 0]}}
+}`
+
+	channel := comfyTestChannel("http://comfy.local:8188")
+	channel.Img2ImgWorkflow = template
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"ref.png","subfolder":"","type":"input"}`))
+	}))
+	defer server.Close()
+	channel.BaseURL = server.URL
+
+	var buffer bytes.Buffer
+	writer := multipart.NewWriter(&buffer)
+	_ = writer.WriteField("model", "boogu-edit")
+	_ = writer.WriteField("prompt", "make him wear sunglasses")
+	part, _ := writer.CreateFormFile("image", "source.png")
+	_, _ = part.Write([]byte("fake"))
+	_ = writer.Close()
+
+	encoded, _, err := normalizeComfyUIImageEditBody(buffer.Bytes(), writer.FormDataContentType(), "boogu-edit", channel)
+	if err != nil {
+		t.Fatalf("normalize edit failed: %v", err)
+	}
+	graph := decodeComfyGraph(t, encoded)
+
+	// TextEncodeBooguEdit 的 prompt 字段接入画布提示词
+	encode := comfyNodeInputs(t, graph, "36")
+	if encode["prompt"] != "make him wear sunglasses" {
+		t.Fatalf("TextEncodeBooguEdit prompt = %v, want 画布提示词", encode["prompt"])
+	}
+	// LoadImage 接入上传的参考图
+	loadImage := comfyNodeInputs(t, graph, "32")
+	if loadImage["image"] != "ref.png" {
+		t.Fatalf("LoadImage image = %v, want ref.png", loadImage["image"])
+	}
+	// SamplerCustom 的 noise_seed 被随机替换
+	sampler := comfyNodeInputs(t, graph, "21")
+	if _, ok := sampler["noise_seed"].(float64); !ok {
+		t.Fatalf("noise_seed 未接入: %T", sampler["noise_seed"])
+	}
+	// 采样参数保留
+	if sampler["cfg"] != float64(3.5) {
+		t.Fatalf("cfg = %v, want 保留 3.5", sampler["cfg"])
+	}
+}
+
 // TestComfyUIInlinePlaceholders 验证自定义节点字符串参数（如 "{{width}}x{{height}}"）可注入画布尺寸。
 func TestComfyUIInlinePlaceholders(t *testing.T) {
 	vars := map[string]any{
