@@ -60,3 +60,25 @@ func TestBuildModelChannelURLNormalizesArkPlanTaskPath(t *testing.T) {
 		t.Fatalf("BuildModelChannelURL = %q, want %q", got, want)
 	}
 }
+
+func TestBuildModelChannelURLZhipuV4(t *testing.T) {
+	tests := []struct {
+		baseURL string
+		path    string
+		want    string
+	}{
+		{"https://open.bigmodel.cn/api/paas/v4", "/chat/completions", "https://open.bigmodel.cn/api/paas/v4/chat/completions"},
+		{"https://open.bigmodel.cn/api/paas/v4/", "/models", "https://open.bigmodel.cn/api/paas/v4/models"},
+		{"https://open.bigmodel.cn/api/paas/v4", "/images/generations", "https://open.bigmodel.cn/api/paas/v4/images/generations"},
+		// 火山方舟保持原行为
+		{"https://ark.cn-beijing.volces.com/api/plan/v3", "/chat/completions", "https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions"},
+		// 普通 OpenAI 兼容地址仍追加 /v1
+		{"https://api.openai.com", "/chat/completions", "https://api.openai.com/v1/chat/completions"},
+	}
+	for _, tt := range tests {
+		got := BuildModelChannelURL(model.ModelChannel{BaseURL: tt.baseURL}, tt.path)
+		if got != tt.want {
+			t.Fatalf("BuildModelChannelURL(%q, %q) = %q, want %q", tt.baseURL, tt.path, got, tt.want)
+		}
+	}
+}

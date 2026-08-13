@@ -419,25 +419,29 @@ export function useEffectiveConfig() {
 
 export function buildApiUrl(baseUrl: string, path: string) {
     let normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, "");
-    normalizedBaseUrl = normalizeArkPlanBaseUrl(normalizedBaseUrl);
+    normalizedBaseUrl = normalizeVersionedBaseUrl(normalizedBaseUrl);
     const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
-    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
+    const apiBaseUrl = lowerBaseUrl.endsWith("/v1") || lowerBaseUrl.endsWith("/api/v3") || lowerBaseUrl.endsWith("/api/plan/v3") || lowerBaseUrl.endsWith("/api/paas/v4") ? normalizedBaseUrl : `${normalizedBaseUrl}/v1`;
     return `${apiBaseUrl}${path}`;
 }
 
-function normalizeArkPlanBaseUrl(baseUrl: string) {
+// 识别带版本路径的服务（火山方舟 /api/plan/v3、智谱 /api/paas/v4），避免追加 /v1 造成路径错误。
+function normalizeVersionedBaseUrl(baseUrl: string) {
     try {
         const url = new URL(baseUrl);
         const path = url.pathname.replace(/\/+$/, "");
         const lowerPath = path.toLowerCase();
-        const arkPlanIndex = lowerPath.indexOf("/api/plan/v3");
-        if (arkPlanIndex < 0) return baseUrl;
-        const end = arkPlanIndex + "/api/plan/v3".length;
-        if (lowerPath.length !== end && lowerPath[end] !== "/") return baseUrl;
-        url.pathname = path.slice(0, end);
-        url.search = "";
-        url.hash = "";
-        return url.toString().replace(/\/+$/, "");
+        for (const versionPath of ["/api/plan/v3", "/api/paas/v4"]) {
+            const versionIndex = lowerPath.indexOf(versionPath);
+            if (versionIndex < 0) continue;
+            const end = versionIndex + versionPath.length;
+            if (lowerPath.length !== end && lowerPath[end] !== "/") continue;
+            url.pathname = path.slice(0, end);
+            url.search = "";
+            url.hash = "";
+            return url.toString().replace(/\/+$/, "");
+        }
+        return baseUrl;
     } catch {
         return baseUrl;
     }

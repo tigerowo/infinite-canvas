@@ -320,7 +320,7 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
 	lowerBaseURL := strings.ToLower(baseURL)
-	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") {
+	if !strings.HasSuffix(lowerBaseURL, "/v1") && !strings.HasSuffix(lowerBaseURL, "/api/v3") && !strings.HasSuffix(lowerBaseURL, "/api/plan/v3") && !strings.HasSuffix(lowerBaseURL, "/api/paas/v4") {
 		baseURL += "/v1"
 	}
 	return baseURL + path
@@ -332,14 +332,18 @@ func normalizeModelChannelBaseURL(baseURL string) string {
 	if err == nil && parsed.Scheme != "" && parsed.Host != "" {
 		path := strings.TrimRight(parsed.Path, "/")
 		lowerPath := strings.ToLower(path)
-		if index := strings.Index(lowerPath, "/api/plan/v3"); index >= 0 {
-			end := index + len("/api/plan/v3")
-			if len(lowerPath) == end || lowerPath[end] == '/' {
-				parsed.Path = path[:end]
-				parsed.RawPath = ""
-				parsed.RawQuery = ""
-				parsed.Fragment = ""
-				return strings.TrimRight(parsed.String(), "/")
+		// 识别带版本路径的服务（如火山方舟 /api/plan/v3、智谱 /api/paas/v4），
+		// 避免后续追加 /v1 造成路径错误。
+		for _, versionPath := range []string{"/api/plan/v3", "/api/paas/v4"} {
+			if index := strings.Index(lowerPath, versionPath); index >= 0 {
+				end := index + len(versionPath)
+				if len(lowerPath) == end || lowerPath[end] == '/' {
+					parsed.Path = path[:end]
+					parsed.RawPath = ""
+					parsed.RawQuery = ""
+					parsed.Fragment = ""
+					return strings.TrimRight(parsed.String(), "/")
+				}
 			}
 		}
 	}
