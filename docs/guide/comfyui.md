@@ -34,9 +34,18 @@ description: 如何接入本地 ComfyUI 实现文生图与图生图，以及工�
 
 ComfyUI 的生成逻辑由 **workflow（节点图）** 决定，不同模型/插件的工作流结构差异很大，因此使用前需要把你的工作流导入到渠道配置中。
 
-### 从 ComfyUI 导出
+### 从 ComfyUI 导出（必须是 API Workflow）
 
-在 ComfyUI 前端：**设置 → 开启 Developer Mode（Dev Mode）**，然后在工作流菜单选择 **Save (API Format)**，会下载一个 `.json` 文件。
+ComfyUI 导出有两种格式，**必须使用 API Workflow**：
+
+| 导出方式 | 格式 | 能否使用 |
+|----------|------|----------|
+| **设置 → 开启 Developer Mode → 工作流菜单 → Save (API Format)** | 纯节点图（每个节点是 `class_type` + `inputs`） | ✅ **必须用这个** |
+| 普通的 保存工作流 / Save（Workflow） | UI 格式（含节点坐标、布局、`nodes`/`links` 结构） | ❌ 不可用 |
+
+> ⚠️ **常见误区**：在 ComfyUI 里「保存工作流」导出的 `.json` 是**前端 UI 格式**，无法直接用于 API 调用，上传到本系统会提示「JSON 格式无效」。请务必使用 **Developer Mode 下的 Save (API Format)** 导出的文件。
+>
+> 判断方法：打开导出的 `.json`，如果内容是类似 `{"nodes": [...], "links": [...]}` 就是普通 workflow（错误）；如果内容是 `{"节点ID": {"class_type": "...", "inputs": {...}}}` 这样的纯节点对象，才是 API workflow（正确）。
 
 ### 导入到渠道
 
@@ -99,6 +108,9 @@ ComfyUI 的生成逻辑由 **workflow（节点图）** 决定，不同模型/插
 > - 未定义的占位符保持原样，由 ComfyUI 校验时报错提示
 
 ## 五、常见问题
+
+**Q：上传模板提示「JSON 格式无效」？**
+大概率导出了**普通 workflow（UI 格式）**而不是 **API workflow**。普通格式内容形如 `{"nodes": [...], "links": [...]}`；请用 ComfyUI 的 **Developer Mode → Save (API Format)** 重新导出（纯节点图，形如 `{"节点ID": {"class_type": "...", "inputs": {...}}}`）。
 
 **Q：生图报错 `Prompt outputs failed validation`？**
 后端会透出具体的校验详情（例如 `ckpt_name: 'xxx' not in [...]`）。通常原因是模型名不匹配——检查「渠道可用模型」中的模型名是否与模板中模型加载节点（`CheckpointLoaderSimple` / `UNETLoader` / `CLIPLoader` / `VAELoader`）指向的文件一致。
