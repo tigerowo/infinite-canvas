@@ -305,3 +305,52 @@ func TestRenderComfyUIWorkflowCustomTemplate(t *testing.T) {
 		t.Fatal("custom template should not contain default nodes")
 	}
 }
+
+// TestComfyUIInlinePlaceholders 验证自定义节点字符串参数（如 "{{width}}x{{height}}"）可注入画布尺寸。
+func TestComfyUIInlinePlaceholders(t *testing.T) {
+	vars := map[string]any{
+		"width":  float64(1024),
+		"height": float64(576),
+		"steps":  float64(20),
+		"cfg":    4.5,
+		"ckpt":   "model.safetensors",
+	}
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "{{width}}x{{height}}", want: "1024x576"},
+		{input: "1024x{{height}}", want: "1024x576"},
+		{input: "{{steps}} steps cfg {{cfg}}", want: "20 steps cfg 4.5"},
+		{input: "{{ckpt}}/v1", want: "model.safetensors/v1"},
+		{input: "{{undefined}}x", want: "{{undefined}}x"},
+		{input: "plain text", want: "plain text"},
+		{input: "{{width}}", want: "1024"}, // inline 函数总是返回字符串
+	}
+	for _, tt := range tests {
+		got := replaceComfyUIInlinePlaceholders(tt.input, vars)
+		if got != tt.want {
+			t.Fatalf("replaceComfyUIInlinePlaceholders(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+// TestComfyUIInlinePlaceholderInWorkflow 验证组合尺寸占位符能渲染进自定义模板节点。
+func TestComfyUIInlinePlaceholderInWorkflow(t *testing.T) {
+	channel := comfyTestChannel("http://comfy.local:8188")
+	// 自定义节点用字符串 size 参数（社区节点常见写法）
+	channel.Txt2ImgWorkflow = `{"1":{"class_type":"CustomResolutionNode","inputs":{"size":"{{width}}x{{height}}","model":"{{ckpt_name}}"}},"2":{"class_type":"EmptyLatentImage","inputs":{"width":"{{width}}","height":"{{height}}","batch_size":1}}}`
+	body := []byte(`{"model":"m","prompt":"p","size":"16:9"}`)
+	encoded, _, err := normalizeComfyUIImageBody(body, "application/json", "m", channel)
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	graph := decodeComfyGraph(t, encoded)
+	custom := comfyNodeInputs(t, graph, "1")
+	if custom["size"] != "1024x576" {
+		t.Fatalf("inline size = %v, want 1024x576", custom["size"])
+	}
+	if custom["model"] != "m" {
+		t.Fatalf("inline model = %v, want m", custom["model"])
+	}
+}

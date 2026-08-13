@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"mime"
@@ -231,6 +232,47 @@ func firstComfyUIFormValue(form *multipart.Form, key string) string {
 	return ""
 }
 
+// replaceComfyUIInlinePlaceholders 替换字符串内所有 {{name}} 占位符；
+// 未定义的占位符保持原样，由 ComfyUI 端校验报错。
+func replaceComfyUIInlinePlaceholders(value string, vars map[string]any) string {
+	var builder strings.Builder
+	for {
+		start := strings.Index(value, "{{")
+		if start < 0 {
+			builder.WriteString(value)
+			break
+		}
+		end := strings.Index(value[start:], "}}")
+		if end < 0 {
+			builder.WriteString(value)
+			break
+		}
+		end += start + 2
+		name := strings.TrimSpace(value[start+2 : end-2])
+		if replacement, ok := vars[name]; ok {
+			builder.WriteString(value[:start])
+			builder.WriteString(comfyPlaceholderString(replacement))
+		} else {
+			builder.WriteString(value[:end])
+		}
+		value = value[end:]
+	}
+	return builder.String()
+}
+
+func comfyPlaceholderString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case int:
+		return strconv.Itoa(typed)
+	default:
+		return fmt.Sprint(typed)
+	}
+}
+
 // renderComfyUIWorkflow 解析 workflow 模板 JSON 并递归替换 {{name}} 占位符。
 // 数字占位符替换为对应 Go 数值类型，序列化时保持 JSON 数字。
 func renderComfyUIWorkflow(template string, vars map[string]any) (map[string]any, error) {
@@ -257,6 +299,11 @@ func resolveComfyUIPlaceholders(value any, vars map[string]any) (any, error) {
 			if replacement, ok := vars[name]; ok {
 				return replacement, nil
 			}
+		}
+		// 支持内嵌占位符：字符串任意位置的 {{name}} 替换为变量的字符串表示，
+		// 便于自定义节点使用 "{{width}}x{{height}}" 这类组合尺寸参数。
+		if strings.Contains(typed, "{{") {
+			return replaceComfyUIInlinePlaceholders(typed, vars), nil
 		}
 		return typed, nil
 	case map[string]any:
