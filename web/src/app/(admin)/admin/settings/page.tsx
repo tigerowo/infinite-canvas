@@ -140,6 +140,12 @@ export default function AdminSettingsPage() {
     const img2ImgTemplate = Form.useWatch("img2ImgWorkflow", channelForm);
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
+    // 渠道表单的模型候选：当前渠道已选模型 + 公共模型（过滤掉其他渠道专属模型，避免配置 OpenAI 时混入 ComfyUI 模型）
+    const channelModelCandidates = useMemo(() => {
+        const current = editingChannelIndex !== null && channels[editingChannelIndex] ? channels[editingChannelIndex].models || [] : [];
+        const other = uniqueModels(channels.filter((_, index) => index !== editingChannelIndex).flatMap((channel) => channel.models || []));
+        return uniqueModels([...current, ...knownModels.filter((model) => !other.includes(model))]);
+    }, [channels, editingChannelIndex, knownModels]);
     const activeMode = editorMode[activeTab];
     const activeJsonText = jsonText[activeTab];
     const jsonError = activeMode === "json" ? getJsonError(activeJsonText) : "";
@@ -299,7 +305,7 @@ export default function AdminSettingsPage() {
 
     const openChannelModelSelector = (sourceModels?: string[]) => {
         const current = uniqueModels(channelForm.getFieldValue("models") || []);
-        const source = uniqueModels(sourceModels !== undefined ? sourceModels : [...knownModels, ...current]);
+        const source = uniqueModels(sourceModels !== undefined ? sourceModels : [...channelModelCandidates, ...current]);
         setModelSelectExisting(current);
         setModelSelectSource(source);
         setModelSelectSelected(sourceModels ? uniqueModels([...current, ...source]) : current);
@@ -994,7 +1000,7 @@ export default function AdminSettingsPage() {
                                 <Form.Item label="渠道可用模型">
                                     <Space.Compact style={{ width: "100%" }}>
                                         <Form.Item name="models" noStyle>
-                                            <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: model, value: model }))} />
+                                            <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={channelModelCandidates.map((model) => ({ label: model, value: model }))} />
                                         </Form.Item>
                                         <Button onClick={() => openChannelModelSelector()}>选择模型</Button>
                                     </Space.Compact>
