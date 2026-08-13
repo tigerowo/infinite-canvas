@@ -528,38 +528,88 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 	return result, nil
 }
 
-// fetchComfyUICheckpoints 从 ComfyUI /models/checkpoints 拉取可用 checkpoint 文件名列表。
+// fetchComfyUICheckpoints 拉取 ComfyUI 实际可用的模型文件名列表。
+// 从各加载节点的 object_info 选项聚合（checkpoints/unet/clip/vae），比 /models/{folder}
+// 目录接口更可靠：UNETLoader/CLIPLoader/VAELoader 的模型（如 Boogu 分离格式）也能拉到。
 // ComfyUI 默认无认证，不发送 Authorization 头（其认证中间件会拒绝无效 Bearer）。
 func fetchComfyUICheckpoints(channel model.ModelChannel) ([]string, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(channel.BaseURL), "/")
 	if baseURL == "" {
 		return nil, safeMessageError{message: "请先填写接口地址"}
 	}
-	request, err := http.NewRequest(http.MethodGet, baseURL+"/models/checkpoints", nil)
+	nodes := []struct {
+		nodeClass string
+		field     string
+	}{
+		{"CheckpointLoaderSimple", "ckpt_name"},
+		{"UNETLoader", "unet_name"},
+		{"CLIPLoader", "clip_name"},
+		{"VAELoader", "vae_name"},
+	}
+	seen := map[string]bool{}
+	result := []string{}
+	for _, item := range nodes {
+		models, err := fetchComfyUINodeModels(baseURL, item.nodeClass, item.field)
+		if err != nil {
+			continue
+		}
+		for _, name := range models {
+			name = strings.TrimSpace(name)
+			// 过滤非文件名的选项值（如 "pixel_space"），模型文件名通常带扩展名
+			if name == "" || seen[name] || !strings.Contains(name, ".") {
+				continue
+			}
+			seen[name] = true
+			result = append(result, name)
+		}
+	}
+	if len(result) == 0 {
+		return nil, safeMessageError{message: "ComfyUI 未返回可用的模型，请确认接口地址 http://<host>:8188 可访问且未开启认证"}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// fetchComfyUINodeModels 从 object_info/<node> 的 required[field] 选项读取模型列表。
+func fetchComfyUINodeModels(baseURL string, nodeClass string, field string) ([]string, error) {
+	request, err := http.NewRequest(http.MethodGet, baseURL+"/object_info/"+url.PathEscape(nodeClass), nil)
 	if err != nil {
 		return nil, err
 	}
 	response, err := adminModelHTTPClient.Do(request)
 	if err != nil {
-		return nil, safeMessageError{message: "读取模型失败：ComfyUI 无响应或网络不可达"}
+		return nil, err
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
 	if response.StatusCode >= http.StatusBadRequest {
-		return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
+		return nil, safeMessageError{message: "ComfyUI 节点信息读取失败"}
 	}
-	var payload []string
+	body, _ := io.ReadAll(response.Body)
+	var payload map[string]struct {
+		Input struct {
+			Required map[string]json.RawMessage `json:"required"`
+		} `json:"input"`
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, safeMessageError{message: "ComfyUI 返回格式异常，请确认接口地址为 http://<host>:8188 且未开启认证"}
+		return nil, err
 	}
-	result := make([]string, 0, len(payload))
-	for _, item := range payload {
-		if strings.TrimSpace(item) != "" {
-			result = append(result, item)
-		}
+	node, ok := payload[nodeClass]
+	if !ok {
+		return nil, safeMessageError{message: "ComfyUI 缺少节点 " + nodeClass}
 	}
-	sort.Strings(result)
-	return result, nil
+	raw, ok := node.Input.Required[field]
+	if !ok {
+		return nil, safeMessageError{message: "ComfyUI 节点缺少字段 " + field}
+	}
+	var options []json.RawMessage
+	if err := json.Unmarshal(raw, &options); err != nil || len(options) == 0 {
+		return nil, err
+	}
+	var models []string
+	if err := json.Unmarshal(options[0], &models); err != nil {
+		return nil, err
+	}
+	return models, nil
 }
 
 func isKIEAdminChannel(channel model.ModelChannel) bool {
