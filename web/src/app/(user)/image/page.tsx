@@ -674,6 +674,10 @@ export default function ImagePage() {
         setResults((value) => value.filter((item) => item.status === "pending"));
         setSelectedLogIds([]);
         setPreviewLog(null);
+        message.success("已新建生图会话，请输入提示词");
+        window.requestAnimationFrame(() => {
+            document.querySelector<HTMLTextAreaElement>("[data-image-prompt-input]")?.focus();
+        });
     };
 
     const deleteBackendImageTasks = async (items: GenerationLog[]) => {
@@ -1321,6 +1325,7 @@ function WorkbenchPanel({
                     <div className="flex flex-col gap-3">
                         <div className="grid gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                             <Input.TextArea
+                                data-image-prompt-input
                                 value={prompt}
                                 onChange={(event) => onPromptChange(event.target.value)}
                                 placeholder="描述你想生成的图片，可输入 @ 来指定参考图..."
@@ -1410,7 +1415,7 @@ function WorkbenchPanel({
                             <Button size="small" icon={<BookOpen className="size-3.5" />} onClick={onOpenPromptLibrary}>提示词库</Button>
                             <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={onOpenAssetPicker}>我的素材</Button>
                         </div>
-                        <Input.TextArea value={prompt} onChange={(event) => onPromptChange(event.target.value)} rows={6} placeholder="描述画面主体、风格、构图、光线和用途" />
+                        <Input.TextArea data-image-prompt-input value={prompt} onChange={(event) => onPromptChange(event.target.value)} rows={6} placeholder="描述画面主体、风格、构图、光线和用途" />
                     </div>
                 </section>
 
@@ -2390,6 +2395,21 @@ function isFailedImageTask(task: CanvasImageTask) {
     return ["failed", "fail", "error", "cancelled", "canceled"].includes((task.status || "").toLowerCase());
 }
 
+function imageFromCompletedTask(task: CanvasImageTask, durationMs: number): GeneratedImage | null {
+    const url = task.image_url || task.url || "";
+    if (!url) return null;
+    return {
+        id: task.id,
+        dataUrl: url,
+        storageKey: task.storageKey,
+        durationMs,
+        width: task.width || 0,
+        height: task.height || 0,
+        bytes: task.bytes || 0,
+        mimeType: task.mimeType || "image/png",
+    };
+}
+
 function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[], config: AiConfig) {
     const nextLogs = [...logs];
     const byKey = new Map<string, GenerationLog>();
@@ -2472,12 +2492,11 @@ function imageLogFromTask(log: GenerationLog, task: CanvasImageTask): Generation
         return { ...log, task, status: "失败", durationMs, failCount: 1, errors: [message], errorDetails: [task.error_detail || message], lastPolledAt: Date.now() };
     }
     if (isCompletedImageTask(task)) {
-        const url = task.image_url || task.url || "";
-        if (!url) {
+        const image = imageFromCompletedTask(task, durationMs);
+        if (!image) {
             return { ...log, task, status: "失败", durationMs, failCount: 1, errors: ["图片生成完成但没有返回图片地址"], errorDetails: [JSON.stringify(task, null, 2)], lastPolledAt: Date.now() };
         }
-        const image: GeneratedImage = { id: task.id, dataUrl: url, storageKey: task.storageKey, durationMs, width: task.width || 0, height: task.height || 0, bytes: task.bytes || 0, mimeType: task.mimeType || "image/png" };
-        return { ...log, task, status: "成功", durationMs, successCount: 1, failCount: 0, imageCount: 1, images: [image], thumbnails: [url], errors: [], errorDetails: [], lastPolledAt: Date.now() };
+        return { ...log, task, status: "成功", durationMs, successCount: 1, failCount: 0, imageCount: 1, images: [image], thumbnails: [image.dataUrl], errors: [], errorDetails: [], lastPolledAt: Date.now() };
     }
     return { ...log, task, durationMs, lastPolledAt: Date.now() };
 }
@@ -2621,7 +2640,11 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
             return { ...item, dataUrl };
         }),
     );
-    const visibleImages = images.filter((image) => Boolean(image.dataUrl));
+    const task = log.task;
+    const fallbackTaskImage = log.status !== "失败" && !images.some((image) => Boolean(image.dataUrl)) && task && !isFailedImageTask(task) && isCompletedImageTask(task)
+        ? imageFromCompletedTask(task, Number(log.durationMs) || 0)
+        : null;
+    const visibleImages = (fallbackTaskImage ? [...images, fallbackTaskImage] : images).filter((image) => Boolean(image.dataUrl));
     const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),

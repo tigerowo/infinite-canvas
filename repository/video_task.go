@@ -69,7 +69,7 @@ func DeleteUserVideoTask(userID string, id string) error {
 	return db.Where("user_id = ? AND (id = ? OR upstream_task_id = ? OR upstream_video_id = ?)", userID, id, id, id).Delete(&model.VideoTask{}).Error
 }
 
-func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
+func ListDueVideoTasks(now string, limit int) ([]model.VideoTask, error) {
 	db, err := DB()
 	if err != nil {
 		return nil, err
@@ -79,6 +79,7 @@ func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
 	}
 	var tasks []model.VideoTask
 	err = db.Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).
+		Where("next_poll_at = '' OR next_poll_at IS NULL OR next_poll_at <= ?", now).
 		Order("created_at ASC").
 		Limit(limit).
 		Find(&tasks).Error

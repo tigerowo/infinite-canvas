@@ -35,6 +35,9 @@ func New() *gin.Engine {
 	api.GET("/files/:id/content", func(c *gin.Context) {
 		handler.FileContent(c.Writer, c.Request, c.Param("id"))
 	})
+	api.HEAD("/files/:id/content", func(c *gin.Context) {
+		handler.FileContent(c.Writer, c.Request, c.Param("id"))
+	})
 	api.POST("/ai/direct-request", gin.WrapF(handler.PrepareDirectAIRequest))
 	v1 := api.Group("/v1", middleware.UserAuth)
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))

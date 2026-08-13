@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -116,6 +118,21 @@ func FileContent(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	w.Header().Set("Content-Type", download.Object.MimeType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	if download.LocalPath != "" {
+		file, openErr := os.Open(download.LocalPath)
+		if openErr != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer file.Close()
+		info, statErr := file.Stat()
+		if statErr != nil || info.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeContent(w, r, filepath.Base(download.LocalPath), info.ModTime(), file)
+		return
+	}
 	_, _ = w.Write(download.Data)
 }
 

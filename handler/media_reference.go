@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/google/uuid"
+	"github.com/tigerowo/infinite-canvas/config"
+	"github.com/tigerowo/infinite-canvas/service"
 )
 
 const (
@@ -121,21 +122,7 @@ func referenceMediaDir() string {
 }
 
 func referenceDataDir() string {
-	driver := strings.ToLower(strings.TrimSpace(config.Cfg.StorageDriver))
-	dsn := strings.TrimSpace(config.Cfg.DatabaseDSN)
-	if (driver == "" || driver == "sqlite") && dsn != "" && dsn != ":memory:" && !strings.HasPrefix(dsn, "file:") {
-		pathPart := dsn
-		if index := strings.Index(dsn, "?"); index >= 0 {
-			pathPart = dsn[:index]
-		}
-		if filepath.IsAbs(pathPart) {
-			return filepath.Dir(pathPart)
-		}
-	}
-	if _, err := os.Stat("/app/data"); err == nil {
-		return "/app/data"
-	}
-	return "data"
+	return service.ApplicationDataDir()
 }
 
 func normalizeReferenceMediaType(contentType string, ext string) (string, string, bool) {

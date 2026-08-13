@@ -2,12 +2,14 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,7 +118,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	payload, status, err := doAIRequest(request, channel)
+	payload, status, _, err := doAIRequest(request, channel)
 	if err != nil {
 		if credits > 0 {
 			refundVideoCredits(user.ID, modelName, credits, upstreamPath)
@@ -153,27 +155,27 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, err := service.CreateVideoTask(service.VideoTaskCreateInput{
-		UserID:          user.ID,
-		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
-		Model:           modelName,
-		ChannelID:       channel.ID,
-		UserChannelID:   userChannelID,
-		ChannelName:     channel.Name,
-		Source:          readVideoTaskSource(r),
-		SourceID:        readVideoTaskSourceID(r),
+		UserID:           user.ID,
+		UserDisplayName:  firstNonEmpty(user.DisplayName, user.Username),
+		Model:            modelName,
+		ChannelID:        channel.ID,
+		UserChannelID:    userChannelID,
+		ChannelName:      channel.Name,
+		Source:           readVideoTaskSource(r),
+		SourceID:         readVideoTaskSourceID(r),
 		ClientTaskID:     readClientVideoTaskID(r),
-		UpstreamTaskID:  parsed.UpstreamTaskID,
-		UpstreamVideoID: parsed.UpstreamVideoID,
-		Status:          parsed.Status,
-		Progress:        parsed.Progress,
-		Seconds:         parsed.Seconds,
-		Size:            parsed.Size,
-		VideoURL:        parsed.VideoURL,
-		Error:           parsed.Error,
-		ErrorDetail:     parsed.ErrorDetail,
-		RequestBody:     logContext.RequestBody,
-		ResponseBody:    string(transformed),
-		Credits:         credits,
+		UpstreamTaskID:   parsed.UpstreamTaskID,
+		UpstreamVideoID:  parsed.UpstreamVideoID,
+		Status:           parsed.Status,
+		Progress:         parsed.Progress,
+		Seconds:          parsed.Seconds,
+		Size:             parsed.Size,
+		UpstreamVideoURL: parsed.VideoURL,
+		Error:            parsed.Error,
+		ErrorDetail:      parsed.ErrorDetail,
+		RequestBody:      logContext.RequestBody,
+		ResponseBody:     string(transformed),
+		Credits:          credits,
 	})
 	if err != nil {
 		log.Printf("save video task failed: model=%s err=%v", modelName, err)
@@ -223,6 +225,9 @@ func serveAIVideoTask(w http.ResponseWriter, r *http.Request, id string) bool {
 }
 
 func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdate, error) {
+	if strings.TrimSpace(task.UpstreamVideoURL) != "" && strings.TrimSpace(task.StorageKey) == "" {
+		return cacheCompletedVideoTask(task, task.UpstreamVideoURL, "")
+	}
 	var channel model.ModelChannel
 	var err error
 	if strings.TrimSpace(task.UserChannelID) != "" {
@@ -258,7 +263,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		UserDisplayName: task.UserDisplayName,
 		RequestBody:     fmt.Sprintf(`{"taskId":%q}`, pollID),
 	}
-	payload, status, err := doAIRequest(request, channel)
+	payload, status, responseHeaders, err := doAIRequest(request, channel)
 	if err != nil {
 		saveAIProxyLog(logContext, 0, "", err.Error())
 		return service.VideoTaskPollUpdate{}, err
@@ -267,7 +272,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		message := readUpstreamAIErrorMessage(payload, status)
 		saveAIProxyLog(logContext, status, string(payload), strings.TrimSpace(string(payload)))
 		if status == http.StatusTooManyRequests {
-			return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: message, ResponseBody: string(payload)}, nil
+			return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: message, ResponseBody: string(payload), RateLimited: true, RetryAfter: parseRetryAfter(responseHeaders.Get("Retry-After"))}, nil
 		}
 		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: string(payload)}, nil
 	}
@@ -286,6 +291,9 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		parsed.ErrorDetail = string(payload)
 	}
 	saveAIProxyLog(logContext, status, string(transformed), firstNonEmpty(parsed.Error, ""))
+	if parsed.VideoURL != "" {
+		return cacheCompletedVideoTask(task, parsed.VideoURL, string(transformed))
+	}
 	return service.VideoTaskPollUpdate{
 		Status:       parsed.Status,
 		Progress:     parsed.Progress,
@@ -308,14 +316,51 @@ func normalizeVideoCreateBody(body []byte, contentType string, modelName string,
 	return body, contentType, nil
 }
 
-func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int, error) {
+func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int, http.Header, error) {
 	response, err := service.HTTPClientForChannel(channel).Do(request)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	defer response.Body.Close()
 	payload, _ := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
-	return payload, response.StatusCode, nil
+	return payload, response.StatusCode, response.Header.Clone(), nil
+}
+
+func cacheCompletedVideoTask(task model.VideoTask, upstreamURL, responseBody string) (service.VideoTaskPollUpdate, error) {
+	cached, err := service.CacheRemoteGeneratedMedia(context.Background(), task.UserID, upstreamURL, "video")
+	if err != nil {
+		return service.VideoTaskPollUpdate{
+			Status:           "processing",
+			Progress:         max(task.Progress, 99),
+			UpstreamVideoURL: upstreamURL,
+			ErrorDetail:      "视频已生成，正在保存到本地存储：" + err.Error(),
+			ResponseBody:     responseBody,
+		}, nil
+	}
+	return service.VideoTaskPollUpdate{
+		Status:           "completed",
+		Progress:         100,
+		VideoURL:         cached.URL,
+		UpstreamVideoURL: upstreamURL,
+		StorageKey:       cached.StorageKey,
+		MimeType:         cached.MimeType,
+		Bytes:            cached.Bytes,
+		ResponseBody:     responseBody,
+	}, nil
+}
+
+func parseRetryAfter(value string) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if retryAt, err := http.ParseTime(value); err == nil {
+		return max(time.Until(retryAt), 0)
+	}
+	return 0
 }
 
 func transformVideoCreatePayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {

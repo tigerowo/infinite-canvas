@@ -293,6 +293,7 @@ func saveAIProxyLog(context aiLogContext, status int, responseBody string, error
 	if context.StartedAt.IsZero() {
 		context.StartedAt = time.Now()
 	}
+	responseBody = summarizeAIResponseForLog(context.Endpoint, status, responseBody)
 	service.SaveAICallLog(service.AICallLogInput{
 		UserID:          context.UserID,
 		UserDisplayName: context.UserDisplayName,
@@ -308,6 +309,34 @@ func saveAIProxyLog(context aiLogContext, status int, responseBody string, error
 		ResponseBody:    responseBody,
 		Error:           errorMessage,
 	})
+}
+
+func summarizeAIResponseForLog(endpoint string, status int, responseBody string) string {
+	if responseBody == "" {
+		return ""
+	}
+	if status >= http.StatusBadRequest {
+		if len(responseBody) > 64*1024 {
+			return responseBody[:64*1024] + "\n[truncated]"
+		}
+		return responseBody
+	}
+	lowerEndpoint := strings.ToLower(endpoint)
+	containsMedia := strings.Contains(responseBody, `"b64_json"`) || strings.Contains(responseBody, `"partial_image_b64"`) || strings.Contains(responseBody, "data:image/") || strings.Contains(responseBody, "data:video/")
+	if strings.Contains(lowerEndpoint, "/images") || containsMedia {
+		var payload any
+		if json.Unmarshal([]byte(responseBody), &payload) == nil {
+			redactLargeImages(&payload)
+			if encoded, err := json.Marshal(payload); err == nil && len(encoded) <= 64*1024 {
+				return string(encoded)
+			}
+		}
+		return fmt.Sprintf("[generated media response omitted captured_len=%d]", len(responseBody))
+	}
+	if len(responseBody) > 64*1024 {
+		return responseBody[:64*1024] + "\n[truncated]"
+	}
+	return responseBody
 }
 
 func firstNonEmpty(values ...string) string {
@@ -502,7 +531,10 @@ func agnesVideoQueryID(modelName string, path string) (string, bool) {
 		return "", false
 	}
 	id := strings.TrimPrefix(path, "/videos/")
-	if strings.HasPrefix(id, "video_") {
+	// Agnes returns its real provider task ID (normally `task_...`) and rejects
+	// the synthetic `video_...` form. Accept both forms here so the poller can
+	// use the provider-root /agnesapi status endpoint for either response shape.
+	if strings.HasPrefix(id, "video_") || strings.HasPrefix(id, "task_") {
 		return id, true
 	}
 	return "", false

@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -16,11 +17,14 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"net/textproto"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
+	_ "golang.org/x/image/webp"
 )
 
 func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
@@ -41,10 +45,6 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 	}
 	channelID = firstNonEmpty(channelID, r.Header.Get("X-Model-Channel-ID"))
 	userChannelID := r.Header.Get(userModelChannelHeader)
-	if strings.TrimSpace(channelID) == "" && strings.TrimSpace(userChannelID) == "" {
-		Fail(w, "缺少模型渠道")
-		return
-	}
 	channel, resolvedUserChannelID, err := selectAIRequestChannel(user, modelName, channelID, userChannelID)
 	if err != nil {
 		log.Printf("canvas image task select channel failed: model=%s err=%v", modelName, err)
@@ -261,32 +261,34 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, truncateCanvasTaskDetail(string(payload)))
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, truncateCanvasTaskDetail(string(payload)))
 		return
 	}
 	collectAll := isKIESeedreamLayerDecompositionModel(task.Model)
-	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll)
+	imageURLs, storageKey, thumbnailURL, thumbnailStorageKey, mimeType, bytes, width, height, err := persistCanvasImageResponse(task.UserID, payload, responseContentType, collectAll)
 	if err != nil {
-		saveFailedCanvasImageTask(task, err.Error(), string(payload))
+		saveFailedCanvasImageTask(task, err.Error(), truncateCanvasTaskDetail(string(payload)))
 		return
 	}
 	task.Status = "completed"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
-	task.ResponseBody = string(payload)
+	task.ResponseBody = fmt.Sprintf(`{"cached":true,"images":%d,"bytes":%d}`, len(imageURLs), bytes)
 	task.ImageURL = imageURLs[0]
 	if collectAll {
 		task.ImageURLs = imageURLs
 	}
-	task.StorageKey = ""
+	task.StorageKey = storageKey
+	task.ThumbnailURL = thumbnailURL
+	task.ThumbnailStorageKey = thumbnailStorageKey
 	task.MimeType = mimeType
 	task.Bytes = bytes
-	task.Width = 0
-	task.Height = 0
+	task.Width = width
+	task.Height = height
 	task.Error = ""
 	task.ErrorDetail = ""
 	_, _ = service.SaveCanvasImageTask(task)
@@ -338,6 +340,9 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 }
 
 func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
+	if endpoint == "/images/generations" || endpoint == "/images/edits" || endpoint == "/responses" {
+		body, contentType = normalizeCanvasAsyncImageRequest(body, contentType)
+	}
 	request := httptest.NewRequest(http.MethodPost, "http://canvas.local/api/v1"+endpoint, bytes.NewReader(body))
 	request = request.WithContext(service.WithUser(context.Background(), user))
 	if contentType != "" {
@@ -432,6 +437,9 @@ func stripCanvasTaskMultipartFields(raw []byte, contentType string) ([]byte, str
 			}
 			continue
 		}
+		if key == "stream" || key == "partial_images" || key == "stream_options" {
+			continue
+		}
 		for _, value := range values {
 			_ = writer.WriteField(key, value)
 		}
@@ -443,17 +451,27 @@ func stripCanvasTaskMultipartFields(raw []byte, contentType string) ([]byte, str
 				_ = writer.Close()
 				return nil, "", nil, err
 			}
-			part, err := writer.CreateFormFile(key, header.Filename)
+			fileData, readErr := io.ReadAll(file)
+			_ = file.Close()
+			if readErr != nil {
+				_ = writer.Close()
+				return nil, "", nil, readErr
+			}
+			partHeader := cloneMultipartHeader(header.Header)
+			partContentType := normalizedMultipartImageType(partHeader.Get("Content-Type"), fileData)
+			filename := normalizedMultipartImageFilename(header.Filename, partContentType)
+			partHeader.Set("Content-Disposition", mime.FormatMediaType("form-data", map[string]string{"name": key, "filename": filename}))
+			if partContentType != "" {
+				partHeader.Set("Content-Type", partContentType)
+			}
+			part, err := writer.CreatePart(partHeader)
 			if err != nil {
-				_ = file.Close()
 				_ = writer.Close()
 				return nil, "", nil, err
 			}
-			_, copyErr := io.Copy(part, file)
-			_ = file.Close()
-			if copyErr != nil {
+			if _, err := part.Write(fileData); err != nil {
 				_ = writer.Close()
-				return nil, "", nil, copyErr
+				return nil, "", nil, err
 			}
 		}
 	}
@@ -551,6 +569,61 @@ func imageURLsFromAIResponse(payload []byte, contentType string, collectAll bool
 		return nil, "", 0, errors.New("图片接口没有返回图片")
 	}
 	return urls, firstMimeType, firstBytes, nil
+}
+
+func persistCanvasImageResponse(userID string, payload []byte, contentType string, collectAll bool) ([]string, string, string, string, string, int64, int, int, error) {
+	candidates, err := imageCandidatesFromAIResponse(payload, contentType)
+	if err != nil {
+		return nil, "", "", "", "", 0, 0, 0, err
+	}
+	urls := make([]string, 0, len(candidates))
+	seen := map[string]bool{}
+	primaryStorageKey := ""
+	thumbnailURL := ""
+	thumbnailStorageKey := ""
+	primaryMimeType := ""
+	var primaryBytes int64
+	primaryWidth, primaryHeight := 0, 0
+	for _, candidate := range candidates {
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		data, mimeType, readErr := imageCandidateBytes(candidate)
+		if readErr != nil || len(data) == 0 {
+			continue
+		}
+		mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+		width, height := imageSize(data)
+		if !strings.HasPrefix(mimeType, "image/") || width <= 0 || height <= 0 {
+			continue
+		}
+		saved, saveErr := service.SaveGeneratedMediaBytes(userID, "generated-image", mimeType, data, width, height)
+		if saveErr != nil {
+			continue
+		}
+		urls = append(urls, saved.URL)
+		if len(urls) == 1 {
+			primaryStorageKey = saved.StorageKey
+			primaryMimeType = saved.MimeType
+			primaryBytes = saved.Bytes
+			primaryWidth = width
+			primaryHeight = height
+			if thumbnail, _, _, thumbErr := service.CreateGeneratedImageThumbnail(data, 640); thumbErr == nil {
+				if savedThumbnail, thumbSaveErr := service.SaveGeneratedMediaBytes(userID, "thumbnail.jpg", "image/jpeg", thumbnail, 0, 0); thumbSaveErr == nil {
+					thumbnailURL = savedThumbnail.URL
+					thumbnailStorageKey = savedThumbnail.StorageKey
+				}
+			}
+		}
+		if !collectAll {
+			break
+		}
+	}
+	if len(urls) == 0 {
+		return nil, "", "", "", "", 0, 0, 0, errors.New("图片接口没有返回可保存的图片")
+	}
+	return urls, primaryStorageKey, thumbnailURL, thumbnailStorageKey, primaryMimeType, primaryBytes, primaryWidth, primaryHeight, nil
 }
 
 type serverSentJSONEvent struct {
@@ -653,7 +726,14 @@ func collectImageCandidates(value any, depth int) []string {
 
 func imageCandidateBytes(value string) ([]byte, string, error) {
 	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
-		response, err := http.Get(value)
+		client := *service.SafeProxyHTTPClient()
+		client.Timeout = 30 * time.Minute
+		request, err := http.NewRequest(http.MethodGet, value, nil)
+		if err != nil {
+			return nil, "", err
+		}
+		request.Header.Set("User-Agent", "Mozilla/5.0 InfiniteCanvas/1.0")
+		response, err := client.Do(request)
 		if err != nil {
 			return nil, "", err
 		}
@@ -661,9 +741,13 @@ func imageCandidateBytes(value string) ([]byte, string, error) {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return nil, "", errors.New(response.Status)
 		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+		const maxImageBytes = 96 * 1024 * 1024
+		data, err := io.ReadAll(io.LimitReader(response.Body, maxImageBytes+1))
 		if err != nil {
 			return nil, "", err
+		}
+		if len(data) > maxImageBytes {
+			return nil, "", errors.New("生成图片超过 96MB 限制")
 		}
 		mimeType := response.Header.Get("Content-Type")
 		if mimeType == "" {
@@ -693,6 +777,89 @@ func imageSize(data []byte) (int, int) {
 		return 0, 0
 	}
 	return config.Width, config.Height
+}
+
+func normalizeCanvasAsyncImageRequest(body []byte, contentType string) ([]byte, string) {
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		return body, contentType
+	}
+	var payload map[string]any
+	if json.Unmarshal(body, &payload) != nil {
+		return body, contentType
+	}
+	modelName, _ := payload["model"].(string)
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "agnes-image") {
+		// Agnes 的图像接口默认同步返回 JSON。它对显式 stream=false 的
+		// 处理与字段缺省不一致，会让部分请求长时间不返回，因此保留
+		// 官方请求契约：完全不传流式字段。
+		delete(payload, "stream")
+		extraBody, _ := payload["extra_body"].(map[string]any)
+		if extraBody == nil {
+			extraBody = map[string]any{}
+		}
+		extraBody["response_format"] = "url"
+		payload["extra_body"] = extraBody
+	} else {
+		payload["stream"] = false
+	}
+	delete(payload, "partial_images")
+	delete(payload, "stream_options")
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return body, contentType
+	}
+	return encoded, "application/json"
+}
+
+func cloneMultipartHeader(source textproto.MIMEHeader) textproto.MIMEHeader {
+	result := textproto.MIMEHeader{}
+	for key, values := range source {
+		result[key] = append([]string(nil), values...)
+	}
+	return result
+}
+
+func normalizedMultipartImageType(contentType string, data []byte) string {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	if strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+	if strings.HasPrefix(contentType, "image/") {
+		return contentType
+	}
+	return contentType
+}
+
+func normalizedMultipartImageFilename(filename, contentType string) string {
+	base := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
+	if base == "" || base == "." {
+		base = "reference"
+	}
+	ext := ""
+	switch contentType {
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/png":
+		ext = ".png"
+	case "image/webp":
+		ext = ".webp"
+	case "image/gif":
+		ext = ".gif"
+	case "image/bmp":
+		ext = ".bmp"
+	default:
+		ext = strings.ToLower(filepath.Ext(filename))
+	}
+	return base + ext
+}
+
+func truncateCanvasTaskDetail(value string) string {
+	const maxLength = 64 * 1024
+	if len(value) <= maxLength {
+		return value
+	}
+	return value[:maxLength] + "\n[truncated]"
 }
 
 func taskTime() string {

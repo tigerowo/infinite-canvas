@@ -713,10 +713,17 @@ function ImageContent({
             <div className="h-full w-full overflow-hidden rounded-3xl">
                 {media ?? (
                     <img
-                        src={node.metadata!.content!}
+                        src={node.metadata?.thumbnailUrl || node.metadata!.content!}
                         alt={node.title}
                         draggable={false}
                         onDragStart={(event) => event.preventDefault()}
+                        onError={(event) => {
+                            const original = node.metadata?.content || "";
+                            if (original && event.currentTarget.getAttribute("src") !== original) {
+                                event.currentTarget.onerror = null;
+                                event.currentTarget.src = original;
+                            }
+                        }}
                         className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
                     />
                 )}

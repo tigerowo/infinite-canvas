@@ -79,14 +79,14 @@ description: 当前后端主要数据表与字段说明
 
 ### storage_objects
 
-S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表或生成记录。
+S3/R2、WebDAV 与服务端本地生成媒体共用的文件索引表，不保存画布、素材列表或生成记录。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | 文件 ID，前端存储 key 使用 `server:<id>` |
-| `provider_id` | string | 创建文件时使用的 S3/R2 或 WebDAV Provider ID |
+| `provider_id` | string | 创建文件时使用的 S3/R2、WebDAV Provider ID；本地生成媒体为 `local-generated-media` |
 | `bucket` | string | S3/R2 Bucket；WebDAV 为空 |
-| `object_key` | string | Provider 内相对对象路径，唯一索引 |
+| `object_key` | string | Provider 内相对对象路径，唯一索引；本地生成媒体位于应用数据目录的 `generated-media/` |
 | `public_url` | string | S3/R2 可选公开地址；WebDAV 为空并通过 `/api/files/:id/content` 读取 |
 | `mime_type` | string | 媒体 MIME 类型 |
 | `bytes` | number | 文件字节数 |
@@ -153,7 +153,11 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `progress` | number | 生成进度，0-100 |
 | `seconds` | string | 视频秒数 |
 | `size` | string | 视频尺寸 |
-| `video_url` | text | 完成后的视频临时 URL |
+| `video_url` | text | 完成后供客户端访问的本地视频 URL |
+| `upstream_video_url` | text | 上游返回的视频临时 URL，本地保存完成前用于重试下载 |
+| `storage_key` | string | 本地视频对应的存储对象 key |
+| `mime_type` | string | 视频 MIME 类型 |
+| `bytes` | number | 视频文件字节数 |
 | `error` | text | 失败摘要 |
 | `error_detail` | text | 失败详情或最近一次轮询错误详情 |
 | `request_body` | text | 创建任务时的请求摘要 |
@@ -165,6 +169,9 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `started_at` | string | 上游开始时间 |
 | `completed_at` | string | 完成时间 |
 | `last_polled_at` | string | 最近轮询时间 |
+| `next_poll_at` | string | 下次允许轮询时间，用于退避和限流控制 |
+| `poll_attempts` | number | 已执行的轮询次数 |
+| `rate_limit_count` | number | 上游返回限流的累计次数 |
 
 后台轮询器按 `status + created_at` 查询未完成任务；旧数据库中如果残留废弃列，不再参与代码查询。
 
@@ -222,6 +229,12 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `image_url` | text | 完成后图片 URL或第一张图片 URL |
 | `image_urls` | JSON | 完成后全部图片 URL，第一项与 `image_url` 一致 |
 | `storage_key` | string | 存储对象 key |
+| `thumbnail_url` | text | 服务端生成的预览缩略图 URL |
+| `thumbnail_storage_key` | string | 缩略图存储对象 key |
+| `width` | number | 原图宽度 |
+| `height` | number | 原图高度 |
+| `mime_type` | string | 原图 MIME 类型 |
+| `bytes` | number | 原图文件字节数 |
 | `error` | text | 失败摘要 |
 | `error_detail` | text | 失败详情 |
 | `created_at` | string | 创建时间 |

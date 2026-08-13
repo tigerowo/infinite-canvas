@@ -47,6 +47,8 @@ export type CanvasImageTask = {
     image_url?: string;
     image_urls?: string[];
     storageKey?: string;
+    thumbnailUrl?: string;
+    thumbnailStorageKey?: string;
     width?: number;
     height?: number;
     mimeType?: string;
@@ -598,6 +600,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
         const body: Record<string, unknown> = {
             model: config.model,
             prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+            extra_body: { response_format: "url" },
         };
         applyAgnesImageSize(body, config, params);
 
@@ -965,7 +968,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         const body: Record<string, unknown> = {
             model: config.model,
             prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
-            extra_body: { image: imageUrls },
+            extra_body: { image: imageUrls, response_format: "url" },
         };
         applyAgnesImageSize(body, config, params);
         return {
@@ -1024,6 +1027,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         const body: Record<string, unknown> = {
             model: config.model,
             prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+            extra_body: { response_format: "url" },
         };
         applyAgnesImageSize(body, config, params);
         return {
@@ -1175,7 +1179,20 @@ function publicHttpUrl(value?: string) {
     try {
         const url = new URL(value, typeof window === "undefined" ? undefined : window.location.origin);
         if (!["http:", "https:"].includes(url.protocol)) return "";
-        if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
+
+        // Agnes 从公网拉取参考图。应用同源 URL 和局域网 URL
+        // 上游通常无法访问，必须回退为 Data URI，否则图生图会直接失败。
+        if (typeof window !== "undefined" && url.origin === window.location.origin) return "";
+
+        const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+        const privateIPv4 =
+            /^10\./.test(hostname) ||
+            /^127\./.test(hostname) ||
+            /^169\.254\./.test(hostname) ||
+            /^192\.168\./.test(hostname) ||
+            /^172\.(1[6-9]|2\d|3[01])\./.test(hostname);
+        const privateIPv6 = hostname === "::1" || /^f[cd][0-9a-f]*:/i.test(hostname) || /^fe[89ab][0-9a-f]*:/i.test(hostname);
+        if (hostname === "localhost" || hostname.endsWith(".local") || hostname.endsWith(".lan") || privateIPv4 || privateIPv6) return "";
         return url.href;
     } catch {
         return "";
@@ -1202,6 +1219,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
         prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
         extra_body: {
             image: imageUrls, // 👈 核心对齐：官方文档参考图参数 extra_body.image 数组
+            response_format: "url",
         },
     };
     applyAgnesImageSize(body, config, params);

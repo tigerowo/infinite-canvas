@@ -4463,6 +4463,30 @@ async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
             const content = node.metadata?.content;
             if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
             if (!isCanvasImageNodeType(node.type) || !content) return node;
+            if (node.metadata?.imageTaskId && (!node.metadata.storageKey || content.startsWith("data:image/") || /^https?:\/\//.test(content))) {
+                try {
+                    const task = await pollCanvasImageTaskStatus(node.metadata.imageTaskId);
+                    const currentURL = task.image_url || task.url || "";
+                    if (currentURL && canvasTaskCompleted(task.status)) {
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                content: currentURL,
+                                storageKey: task.storageKey || "",
+                                thumbnailUrl: task.thumbnailUrl || "",
+                                thumbnailStorageKey: task.thumbnailStorageKey || "",
+                                mimeType: task.mimeType || node.metadata.mimeType,
+                                bytes: task.bytes || node.metadata.bytes,
+                                naturalWidth: task.width || node.metadata.naturalWidth,
+                                naturalHeight: task.height || node.metadata.naturalHeight,
+                            },
+                        };
+                    }
+                } catch {
+                    // Keep the persisted fallback below when an old task no longer exists.
+                }
+            }
             if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
             if (!content.startsWith("data:image/")) return node;
             return { ...node, metadata: { ...node.metadata, ...imageMetadata(await uploadImage(content)) } };
@@ -4590,8 +4614,8 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 status: NODE_STATUS_SUCCESS,
                 naturalWidth: taskSize.width,
                 naturalHeight: taskSize.height,
-                bytes: 0,
-                mimeType: "video/mp4",
+                bytes: task.bytes || 0,
+                mimeType: task.mimeType || "video/mp4",
                 progress: 100,
             },
         };
@@ -4639,6 +4663,8 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 ...metadata,
                 content: url,
                 storageKey: task.storageKey || "",
+                thumbnailUrl: task.thumbnailUrl || "",
+                thumbnailStorageKey: task.thumbnailStorageKey || "",
                 status: NODE_STATUS_SUCCESS,
                 naturalWidth,
                 naturalHeight,

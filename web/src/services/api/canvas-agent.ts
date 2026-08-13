@@ -5,6 +5,7 @@ import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas
 
 export type CanvasAgentModelTurn = {
     content: string;
+    reasoningContent?: string;
     toolCalls: CanvasAgentToolCall[];
     usedJsonFallback: boolean;
 };
@@ -25,6 +26,8 @@ type ChatCompletionPayload = {
     choices?: Array<{
         message?: {
             content?: string | null;
+            reasoning_content?: string | null;
+            reasoning?: string | null;
             tool_calls?: Array<{
                 id?: string;
                 function?: { name?: string; arguments?: string | Record<string, unknown> };
@@ -35,6 +38,8 @@ type ChatCompletionPayload = {
         choices?: Array<{
             message?: {
                 content?: string | null;
+                reasoning_content?: string | null;
+                reasoning?: string | null;
                 tool_calls?: Array<{
                     id?: string;
                     function?: { name?: string; arguments?: string | Record<string, unknown> };
@@ -92,7 +97,7 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
 async function requestCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
     const body: Record<string, unknown> = {
         model: config.model,
-        messages: [{ role: "system", content: systemPrompt }, ...messages.map(toRequestMessage)],
+        messages: [{ role: "system", content: systemPrompt }, ...messages.map((message) => toRequestMessage(message, /deepseek/i.test(config.model)))],
         stream: false,
     };
     if (tools.length) {
@@ -116,6 +121,7 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     refreshRemoteUser(config);
     return {
         content: typeof message.content === "string" ? message.content : "",
+        reasoningContent: typeof message.reasoning_content === "string" ? message.reasoning_content : typeof message.reasoning === "string" ? message.reasoning : undefined,
         toolCalls: (message.tool_calls || []).flatMap((toolCall, index) => {
             const name = toolCall.function?.name?.trim();
             if (!name) return [];
@@ -130,11 +136,12 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     };
 }
 
-function toRequestMessage(message: CanvasAgentProtocolMessage) {
+function toRequestMessage(message: CanvasAgentProtocolMessage, includeReasoningContent: boolean) {
     if (message.role === "assistant") {
         return {
             role: "assistant",
             content: message.content || null,
+            ...(includeReasoningContent ? { reasoning_content: message.reasoningContent || "" } : {}),
             ...(message.toolCalls?.length
                 ? {
                       tool_calls: message.toolCalls.map((toolCall) => ({

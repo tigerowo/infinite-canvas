@@ -184,6 +184,11 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     const fallbackImageModel = validDefault(modelChannel.defaultImageModel, imageModels) || preferredModel(imageModels, isImageModelName);
     const fallbackVideoModel = validDefault(modelChannel.defaultVideoModel, videoModels) || preferredModel(videoModels, isVideoModelName);
     const fallbackAudioModel = preferredModel(audioModels, isAudioModelName);
+    const selectedImageModel = imageModels.includes(config.imageModel) ? config.imageModel : fallbackImageModel;
+    const selectedVideoModel = videoModels.includes(config.videoModel) ? config.videoModel : fallbackVideoModel;
+    const selectedTextModel = textModels.includes(config.textModel) ? config.textModel : fallbackTextModel || fallbackModel;
+    const selectedAudioModel = audioModels.includes(config.audioModel) ? config.audioModel : fallbackAudioModel;
+    const publicChannels = modelChannel.channels || [];
     return {
         ...config,
         channelMode,
@@ -193,13 +198,23 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         textModels,
         audioModels,
         model: textModels.includes(config.model) ? config.model : fallbackModel,
-        imageModel: imageModels.includes(config.imageModel) ? config.imageModel : fallbackImageModel,
-        videoModel: videoModels.includes(config.videoModel) ? config.videoModel : fallbackVideoModel,
-        textModel: textModels.includes(config.textModel) ? config.textModel : fallbackTextModel || fallbackModel,
-        audioModel: audioModels.includes(config.audioModel) ? config.audioModel : fallbackAudioModel,
+        imageModel: selectedImageModel,
+        videoModel: selectedVideoModel,
+        textModel: selectedTextModel,
+        audioModel: selectedAudioModel,
+        imageChannelId: validRemoteChannelId(config.imageChannelId, selectedImageModel, publicChannels),
+        videoChannelId: validRemoteChannelId(config.videoChannelId, selectedVideoModel, publicChannels),
+        textChannelId: validRemoteChannelId(config.textChannelId, selectedTextModel, publicChannels),
+        audioChannelId: validRemoteChannelId(config.audioChannelId, selectedAudioModel, publicChannels),
         systemPrompt: modelChannel.systemPrompt,
-        publicChannels: modelChannel.channels || [],
+        publicChannels,
     };
+}
+
+function validRemoteChannelId(channelId: string, model: string, channels: AiConfig["publicChannels"]) {
+    if (!channelId || !model) return "";
+    const channel = channels.find((item) => item.id === channelId && item.enabled !== false);
+    return channel && (channel.models || []).includes(model) ? channelId : "";
 }
 
 function validDefault(model: string, models: string[]) {
@@ -460,6 +475,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
 }
 
 export function channelIdForActiveModel(config: AiConfig) {
+    if (config.channelMode === "remote" && config.model.trim().toLowerCase().startsWith("agnes-")) return "";
     if (modelMatchesCapability(config.model, "image") && config.imageChannelId) return config.imageChannelId;
     if (modelMatchesCapability(config.model, "video") && config.videoChannelId) return config.videoChannelId;
     if (modelMatchesCapability(config.model, "audio") && config.audioChannelId) return config.audioChannelId;

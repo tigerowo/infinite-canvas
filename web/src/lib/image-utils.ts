@@ -52,11 +52,31 @@ export function readImageMeta(dataUrl: string) {
 
 export function dataUrlToFile(image: ReferenceImage) {
     const [header, content] = image.dataUrl.split(",", 2);
-    const mimeType = header.match(/data:(.*?);base64/)?.[1] || image.type || "image/png";
     const binary = atob(content || "");
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) {
         bytes[index] = binary.charCodeAt(index);
     }
-    return new File([bytes], image.name || "reference.png", { type: mimeType });
+    const declaredType = header.match(/data:(.*?);base64/)?.[1] || image.type || "";
+    const mimeType = sniffImageMimeType(bytes) || (declaredType.startsWith("image/") ? declaredType : "image/png");
+    const extension = imageExtensionForMimeType(mimeType);
+    const baseName = (image.name || "reference").replace(/\.[a-z0-9]+$/i, "") || "reference";
+    return new File([bytes], `${baseName}${extension}`, { type: mimeType });
+}
+
+function sniffImageMimeType(bytes: Uint8Array) {
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return "image/png";
+    if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return "image/webp";
+    if (bytes.length >= 6 && ["GIF87a", "GIF89a"].includes(String.fromCharCode(...bytes.slice(0, 6)))) return "image/gif";
+    if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return "image/bmp";
+    return "";
+}
+
+function imageExtensionForMimeType(mimeType: string) {
+    if (mimeType === "image/jpeg") return ".jpg";
+    if (mimeType === "image/webp") return ".webp";
+    if (mimeType === "image/gif") return ".gif";
+    if (mimeType === "image/bmp") return ".bmp";
+    return ".png";
 }

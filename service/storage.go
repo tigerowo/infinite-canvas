@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tigerowo/infinite-canvas/model"
-	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"gorm.io/gorm"
 )
 
@@ -40,6 +40,7 @@ type DownloadedStorageObject struct {
 	Object      model.StorageObject
 	Data        []byte
 	RedirectURL string
+	LocalPath   string
 }
 
 // StorageCapacityResult 存储容量统计结果。
@@ -239,6 +240,9 @@ func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageO
 	if user, ok := UserFromContext(ctx); ok && object.CreatedBy != "" && object.CreatedBy != user.ID {
 		return errors.New("无权删除该对象")
 	}
+	if object.ProviderID == LocalGeneratedMediaProviderID {
+		return DeleteLocalGeneratedMedia(object)
+	}
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return err
@@ -394,6 +398,9 @@ func DownloadStorageObject(id string) (DownloadedStorageObject, error) {
 	object, err := repository.GetStorageObject(id)
 	if err != nil {
 		return DownloadedStorageObject{}, err
+	}
+	if localPath, ok := LocalGeneratedMediaPath(object); ok {
+		return DownloadedStorageObject{Object: object, LocalPath: localPath}, nil
 	}
 
 	providers := []model.StorageProvider{}
@@ -765,6 +772,18 @@ func extensionForContentType(contentType string) string {
 		return ".webp"
 	case "image/png":
 		return ".png"
+	case "image/gif":
+		return ".gif"
+	case "image/bmp":
+		return ".bmp"
+	case "video/mp4":
+		return ".mp4"
+	case "video/quicktime":
+		return ".mov"
+	case "audio/mpeg":
+		return ".mp3"
+	case "audio/wav", "audio/x-wav", "audio/wave":
+		return ".wav"
 	default:
 		return ".bin"
 	}

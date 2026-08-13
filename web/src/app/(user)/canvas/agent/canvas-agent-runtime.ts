@@ -99,14 +99,14 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                 return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
             }
             const finalReply = reply || "我已经读取当前画布。请告诉我下一步要继续完善哪一部分。";
-            protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: finalReply }]);
+            protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: finalReply, reasoningContent: turn.reasoningContent }]);
             return { reply: finalReply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
         }
 
         input.onEvent?.({ status: "running", label: actions.length === 1 ? canvasAgentActionLabel(actions[0]) : "正在执行 " + actions.length + " 个画布操作" });
         const assistantToolMessage: CanvasAgentProtocolMessage = nativeActions.length
-            ? { role: "assistant", content: turn.content || undefined, toolCalls: actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
-            : { role: "assistant", content: turn.content };
+            ? { role: "assistant", content: turn.content || undefined, reasoningContent: turn.reasoningContent, toolCalls: actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
+            : { role: "assistant", content: turn.content, reasoningContent: turn.reasoningContent };
 
         const results = await executeActions(actions, state, input.executeAction, input.signal, input.onEvent);
         hasExecutedActions = true;

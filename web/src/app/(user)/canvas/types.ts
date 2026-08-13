@@ -74,6 +74,8 @@ export type CanvasNodeMetadata = {
     primaryImageId?: string;
     imageBatchExpanded?: boolean;
     storageKey?: string;
+    thumbnailUrl?: string;
+    thumbnailStorageKey?: string;
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
@@ -209,7 +211,7 @@ export type CanvasAgentToolCall = {
 
 export type CanvasAgentProtocolMessage =
     | { role: "user" | "system"; content: CanvasAgentContent }
-    | { role: "assistant"; content?: string; toolCalls?: CanvasAgentToolCall[] }
+    | { role: "assistant"; content?: string; reasoningContent?: string; toolCalls?: CanvasAgentToolCall[] }
     | { role: "tool"; content: string; toolCallId: string; name: string };
 
 export type CanvasAssistantMessageStatus = "thinking" | "running" | "waiting" | "success" | "error";
