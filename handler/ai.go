@@ -167,13 +167,35 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 			return
 		}
 	}
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
+	if isComfyUIChannel(channel) && (upstreamPath == "/images/generations" || upstreamPath == "/images/edits") {
+		var comfyErr error
+		if upstreamPath == "/images/edits" {
+			body, contentType, comfyErr = normalizeComfyUIImageEditBody(body, contentType, modelName, channel)
+		} else {
+			body, contentType, comfyErr = normalizeComfyUIImageBody(body, contentType, modelName, channel)
+		}
+		if comfyErr != nil {
+			log.Printf("AI proxy normalize ComfyUI request failed: model=%s err=%v", modelName, comfyErr)
+			Fail(w, comfyErr.Error())
+			return
+		}
+	}
+	upstreamURL := service.BuildModelChannelURL(channel, upstreamPath)
+	if isComfyUIChannel(channel) {
+		if upstreamPath == "/images/generations" || upstreamPath == "/images/edits" {
+			upstreamPath = "/prompt"
+		}
+		upstreamURL = comfyUIBaseURL(channel) + upstreamPath
+	}
+	request, err := http.NewRequest(http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, upstreamPath), err)
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	if !isComfyUIChannel(channel) {
+		request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -239,6 +261,9 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 	}
 
 	if copyMiMoTTSResponse(w, response, logContext, onFailure) {
+		return
+	}
+	if copyComfyUIResponse(w, response, request, channel, logContext, onFailure) {
 		return
 	}
 	if copyKIEVideoResponse(w, response, request, channel, logContext, onFailure) {

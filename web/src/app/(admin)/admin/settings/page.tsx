@@ -83,6 +83,7 @@ export default function AdminSettingsPage() {
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
+    const channelProtocol = Form.useWatch("protocol", channelForm);
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
     const activeMode = editorMode[activeTab];
@@ -900,6 +901,7 @@ export default function AdminSettingsPage() {
                                             { label: "OpenAI", value: "openai" },
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
+                                            { label: "ComfyUI", value: "comfyui" },
                                         ]}
                                     />
                                 </Form.Item>
@@ -939,6 +941,28 @@ export default function AdminSettingsPage() {
                                     </Space.Compact>
                                 </Form.Item>
                             </Col>
+                            {channelProtocol === "comfyui" && (
+                                <>
+                                    <Col span={24}>
+                                        <Form.Item
+                                            name="txt2ImgWorkflow"
+                                            label="文生图 Workflow 模板"
+                                            extra="可选。留空使用内置默认模板。支持占位符：{{ckpt_name}} {{prompt}} {{width}} {{height}} {{batch_size}} {{seed}} {{steps}} {{cfg}} {{denoise}} {{negative_prompt}}。可在 ComfyUI 前端开启 Dev Mode → Save (API Format) 导出后粘贴"
+                                        >
+                                            <Input.TextArea rows={6} spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col span={24}>
+                                        <Form.Item
+                                            name="img2ImgWorkflow"
+                                            label="图生图 Workflow 模板"
+                                            extra="可选。留空使用内置默认模板。额外占位符：{{image_name}}（参考图上传后的文件名）。模板需包含 LoadImage 节点"
+                                        >
+                                            <Input.TextArea rows={6} spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
+                                        </Form.Item>
+                                    </Col>
+                                </>
+                            )}
                             <Col span={24}>
                                 <Form.Item name="remark" label="备注">
                                     <Input.TextArea rows={3} />

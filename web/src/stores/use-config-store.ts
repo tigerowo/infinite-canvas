@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "kie" | "mimo";
+    protocol: "openai" | "kie" | "mimo" | "comfyui";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -447,7 +447,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
     const channels = Array.isArray(config.localChannels) ? config.localChannels : [];
     const normalized: LocalModelChannel[] = channels.map((channel, index) => ({
         id: channel.id || `local-${index + 1}`,
-        protocol: channel.protocol === "kie" || channel.protocol === "mimo" ? channel.protocol : "openai",
+        protocol: channel.protocol === "kie" || channel.protocol === "mimo" || channel.protocol === "comfyui" ? channel.protocol : "openai",
         name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",

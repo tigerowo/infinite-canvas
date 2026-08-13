@@ -24,6 +24,9 @@ type ModelChannel struct {
 	Timeout  int      `json:"timeout"`
 	Enabled  bool     `json:"enabled"`
 	Remark   string   `json:"remark"`
+	// ComfyUI 渠道专用：自定义 workflow 模板（API format JSON），留空使用内置默认模板。
+	Txt2ImgWorkflow string `json:"txt2ImgWorkflow"`
+	Img2ImgWorkflow string `json:"img2ImgWorkflow"`
 }
 
 // ModelCost 模型算力点配置。
