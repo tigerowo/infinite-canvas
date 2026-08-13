@@ -186,15 +186,42 @@ func comfyUIChannelTemplate(configured string, fallback string) string {
 }
 
 func parseComfyUISize(size string) (int, int) {
-	parts := strings.SplitN(strings.ToLower(strings.TrimSpace(size)), "x", 2)
-	if len(parts) == 2 {
+	size = strings.ToLower(strings.TrimSpace(size))
+	// 像素格式 "WxH"（如 "1024x768"、"1920x1080"）
+	if parts := strings.SplitN(size, "x", 2); len(parts) == 2 {
 		width, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
 		height, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
 		if errW == nil && errH == nil && width > 0 && height > 0 {
-			return width, height
+			return alignComfyDimension(width), alignComfyDimension(height)
+		}
+	}
+	// 宽高比格式 "W:H"（如 "16:9"、"9:16"、"21:9"、"1:1"）
+	if parts := strings.SplitN(size, ":", 2); len(parts) == 2 {
+		ratioW, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
+		ratioH, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if errW == nil && errH == nil && ratioW > 0 && ratioH > 0 {
+			return comfySizeFromAspect(ratioW, ratioH)
 		}
 	}
 	return comfyUIDefaultWidth, comfyUIDefaultHeight
+}
+
+// comfySizeFromAspect 按宽高比计算像素尺寸：基准边长 1024，
+// 结果对齐到 8 的倍数（ComfyUI latent 尺寸要求 step 8）。
+func comfySizeFromAspect(ratioW int, ratioH int) (int, int) {
+	const base = 1024
+	if ratioW >= ratioH {
+		return alignComfyDimension(base), alignComfyDimension(base * ratioH / ratioW)
+	}
+	return alignComfyDimension(base * ratioW / ratioH), alignComfyDimension(base)
+}
+
+// alignComfyDimension 对齐到 8 的倍数，最小 8。
+func alignComfyDimension(value int) int {
+	if value <= 0 {
+		return comfyUIDefaultWidth
+	}
+	return value - value%8
 }
 
 func firstComfyUIFormValue(form *multipart.Form, key string) string {

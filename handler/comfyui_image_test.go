@@ -271,6 +271,14 @@ func TestParseComfyUISize(t *testing.T) {
 		{input: "", wantWidth: 1024, wantHeight: 1024},
 		{input: "abc", wantWidth: 1024, wantHeight: 1024},
 		{input: "1:1", wantWidth: 1024, wantHeight: 1024},
+		// 宽高比：基准边长 1024，对齐 8 的倍数
+		{input: "16:9", wantWidth: 1024, wantHeight: 576},
+		{input: "9:16", wantWidth: 576, wantHeight: 1024},
+		{input: "3:2", wantWidth: 1024, wantHeight: 680},
+		{input: "21:9", wantWidth: 1024, wantHeight: 432},
+		{input: "19:9", wantWidth: 1024, wantHeight: 480},
+		// 像素尺寸对齐 8 的倍数
+		{input: "1000x1000", wantWidth: 1000, wantHeight: 1000},
 	}
 	for _, tt := range tests {
 		width, height := parseComfyUISize(tt.input)
