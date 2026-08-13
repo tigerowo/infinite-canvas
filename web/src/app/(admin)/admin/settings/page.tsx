@@ -1,8 +1,8 @@
 "use client";
 
-import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, UploadOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
@@ -52,6 +52,58 @@ type SettingsTabKey = "public" | "private";
 type EditorMode = "visual" | "json";
 type ModelSelectTabKey = "new" | "current";
 
+type ComfyWorkflowAnalysis = {
+    valid: boolean;
+    nodeCount: number;
+    hasPlaceholders: boolean;
+    wired: string[];
+};
+
+// analyzeComfyUIWorkflow 解析 ComfyUI 导出的 API format 工作流，判断系统将自动接入哪些画布参数。
+function analyzeComfyUIWorkflow(template: string): ComfyWorkflowAnalysis {
+    if (!template.trim()) return { valid: false, nodeCount: 0, hasPlaceholders: false, wired: [] };
+    let graph: Record<string, any>;
+    try {
+        graph = JSON.parse(template);
+    } catch {
+        return { valid: false, nodeCount: 0, hasPlaceholders: false, wired: [] };
+    }
+    const hasPlaceholders = template.includes("{{");
+    const wired: string[] = [];
+    if (!hasPlaceholders) {
+        const found = new Set<string>();
+        for (const node of Object.values(graph)) {
+            const classType = String((node as any)?.class_type || "");
+            const inputs = (node as any)?.inputs || {};
+            if (classType === "KSampler") {
+                if (typeof inputs.seed !== "undefined") found.add("随机种子");
+                const positive = Array.isArray(inputs.positive) ? String(inputs.positive[0]) : "";
+                if (positive && graph[positive]?.class_type === "CLIPTextEncode") found.add("提示词");
+            }
+            if (classType === "EmptyLatentImage") found.add("尺寸/数量");
+            if (classType === "LoadImage") found.add("参考图");
+        }
+        wired.push(...found);
+    }
+    return { valid: true, nodeCount: Object.keys(graph).length, hasPlaceholders, wired };
+}
+
+function readTextFile(file: File, onLoad: (text: string) => void) {
+    const reader = new FileReader();
+    reader.onload = () => onLoad(String(reader.result || ""));
+    reader.readAsText(file);
+}
+
+// comfyTemplateHint 渲染模板检测结果：自动接入内容 / 手动占位符 / JSON 错误。
+function comfyTemplateHint(template: string | undefined) {
+    if (!template?.trim()) return null;
+    const analysis = analyzeComfyUIWorkflow(template);
+    if (!analysis.valid) return <Tag color="red">JSON 格式无效，请检查</Tag>;
+    if (analysis.hasPlaceholders) return <Tag color="green">已接入自定义占位符（手动配置优先）</Tag>;
+    if (analysis.wired.length > 0) return <Tag color="blue">将自动接入：{analysis.wired.join("、")}；采样/模型参数保留你导出的配置</Tag>;
+    return <Tag color="orange">未检测到可接入节点，将按模板固定参数运行</Tag>;
+}
+
 export default function AdminSettingsPage() {
     const token = useUserStore((state) => state.token);
     const { message } = App.useApp();
@@ -84,6 +136,8 @@ export default function AdminSettingsPage() {
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
     const channelProtocol = Form.useWatch("protocol", channelForm);
+    const txt2ImgTemplate = Form.useWatch("txt2ImgWorkflow", channelForm);
+    const img2ImgTemplate = Form.useWatch("img2ImgWorkflow", channelForm);
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
     const channelTableData = useMemo(() => channels.map((channel, index) => ({ ...channel, _index: index, _rowKey: `${index}-${channel.name}-${channel.baseUrl}` })), [channels]);
     const activeMode = editorMode[activeTab];
@@ -946,8 +1000,20 @@ export default function AdminSettingsPage() {
                                     <Col span={24}>
                                         <Form.Item
                                             name="txt2ImgWorkflow"
-                                            label="文生图 Workflow 模板"
-                                            extra="可选。留空使用内置默认模板。支持占位符：{{ckpt_name}} {{prompt}} {{width}} {{height}} {{batch_size}} {{seed}} {{steps}} {{cfg}} {{denoise}} {{negative_prompt}}。可在 ComfyUI 前端开启 Dev Mode → Save (API Format) 导出后粘贴"
+                                            label={
+                                                <Space size={8}>
+                                                    文生图 Workflow 模板
+                                                    <Upload accept=".json,application/json" showUploadList={false} beforeUpload={(file) => { readTextFile(file, (text) => channelForm.setFieldValue("txt2ImgWorkflow", text)); return false; }}>
+                                                        <Button size="small" icon={<UploadOutlined />}>上传工作流 JSON</Button>
+                                                    </Upload>
+                                                </Space>
+                                            }
+                                            extra={
+                                                <Flex vertical gap={4}>
+                                                    <Typography.Text type="secondary">{`留空使用内置默认模板；可上传 ComfyUI 导出的 .json 工作流或直接粘贴。系统自动接入提示词/尺寸/数量/种子，采样参数与模型加载保留你导出的配置。高级用法：支持占位符 {{ckpt_name}} {{prompt}} {{width}} {{height}} {{batch_size}} {{seed}} {{steps}} {{cfg}} {{denoise}} {{negative_prompt}}，可在 ComfyUI 前端开启 Dev Mode → Save (API Format) 导出。`}</Typography.Text>
+                                                    {comfyTemplateHint(txt2ImgTemplate)}
+                                                </Flex>
+                                            }
                                         >
                                             <Input.TextArea rows={6} spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
                                         </Form.Item>
@@ -955,8 +1021,20 @@ export default function AdminSettingsPage() {
                                     <Col span={24}>
                                         <Form.Item
                                             name="img2ImgWorkflow"
-                                            label="图生图 Workflow 模板"
-                                            extra="可选。留空使用内置默认模板。额外占位符：{{image_name}}（参考图上传后的文件名）。模板需包含 LoadImage 节点"
+                                            label={
+                                                <Space size={8}>
+                                                    图生图 Workflow 模板
+                                                    <Upload accept=".json,application/json" showUploadList={false} beforeUpload={(file) => { readTextFile(file, (text) => channelForm.setFieldValue("img2ImgWorkflow", text)); return false; }}>
+                                                        <Button size="small" icon={<UploadOutlined />}>上传工作流 JSON</Button>
+                                                    </Upload>
+                                                </Space>
+                                            }
+                                            extra={
+                                                <Flex vertical gap={4}>
+                                                    <Typography.Text type="secondary">{`留空使用内置默认模板；模板需包含 LoadImage 节点（参考图自动接入 {{image_name}}）。`}</Typography.Text>
+                                                    {comfyTemplateHint(img2ImgTemplate)}
+                                                </Flex>
+                                            }
                                         >
                                             <Input.TextArea rows={6} spellCheck={false} style={{ fontFamily: "monospace", fontSize: 12 }} />
                                         </Form.Item>

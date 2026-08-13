@@ -306,6 +306,87 @@ func TestRenderComfyUIWorkflowCustomTemplate(t *testing.T) {
 	}
 }
 
+// TestAutoWireComfyUITemplate 验证普通用户粘贴无占位符模板时，自动接入画布参数。
+func TestAutoWireComfyUITemplate(t *testing.T) {
+	// 模拟 Boogu 风格导出模板：UNETLoader + ResolutionSelector + 正负 CLIPTextEncode + KSampler
+	template := `{
+  "2": {"class_type": "UNETLoader", "inputs": {"unet_name": "boogu_image_turbo_fp8_scaled.safetensors"}},
+  "4": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_8b_fp8_scaled.safetensors", "type": "boogu"}},
+  "5": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+  "9": {"class_type": "ResolutionSelector", "inputs": {"aspect_ratio": "9:16 (Portrait Widescreen)", "megapixels": 1, "multiple": 8}},
+  "8": {"class_type": "EmptyLatentImage", "inputs": {"width": ["9", 0], "height": ["9", 1], "batch_size": 1}},
+  "11": {"class_type": "CLIPTextEncode", "inputs": {"text": "写死的提示词", "clip": ["4", 0]}},
+  "12": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 0]}},
+  "32": {"class_type": "KSampler", "inputs": {"seed": 123, "steps": 4, "cfg": 1, "sampler_name": "lcm", "scheduler": "sgm_uniform", "denoise": 1, "model": ["2", 0], "positive": ["11", 0], "negative": ["12", 0], "latent_image": ["8", 0]}}
+}`
+
+	channel := comfyTestChannel("http://comfy.local:8188")
+	channel.Txt2ImgWorkflow = template
+	body := []byte(`{"model":"boogu","prompt":"a red apple on wooden table","size":"9:16","n":1}`)
+	encoded, _, err := normalizeComfyUIImageBody(body, "application/json", "boogu", channel)
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	graph := decodeComfyGraph(t, encoded)
+
+	// KSampler：seed 被随机替换（数字），steps/cfg/sampler 保留用户配置
+	ksampler := comfyNodeInputs(t, graph, "32")
+	if _, ok := ksampler["seed"].(float64); !ok {
+		t.Fatalf("seed 未自动接入: %T", ksampler["seed"])
+	}
+	if ksampler["steps"] != float64(4) || ksampler["cfg"] != float64(1) || ksampler["sampler_name"] != "lcm" {
+		t.Fatalf("采样参数应保留: %v", ksampler)
+	}
+
+	// 正向 CLIPTextEncode（11）：text 接入画布 prompt
+	positive := comfyNodeInputs(t, graph, "11")
+	if positive["text"] != "a red apple on wooden table" {
+		t.Fatalf("正向 text = %v, want 画布 prompt", positive["text"])
+	}
+	// 负向 CLIPTextEncode（12）：保持原样
+	negative := comfyNodeInputs(t, graph, "12")
+	if negative["text"] != "" {
+		t.Fatalf("负向 text = %v, want 原样空串", negative["text"])
+	}
+
+	// EmptyLatentImage：宽高从 ResolutionSelector 引用改为画布尺寸
+	latent := comfyNodeInputs(t, graph, "8")
+	if latent["width"] != float64(576) || latent["height"] != float64(1024) {
+		t.Fatalf("latent = %v, want 576x1024（9:16）", latent)
+	}
+	if latent["batch_size"] != float64(1) {
+		t.Fatalf("batch_size = %v, want 1", latent["batch_size"])
+	}
+
+	// 模型加载节点保持用户配置
+	unet := comfyNodeInputs(t, graph, "2")
+	if unet["unet_name"] != "boogu_image_turbo_fp8_scaled.safetensors" {
+		t.Fatalf("unet_name 应保留: %v", unet["unet_name"])
+	}
+}
+
+// TestAutoWireComfyUIKeepsPlaceholderTemplate 验证含占位符的模板不做自动接入（高级用户手动控制）。
+func TestAutoWireComfyUIKeepsPlaceholderTemplate(t *testing.T) {
+	template := `{"4":{"class_type":"KSampler","inputs":{"seed": 777, "steps": 20, "cfg": 4, "sampler_name": "euler", "scheduler": "normal", "denoise": 1, "model": ["2", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]}},"6":{"class_type":"CLIPTextEncode","inputs":{"text":"fixed","clip":["4",1]}},"7":{"class_type":"CLIPTextEncode","inputs":{"text":"","clip":["4",1]}},"5":{"class_type":"EmptyLatentImage","inputs":{"width":512,"height":512,"batch_size":1}},"2":{"class_type":"CheckpointLoaderSimple","inputs":{"ckpt_name":"{{ckpt_name}}"}}}`
+	channel := comfyTestChannel("http://comfy.local:8188")
+	channel.Txt2ImgWorkflow = template
+	body := []byte(`{"model":"m","prompt":"p","size":"16:9"}`)
+	encoded, _, err := normalizeComfyUIImageBody(body, "application/json", "m", channel)
+	if err != nil {
+		t.Fatalf("normalize failed: %v", err)
+	}
+	graph := decodeComfyGraph(t, encoded)
+	ksampler := comfyNodeInputs(t, graph, "4")
+	// 含占位符模板：seed 保持模板值 777（不自动接入）
+	if ksampler["seed"] != float64(777) {
+		t.Fatalf("seed = %v, want 保留 777", ksampler["seed"])
+	}
+	positive := comfyNodeInputs(t, graph, "6")
+	if positive["text"] != "fixed" {
+		t.Fatalf("text = %v, want 保留 fixed", positive["text"])
+	}
+}
+
 // TestComfyUIInlinePlaceholders 验证自定义节点字符串参数（如 "{{width}}x{{height}}"）可注入画布尺寸。
 func TestComfyUIInlinePlaceholders(t *testing.T) {
 	vars := map[string]any{

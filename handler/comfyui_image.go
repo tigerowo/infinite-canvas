@@ -275,20 +275,80 @@ func comfyPlaceholderString(value any) string {
 
 // renderComfyUIWorkflow 解析 workflow 模板 JSON 并递归替换 {{name}} 占位符。
 // 数字占位符替换为对应 Go 数值类型，序列化时保持 JSON 数字。
+// 模板不包含任何占位符时（普通用户直接粘贴导出的工作流），先自动接入画布参数。
 func renderComfyUIWorkflow(template string, vars map[string]any) (map[string]any, error) {
 	var graph any
 	if err := json.Unmarshal([]byte(template), &graph); err != nil {
 		return nil, err
 	}
-	resolved, err := resolveComfyUIPlaceholders(graph, vars)
+	typed, ok := graph.(map[string]any)
+	if !ok {
+		return nil, errors.New("workflow 模板必须是 JSON 对象")
+	}
+	if !strings.Contains(template, "{{") {
+		autoWireComfyUITemplate(typed)
+	}
+	resolved, err := resolveComfyUIPlaceholders(typed, vars)
 	if err != nil {
 		return nil, err
 	}
-	typed, ok := resolved.(map[string]any)
+	typed, ok = resolved.(map[string]any)
 	if !ok {
 		return nil, errors.New("workflow 模板必须是 JSON 对象")
 	}
 	return typed, nil
+}
+
+// autoWireComfyUITemplate 自动把画布参数接入导出的工作流（无占位符场景）：
+//   - KSampler.seed → {{seed}}，并沿 positive 链路找到 CLIPTextEncode 把 text → {{prompt}}
+//   - EmptyLatentImage 的 width/height/batch_size → {{width}}/{{height}}/{{batch_size}}
+//   - LoadImage 的 image → {{image_name}}（图生图参考图）
+//
+// 采样参数、模型加载、负向提示词、ControlNet 等用户调好的配置全部原样保留。
+func autoWireComfyUITemplate(graph map[string]any) {
+	for _, raw := range graph {
+		node, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		inputs, ok := node["inputs"].(map[string]any)
+		if !ok {
+			continue
+		}
+		switch toStringSafe(node["class_type"]) {
+		case "KSampler":
+			if _, exists := inputs["seed"]; exists {
+				inputs["seed"] = "{{seed}}"
+			}
+			if positive, ok := inputs["positive"].([]any); ok && len(positive) > 0 {
+				if targetID, ok := positive[0].(string); ok {
+					if target, ok := graph[targetID].(map[string]any); ok {
+						if toStringSafe(target["class_type"]) == "CLIPTextEncode" {
+							if targetInputs, ok := target["inputs"].(map[string]any); ok {
+								if _, exists := targetInputs["text"]; exists {
+									targetInputs["text"] = "{{prompt}}"
+								}
+							}
+						}
+					}
+				}
+			}
+		case "EmptyLatentImage":
+			if _, exists := inputs["width"]; exists {
+				inputs["width"] = "{{width}}"
+			}
+			if _, exists := inputs["height"]; exists {
+				inputs["height"] = "{{height}}"
+			}
+			if _, exists := inputs["batch_size"]; exists {
+				inputs["batch_size"] = "{{batch_size}}"
+			}
+		case "LoadImage":
+			if _, exists := inputs["image"]; exists {
+				inputs["image"] = "{{image_name}}"
+			}
+		}
+	}
 }
 
 func resolveComfyUIPlaceholders(value any, vars map[string]any) (any, error) {
