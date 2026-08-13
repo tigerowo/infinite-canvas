@@ -473,8 +473,9 @@ func copyComfyUIResponse(w http.ResponseWriter, response *http.Response, request
 	}
 
 	var submitted struct {
-		PromptID string `json:"prompt_id"`
-		Error    any    `json:"error"`
+		PromptID   string         `json:"prompt_id"`
+		Error      any            `json:"error"`
+		NodeErrors map[string]any `json:"node_errors"`
 	}
 	if err := json.Unmarshal(payload, &submitted); err != nil {
 		writeComfyUIImageError(w, response.StatusCode, "ComfyUI 提交任务响应解析失败", logContext, responseBody)
@@ -484,7 +485,7 @@ func copyComfyUIResponse(w http.ResponseWriter, response *http.Response, request
 		if onFailure != nil {
 			onFailure()
 		}
-		writeComfyUIImageError(w, response.StatusCode, readComfyUIPromptError(submitted.Error), logContext, responseBody)
+		writeComfyUIImageError(w, response.StatusCode, readComfyUIPromptError(submitted.Error, submitted.NodeErrors), logContext, responseBody)
 		return true
 	}
 	promptID := strings.TrimSpace(submitted.PromptID)
@@ -646,7 +647,31 @@ func fetchComfyUIImageAsDataURL(ctx context.Context, channel model.ModelChannel,
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(imageBytes), nil
 }
 
-func readComfyUIPromptError(value any) string {
+func readComfyUIPromptError(value any, nodeErrors map[string]any) string {
+	// 优先从 node_errors 提取具体校验错误（如 "ckpt_name: 'xxx' not in [...]"），
+	// 比通用 message（"Prompt outputs failed validation"）更能定位问题。
+	for _, rawNode := range nodeErrors {
+		node, ok := rawNode.(map[string]any)
+		if !ok {
+			continue
+		}
+		errors, ok := node["errors"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawErr := range errors {
+			errMap, ok := rawErr.(map[string]any)
+			if !ok {
+				continue
+			}
+			if details := strings.TrimSpace(toStringSafe(errMap["details"])); details != "" {
+				return details
+			}
+			if message := strings.TrimSpace(toStringSafe(errMap["message"])); message != "" {
+				return message
+			}
+		}
+	}
 	if value == nil {
 		return "ComfyUI 任务提交失败"
 	}

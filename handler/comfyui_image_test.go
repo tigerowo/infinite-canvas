@@ -245,6 +245,28 @@ func TestCopyComfyUIResponseSubmitError(t *testing.T) {
 	}
 }
 
+// TestReadComfyUIPromptErrorPreferNodeErrors 验证 node_errors 的具体校验错误优先于通用 message。
+func TestReadComfyUIPromptErrorPreferNodeErrors(t *testing.T) {
+	msg := readComfyUIPromptError(
+		map[string]any{"type": "prompt_outputs_failed_validation", "message": "Prompt outputs failed validation"},
+		map[string]any{
+			"4": map[string]any{
+				"errors": []any{
+					map[string]any{"type": "value_not_in_list", "message": "Value not in list", "details": "ckpt_name: 'boogu.safetensors' not in ['qwen.safetensors']"},
+				},
+			},
+		},
+	)
+	if !strings.Contains(msg, "boogu.safetensors") || strings.Contains(msg, "Prompt outputs failed validation") {
+		t.Fatalf("msg = %q, want 具体 node_errors 详情", msg)
+	}
+	// 无 node_errors 时回退 error 字段
+	fallback := readComfyUIPromptError(map[string]any{"message": "bad workflow"}, nil)
+	if fallback != "bad workflow" {
+		t.Fatalf("fallback msg = %q", fallback)
+	}
+}
+
 func TestIsComfyUIChannelByProtocolAndBaseURL(t *testing.T) {
 	byProtocol := comfyTestChannel("http://anywhere:8188")
 	if !isComfyUIChannel(byProtocol) {
