@@ -197,7 +197,7 @@ async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, p
         model,
         prompt,
         duration: Number(normalizeVideoSeconds(config.videoSeconds)),
-        resolution: normalizeVideoResolution(config.vquality),
+        resolution: normalizeGrok2APIVideoResolution(config.vquality),
     };
     const aspectRatio = normalizeSeedanceRatio(config.size);
     if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
@@ -534,6 +534,24 @@ function normalizeVideoResolution(value: string) {
     if (value === "auto" || value === "high" || value === "medium") return "720p";
     const resolution = value.trim().replace(/p$/i, "") || "720";
     return /k$/i.test(resolution) ? resolution.toLowerCase() : `${resolution}p`;
+}
+
+function normalizeGrok2APIVideoResolution(value: string) {
+    // grok2api/xAI video API only accepts 480p|720p|1080p.
+    const raw = String(value || "").trim().toLowerCase();
+    if (!raw || raw === "auto" || raw === "medium" || raw === "high") return "720p";
+    if (raw === "low" || raw === "480" || raw === "480p") return "480p";
+    if (raw === "720" || raw === "720p") return "720p";
+    if (raw === "1080" || raw === "1080p" || raw === "pro") return "1080p";
+    // UI may offer 2K/4K for other providers; clamp to max supported 1080p for Grok/xAI.
+    if (raw === "2k" || raw === "4k" || raw.endsWith("k")) return "1080p";
+    const number = Number(raw.replace(/p$/i, ""));
+    if (Number.isFinite(number)) {
+        if (number <= 480) return "480p";
+        if (number <= 720) return "720p";
+        return "1080p";
+    }
+    return "720p";
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {

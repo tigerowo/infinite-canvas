@@ -163,25 +163,49 @@ function isGrokImageModel(model: string) {
     return model.trim().toLowerCase().startsWith("grok-imagine-image");
 }
 
+function normalizeGrokImageResolution(quality: string, size: string, operation: "generation" | "edit", model: string) {
+    // grok2api/xAI image API only accepts resolution=1k|2k (not quality/size pixels).
+    if (operation === "edit" && model.includes("edit")) return "1k";
+    const normalizedQuality = normalizeQuality(quality);
+    if (normalizedQuality !== "auto" && QUALITY_BASE[normalizedQuality]) {
+        return QUALITY_BASE[normalizedQuality] > 1024 ? "2k" : "1k";
+    }
+    const match = size.trim().toLowerCase().match(/^(\d+)x(\d+)$/);
+    if (match) {
+        const longSide = Math.max(Number(match[1]), Number(match[2]));
+        if (longSide >= 1536) return "2k";
+        if (longSide > 0) return "1k";
+    }
+    if (/(^|[^a-z])(2k|4k)([^a-z]|$)/i.test(size)) return "2k";
+    if (/(^|[^a-z])1k([^a-z]|$)/i.test(size)) return "1k";
+    return "";
+}
+
+function normalizeGrokImageAspectRatio(size: string) {
+    const value = size.trim().toLowerCase();
+    if (!value || value === "auto") return "";
+    const match = value.match(/^(\d+)x(\d+)$/);
+    if (match) {
+        const width = Number(match[1]);
+        const height = Number(match[2]);
+        const divisor = greatestCommonDivisor(width, height);
+        return `${width / divisor}:${height / divisor}`;
+    }
+    // UI options like "16:9-2k" keep ratio prefix.
+    const ratio = value.match(/^(\d+:\d+)/);
+    return ratio?.[1] || value;
+}
+
 function applyImageGenerationParams(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams, operation: "generation" | "edit" = "generation") {
     const model = config.model.trim().toLowerCase();
     const grok = isGrokImageModel(model) && (operation === "edit" || !model.includes("edit"));
     if (grok) {
-        const size = config.size.trim().toLowerCase();
-        if (size && size !== "auto") {
-            const match = size.match(/^(\d+)x(\d+)$/);
-            if (match) {
-                const width = Number(match[1]);
-                const height = Number(match[2]);
-                const divisor = greatestCommonDivisor(width, height);
-                body.aspect_ratio = `${width / divisor}:${height / divisor}`;
-            } else {
-                body.aspect_ratio = size;
-            }
-        }
-        if (params.quality !== "auto") {
-            body.resolution = operation === "edit" && model.includes("edit") ? "1k" : QUALITY_BASE[params.quality] > 1024 ? "2k" : "1k";
-        }
+        const size = String(params.size || config.size || "").trim();
+        const aspectRatio = normalizeGrokImageAspectRatio(size);
+        if (aspectRatio) body.aspect_ratio = aspectRatio;
+        const resolution = normalizeGrokImageResolution(params.quality || config.quality || "auto", size, operation, model);
+        if (resolution) body.resolution = resolution;
+        // Never send OpenAI-style quality/size to grok2api/xAI image endpoints.
         return;
     }
 
