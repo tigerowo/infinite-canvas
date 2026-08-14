@@ -228,13 +228,19 @@ async function tryUploadImageSource(source: string | Blob, filename: string) {
     if (typeof source === "string" && isHttpUrl(source)) {
         return uploadRemoteImageToServer(source, filename);
     }
-    if (typeof source === "string" && (isDataUrl(source) || isBlobUrl(source))) {
-        return uploadImage(source);
+    try {
+        if (typeof source === "string" && (isDataUrl(source) || isBlobUrl(source))) {
+            return await uploadImage(source);
+        }
+        if (typeof source !== "string") {
+            return await uploadImage(source);
+        }
+        return await uploadRemoteImageToServer(source, filename);
+    } catch {
+        // Cloud unavailable/unauthenticated: still persist locally so refresh keeps the image.
+        if (typeof source === "string" && isHttpUrl(source)) throw new Error("远程图片上传失败");
+        return uploadImage(source, { localOnly: true });
     }
-    if (typeof source !== "string") {
-        return uploadImage(source);
-    }
-    return uploadRemoteImageToServer(source, filename);
 }
 
 async function tryUploadMediaSource(source: string | Blob, filename: string) {
@@ -297,19 +303,26 @@ export async function repairCanvasMediaRef(
     }
     // 3) data URL local payload
     else if (isDataUrl(content)) {
-        if (canUpload) {
-            try {
-                const result = kind === "image" ? await tryUploadImageSource(content, filename) : await tryUploadMediaSource(content, filename);
-                storageKey = result.storageKey;
-                content = isServerKey(result.storageKey) ? serverContentUrl(result.storageKey) || result.url : result.url;
-                uploaded = isServerKey(result.storageKey);
-                mediaStatus = uploaded || isHttpUrl(result.url) ? "ok" : "local-only";
-                mediaError = mediaStatus === "local-only" ? "未上云，换浏览器不可见" : undefined;
-            } catch {
+        // Always materialize data URLs into local/server storage so refresh does not drop multi-MB base64 nodes.
+        try {
+            const result = kind === "image" ? await tryUploadImageSource(content, filename) : await tryUploadMediaSource(content, filename);
+            storageKey = result.storageKey;
+            content = isServerKey(result.storageKey) ? serverContentUrl(result.storageKey) || result.url : result.url;
+            uploaded = isServerKey(result.storageKey);
+            if (uploaded) {
+                mediaStatus = "ok";
+                mediaError = undefined;
+            } else if (storageKey) {
+                // local image:/file: key — preview via object URL, keep portable key for this browser
+                const resolved = kind === "image" ? await resolveImageUrl(storageKey, content) : await resolveMediaUrl(storageKey, content);
+                content = resolved || content;
+                mediaStatus = "local-only";
+                mediaError = "未上云，换浏览器不可见";
+            } else {
                 mediaStatus = "local-only";
                 mediaError = "未上云，换浏览器不可见";
             }
-        } else {
+        } catch {
             mediaStatus = "local-only";
             mediaError = "未上云，换浏览器不可见";
         }

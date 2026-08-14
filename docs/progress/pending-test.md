@@ -20,3 +20,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 节点/工具栏「上传至云存储」「一键上云」可将本地未上云与 Grok https 主动转存为 /api/files/...；另一浏览器同账号应可见。
 - 失效 blob 且无 server/原链时显示失效占位，不白屏；保存/同步 JSON 不含 blob:。
 - Safari 打开 content 为 /api/files/.../content 的云端视频/音频应能正常播放（需支持 Range）。
+- gpt-image-2 等仅返回 base64 的生图：生成成功后刷新浏览器图片仍在；有对象存储时应尽量变成 server:，无存储时至少有 image: 本地键。

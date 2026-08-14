@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] gpt-image 等 base64 生图结果刷新丢失：生成完成写入本地/云端 storageKey，打开画板自动物化 data URL
 ## v0.5.4 - 2026-08-15
 
 + [修复] Safari 播放已上云视频/音频失败：/api/files 内容接口支持 Range 分段响应
