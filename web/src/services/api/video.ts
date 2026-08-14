@@ -136,9 +136,10 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
             }
             await new Promise((resolve) => setTimeout(resolve, VIDEO_POLL_INTERVAL_MS));
         }
-        const videoUrl = completed?.video_url || completed?.url || "";
-        if (!videoUrl) throw new VideoRequestError("视频生成完成但没有返回视频地址", completed);
-        const result = buildVideoGenerationResult(completed, videoUrl, Date.now() - startedAt);
+        const completedTask = completed ? await cacheProtectedGrokVideo(config, model, completed) : completed;
+        const videoUrl = completedTask?.video_url || completedTask?.url || "";
+        if (!videoUrl) throw new VideoRequestError("视频生成完成但没有返回视频地址", completedTask);
+        const result = buildVideoGenerationResult(completedTask, videoUrl, Date.now() - startedAt);
         void writeVideoAICallLog(config, model, "/videos", "POST", startedAt, 200, stringifyLogPayload(requestBody ? summarizeVideoRequestBody(requestBody) : { taskId: pollId }), stringifyLogPayload({ task: completed, video: result }), "");
         refreshRemoteUser(config);
         return result;
@@ -176,7 +177,7 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
 }
 
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
-    if (model.trim().toLowerCase() !== "grok-imagine-video") return false;
+    if (!["grok-imagine-video", "grok-imagine-video-1.5"].includes(model.trim().toLowerCase())) return false;
     const channel = videoChannelText(config, model);
     return !channel.includes("kie") && !channel.includes("apimart");
 }

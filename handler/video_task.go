@@ -385,7 +385,7 @@ func parseVideoTaskPayload(payload []byte, modelName string) parsedVideoTaskPayl
 		Progress:        readIntPath(data, "progress"),
 		Seconds:         firstNonEmpty(readStringPath(data, "seconds"), readStringPath(data, "duration")),
 		Size:            firstNonEmpty(readStringPath(data, "size"), readSizeFromDimensions(data)),
-		VideoURL:        firstNonEmpty(readStringPath(data, "video_url"), readStringPath(data, "url"), readStringPath(data, "remixed_from_video_id"), readStringPath(data, "output_url"), readStringPath(data, "download_url"), findFirstHTTPURL(data)),
+		VideoURL:        firstNonEmpty(readStringPath(data, "video_url"), readStringPath(data, "url"), readStringPath(data, "video.url"), readStringPath(data, "remixed_from_video_id"), readStringPath(data, "output_url"), readStringPath(data, "download_url"), findFirstHTTPURL(data)),
 		Error:           firstNonEmpty(readStringPath(data, "error.message"), readStringPath(data, "error")),
 		ErrorDetail:     "",
 	}
