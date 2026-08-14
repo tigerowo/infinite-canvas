@@ -74,6 +74,8 @@ export type CanvasNodeMetadata = {
     primaryImageId?: string;
     imageBatchExpanded?: boolean;
     storageKey?: string;
+    mediaStatus?: "ok" | "local-only" | "broken";
+    mediaError?: string;
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
@@ -143,6 +145,8 @@ export type CanvasAssistantReference = {
     dataUrl?: string;
     url?: string;
     storageKey?: string;
+    mediaStatus?: "ok" | "local-only" | "broken";
+    mediaError?: string;
     mimeType?: string;
     text?: string;
 };
