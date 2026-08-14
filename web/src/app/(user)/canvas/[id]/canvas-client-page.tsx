@@ -2996,7 +2996,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     : null;
                 const canvasCenter = getCanvasCenter();
                 const startX = source ? source.position.x + source.width + 96 + spec.width / 2 : canvasCenter.x;
-                const startY = source ? source.position.y + spec.height / 2 : canvasCenter.y;
+                const startY = source ? source.position.y + source.height / 2 : canvasCenter.y;
                 const collides = (x: number, y: number) => {
                     const left = x - spec.width / 2;
                     const right = x + spec.width / 2;
@@ -3299,7 +3299,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         metadata.audioInstructions = stringValue("instructions") || generationConfig.audioInstructions;
                     }
 
-                    const layoutSourceNodes = mode === "image" ? [] : mode === "video" ? nodesRef.current.filter((node) => !node.metadata?.groupId && (node.type === CanvasNodeType.Text || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Group)) : sourceNodes;
+                    // Prefer real media references as layout anchors so generated image/video
+                    // nodes appear next to the referenced material instead of canvas center / global rightmost.
+                    const mediaSourceNodes = sourceNodes.filter((node) => isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio || node.type === CanvasNodeType.Panorama);
+                    const layoutSourceNodes = mediaSourceNodes.length ? mediaSourceNodes : sourceNodes;
                     const node = createCanvasNode(targetType, nextNodeCenter(targetType, layoutSourceNodes), metadata);
                     node.title = stringValue("title") || prompt.slice(0, 32) || (mode === "video" ? "视频" : mode === "audio" ? "音频" : "图片");
                     const createdConnections = sourceNodeIds.map((sourceNodeId) => ({ id: nanoid(), fromNodeId: sourceNodeId, toNodeId: node.id }));
