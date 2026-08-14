@@ -84,8 +84,15 @@ export async function uploadMediaBlob(blob: Blob, filename: string): Promise<Upl
     return uploadMediaBlobToServer(blob, filename);
 }
 
+function stableMediaUrl(url = "") {
+    const value = String(url || "").trim();
+    if (!value || value.startsWith("blob:")) return "";
+    return value;
+}
+
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
-    if (!storageKey) return fallback;
+    const stableFallback = stableMediaUrl(fallback);
+    if (!storageKey) return stableFallback ? getProxyUrl(stableFallback) : "";
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey).catch(() => null);
@@ -96,13 +103,13 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     }
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        if (fallback && !fallback.startsWith("blob:")) return fallback;
+        if (stableFallback) return getProxyUrl(stableFallback);
         const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
-        if (!info) return fallback;
-        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
-        return url;
+        if (!info) return "";
+        return info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
     }
-    return fallback;
+    if (stableFallback) return getProxyUrl(stableFallback);
+    return "";
 }
 
 export async function getMediaBlob(storageKey: string) {

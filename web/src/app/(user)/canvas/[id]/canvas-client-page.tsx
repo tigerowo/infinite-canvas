@@ -4509,10 +4509,22 @@ async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
 async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
     return Promise.all(
         nodes.map(async (node) => {
-            const content = node.metadata?.content;
-            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
-            if (!isCanvasImageNodeType(node.type) || !content) return node;
-            if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
+            const content = node.metadata?.content || "";
+            const storageKey = node.metadata?.storageKey || "";
+            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && (storageKey || content)) {
+                const url = await resolveMediaUrl(storageKey, content);
+                return { ...node, metadata: { ...node.metadata, content: url || (content.startsWith("blob:") ? "" : content) } };
+            }
+            if (!isCanvasImageNodeType(node.type)) return node;
+            if (!content && !storageKey) return node;
+            if (storageKey || content.startsWith("http://") || content.startsWith("https://") || content.startsWith("/api/")) {
+                const url = await resolveImageUrl(storageKey, content);
+                return { ...node, metadata: { ...node.metadata, content: url || (content.startsWith("blob:") ? "" : content) } };
+            }
+            if (content.startsWith("blob:")) {
+                // Foreign/local blob URLs are not portable across reverse-proxy origins.
+                return { ...node, metadata: { ...node.metadata, content: "" } };
+            }
             if (!content.startsWith("data:image/")) return node;
             return { ...node, metadata: { ...node.metadata, ...imageMetadata(await uploadImage(content)) } };
         }),

@@ -8,6 +8,7 @@ import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
+import { sanitizeCanvasNodesForPersistence, sanitizeCanvasSessionsForPersistence } from "../utils/canvas-media-persistence";
 
 export type CanvasSidePanelState = {
     open: boolean;
@@ -73,11 +74,20 @@ function waitForUserStoreHydration() {
     });
 }
 
+function sanitizeCanvasProject(project: CanvasProject): CanvasProject {
+    return {
+        ...project,
+        nodes: sanitizeCanvasNodesForPersistence(project.nodes || []),
+        chatSessions: sanitizeCanvasSessionsForPersistence(project.chatSessions || []),
+    };
+}
+
 function queueProjectSave(project: CanvasProject) {
     const token = useUserStore.getState().token;
     const syncEnabled = accountCanvasSyncEnabled;
     const previous = projectSaveTimers.get(project.id);
     if (previous) clearTimeout(previous);
+    const payload = sanitizeCanvasProject(project);
 
     projectSaveTimers.set(
         project.id,
@@ -91,7 +101,7 @@ function queueProjectSave(project: CanvasProject) {
             ) {
                 return;
             }
-            void saveCanvasProject(token, project).catch(() => undefined);
+            void saveCanvasProject(token, payload).catch(() => undefined);
         }, 400),
     );
 }
@@ -371,7 +381,7 @@ export const useCanvasStore = create<CanvasStore>()(
             storage: canvasStorage,
             partialize: (state) =>
                 ({
-                    projects: state.projects,
+                    projects: state.projects.map(sanitizeCanvasProject),
                 }) as StorageValue<CanvasStore>["state"],
             onRehydrateStorage: () => () => {
                 useCanvasStore.setState({ hydrated: true });
