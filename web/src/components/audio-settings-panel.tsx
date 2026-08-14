@@ -3,10 +3,10 @@
 import { type ReactNode } from "react";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { audioFormatOptions, audioSpeedLabel, audioVoiceOptions, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
+import { audioFormatOptions, audioSpeedLabel, audioVoiceOptionsFor, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValueFor } from "@/lib/audio-generation";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import type { AiConfig } from "@/stores/use-config-store";
+import { channelInfoForModel, type AiConfig } from "@/stores/use-config-store";
 
 const speedOptions = ["0.75", "1", "1.25", "1.5"];
 
@@ -27,7 +27,7 @@ export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">音频设置</div> : null}
-                {isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <OpenAIAudioSettings config={config} onConfigChange={onConfigChange} theme={theme} />}
+                {isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <OpenAIAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} />}
             </div>
         </ImageSettingsTheme>
     );
@@ -86,8 +86,10 @@ function MiMoAudioSettings({ config, model, onConfigChange, theme }: { config: A
     );
 }
 
-function OpenAIAudioSettings({ config, onConfigChange, theme }: { config: AiConfig; onConfigChange: AudioSettingsPanelProps["onConfigChange"]; theme: CanvasTheme }) {
-    const voice = normalizeAudioVoiceValue(config.audioVoice);
+function OpenAIAudioSettings({ config, model, onConfigChange, theme }: { config: AiConfig; model: string; onConfigChange: AudioSettingsPanelProps["onConfigChange"]; theme: CanvasTheme }) {
+    const channel = channelInfoForModel(config, model);
+    const voiceOptions = audioVoiceOptionsFor(model, channel);
+    const voice = normalizeAudioVoiceValueFor(model, config.audioVoice, channel);
     const format = normalizeAudioFormatValue(config.audioFormat);
     const speed = normalizeAudioSpeedValue(config.audioSpeed);
 
@@ -95,7 +97,7 @@ function OpenAIAudioSettings({ config, onConfigChange, theme }: { config: AiConf
         <>
             <SettingGroup title="声音" color={theme.node.muted}>
                 <div className="grid grid-cols-3 gap-2.5">
-                    {audioVoiceOptions.map((item) => (
+                    {voiceOptions.map((item) => (
                         <OptionPill key={item.value} selected={voice === item.value} theme={theme} onClick={() => onConfigChange("audioVoice", item.value)}>
                             {item.label}
                         </OptionPill>

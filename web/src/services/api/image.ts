@@ -163,25 +163,106 @@ function isGrokImageModel(model: string) {
     return model.trim().toLowerCase().startsWith("grok-imagine-image");
 }
 
+function normalizeGrokImageResolution(quality: string, size: string, operation: "generation" | "edit", model: string) {
+    // grok2api/xAI image API only accepts resolution=1k|2k (not quality/size pixels).
+    if (operation === "edit" && model.includes("edit")) return "1k";
+    const normalizedSize = size.trim().toLowerCase();
+    // Explicit 2K/4K size presets must win. UI options like "9:16-2k" / "1152x2048"
+    // previously collapsed through quality=auto/low into 720x1280 + resolution=1k.
+    if (/(^|[^a-z0-9])(2k|4k)([^a-z0-9]|$)/i.test(normalizedSize)) return "2k";
+    if (/(^|[^a-z0-9])1k([^a-z0-9]|$)/i.test(normalizedSize)) return "1k";
+
+    const match = normalizedSize.match(/^(\d+)x(\d+)$/);
+    if (match) {
+        const longSide = Math.max(Number(match[1]), Number(match[2]));
+        // Treat common 2K long-edge sizes as 2k even when quality is low/auto.
+        if (longSide >= 1536) return "2k";
+        if (longSide > 0) return "1k";
+    }
+
+    const normalizedQuality = normalizeQuality(quality);
+    if (normalizedQuality !== "auto" && QUALITY_BASE[normalizedQuality]) {
+        return QUALITY_BASE[normalizedQuality] > 1024 ? "2k" : "1k";
+    }
+    return "1k";
+}
+
+function normalizeGrokImageAspectRatio(size: string) {
+    const value = size.trim().toLowerCase();
+    if (!value || value === "auto") return "";
+    const match = value.match(/^(\d+)x(\d+)$/);
+    if (match) {
+        const width = Number(match[1]);
+        const height = Number(match[2]);
+        return snapGrokImageAspectRatio(width / height);
+    }
+    // UI options like "16:9-2k" keep ratio prefix.
+    const ratio = value.match(/^(\d+(?:\.\d+)?:\d+(?:\.\d+)?)/);
+    if (!ratio?.[1]) return "";
+    return snapGrokImageAspectRatioLabel(ratio[1]);
+}
+
+const GROK_IMAGE_ASPECT_RATIOS = [
+    "1:1",
+    "16:9",
+    "9:16",
+    "4:3",
+    "3:4",
+    "3:2",
+    "2:3",
+    "2:1",
+    "1:2",
+    "20:9",
+    "9:20",
+    "19.5:9",
+    "9:19.5",
+    "auto",
+] as const;
+
+function snapGrokImageAspectRatioLabel(label: string) {
+    const value = label.trim().toLowerCase();
+    if ((GROK_IMAGE_ASPECT_RATIOS as readonly string[]).includes(value)) return value;
+    // Common UI alias that is not accepted by grok2api/xAI.
+    if (value === "21:9") return "20:9";
+    if (value === "9:21") return "9:20";
+    const parts = value.split(":");
+    if (parts.length !== 2) return "";
+    const width = Number(parts[0]);
+    const height = Number(parts[1]);
+    if (!width || !height) return "";
+    return snapGrokImageAspectRatio(width / height);
+}
+
+function snapGrokImageAspectRatio(ratio: number) {
+    if (!Number.isFinite(ratio) || ratio <= 0) return "";
+    let best = "1:1";
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const item of GROK_IMAGE_ASPECT_RATIOS) {
+        if (item === "auto") continue;
+        const [w, h] = item.split(":").map(Number);
+        const score = Math.abs(Math.log(ratio) - Math.log(w / h));
+        if (score < bestScore) {
+            best = item;
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
 function applyImageGenerationParams(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams, operation: "generation" | "edit" = "generation") {
     const model = config.model.trim().toLowerCase();
     const grok = isGrokImageModel(model) && (operation === "edit" || !model.includes("edit"));
     if (grok) {
-        const size = config.size.trim().toLowerCase();
-        if (size && size !== "auto") {
-            const match = size.match(/^(\d+)x(\d+)$/);
-            if (match) {
-                const width = Number(match[1]);
-                const height = Number(match[2]);
-                const divisor = greatestCommonDivisor(width, height);
-                body.aspect_ratio = `${width / divisor}:${height / divisor}`;
-            } else {
-                body.aspect_ratio = size;
-            }
-        }
-        if (params.quality !== "auto") {
-            body.resolution = operation === "edit" && model.includes("edit") ? "1k" : QUALITY_BASE[params.quality] > 1024 ? "2k" : "1k";
-        }
+        // Prefer original UI size (e.g. 1152x2048 / 9:16-2k). params.size may already be
+        // collapsed by resolveRequestSize(quality=auto) into 720x1280 for portrait ratios.
+        const size = String(config.size || params.size || "").trim();
+        const aspectRatio = normalizeGrokImageAspectRatio(size);
+        if (aspectRatio) body.aspect_ratio = aspectRatio;
+        const resolution = normalizeGrokImageResolution(params.quality || config.quality || "auto", size, operation, model);
+        if (resolution) body.resolution = resolution;
+        // Never send OpenAI-style quality/size to grok2api/xAI image endpoints.
+        delete body.size;
+        delete body.quality;
         return;
     }
 
@@ -460,6 +541,8 @@ function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
     if (deltaText) onDelta(deltaText);
 }
 
+const GROK_IMAGE_PROMPT_MAX_CHARS = 8000;
+
 function withSystemPrompt(config: AiConfig, prompt: string) {
     const systemPrompt = (config.systemPrompts.image || config.systemPrompt).trim();
     return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
@@ -467,6 +550,14 @@ function withSystemPrompt(config: AiConfig, prompt: string) {
 
 function withPromptGuard(config: AiConfig, prompt: string) {
     return config.codexCli ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${prompt}` : prompt;
+}
+
+function finalizeImagePrompt(config: AiConfig, prompt: string) {
+    const value = withPromptGuard(config, withSystemPrompt(config, prompt));
+    if (isGrokImageModel(config.model) && [...value].length > GROK_IMAGE_PROMPT_MAX_CHARS) {
+        throw new Error(`Grok/xAI 图片 prompt 最长 ${GROK_IMAGE_PROMPT_MAX_CHARS} 字符，当前 ${[...value].length}（含系统提示词）。请缩短提示词或系统提示词`);
+    }
+    return value;
 }
 
 function usesAccountProxy(config: AiConfig) {
@@ -597,7 +688,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
     if (isAgnesImageModel(config.model)) {
         const body: Record<string, unknown> = {
             model: config.model,
-            prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+            prompt: finalizeImagePrompt(config, prompt),
         };
         applyAgnesImageSize(body, config, params);
 
@@ -631,7 +722,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
 
     const body: Record<string, unknown> = {
         model: config.model,
-        prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+        prompt: finalizeImagePrompt(config, prompt),
     };
     if (params.n > 1) body.n = params.n;
     applyImageGenerationParams(body, config, params);
@@ -677,7 +768,7 @@ async function requestImageGenerationSingle(config: AiConfig & { seedIndex?: num
 async function createGrokImageEditBody(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams) {
     const body: Record<string, unknown> = {
         model: config.model,
-        prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+        prompt: finalizeImagePrompt(config, prompt),
         images: await Promise.all(references.map(async (image) => ({ url: await imageToDataUrl(image) }))),
     };
     if (params.n > 1) body.n = params.n;
@@ -726,7 +817,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
     const mime = IMAGE_MIME;
     const formData = new FormData();
     formData.set("model", config.model);
-    formData.set("prompt", withPromptGuard(config, withSystemPrompt(config, prompt)));
+    formData.set("prompt", finalizeImagePrompt(config, prompt));
     if (params.n > 1) formData.set("n", String(params.n));
     if (params.size) formData.set("size", params.size);
     if (params.quality && !config.codexCli) formData.set("quality", params.quality);
@@ -964,7 +1055,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         );
         const body: Record<string, unknown> = {
             model: config.model,
-            prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+            prompt: finalizeImagePrompt(config, prompt),
             extra_body: { image: imageUrls },
         };
         applyAgnesImageSize(body, config, params);
@@ -1007,7 +1098,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         formData.set("_canvas_prompt", meta.prompt);
         if (meta.channelId) formData.set("_canvas_channel_id", meta.channelId);
         formData.set("model", config.model);
-        formData.set("prompt", withPromptGuard(config, withSystemPrompt(config, prompt)));
+        formData.set("prompt", finalizeImagePrompt(config, prompt));
         if (params.n > 1) formData.set("n", String(params.n));
         if (params.quality && !config.codexCli) formData.set("quality", params.quality);
         if (config.responseFormatB64Json) formData.set("response_format", "b64_json");
@@ -1023,7 +1114,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
     if (isAgnesImageModel(config.model)) {
         const body: Record<string, unknown> = {
             model: config.model,
-            prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+            prompt: finalizeImagePrompt(config, prompt),
         };
         applyAgnesImageSize(body, config, params);
         return {
@@ -1034,7 +1125,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
     }
     const body: Record<string, unknown> = {
         model: config.model,
-        prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+        prompt: finalizeImagePrompt(config, prompt),
     };
     applyImageGenerationParams(body, config, params);
     if (config.responseFormatB64Json) body.response_format = "b64_json";
@@ -1199,7 +1290,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
 
     const body: Record<string, unknown> = {
         model: config.model,
-        prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
+        prompt: finalizeImagePrompt(config, prompt),
         extra_body: {
             image: imageUrls, // 👈 核心对齐：官方文档参考图参数 extra_body.image 数组
         },

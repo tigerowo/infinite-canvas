@@ -8,6 +8,7 @@ import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 import type { CanvasBackgroundMode } from "@/lib/canvas-theme";
 import type { CanvasAgentConfig, CanvasAssistantSession, CanvasConnection, CanvasNodeData, CanvasPendingAgentRequest, ViewportTransform } from "../types";
+import { sanitizeCanvasNodesForPersistence, sanitizeCanvasSessionsForPersistence } from "../utils/canvas-media-persistence";
 
 export type CanvasSidePanelState = {
     open: boolean;
@@ -91,7 +92,11 @@ function queueProjectSave(project: CanvasProject) {
             ) {
                 return;
             }
-            void saveCanvasProject(token, project).catch(() => undefined);
+            void saveCanvasProject(token, {
+                ...project,
+                nodes: sanitizeCanvasNodesForPersistence(project.nodes),
+                chatSessions: sanitizeCanvasSessionsForPersistence(project.chatSessions || []),
+            }).catch(() => undefined);
         }, 400),
     );
 }
@@ -371,7 +376,11 @@ export const useCanvasStore = create<CanvasStore>()(
             storage: canvasStorage,
             partialize: (state) =>
                 ({
-                    projects: state.projects,
+                    projects: state.projects.map((project) => ({
+                        ...project,
+                        nodes: sanitizeCanvasNodesForPersistence(project.nodes),
+                        chatSessions: sanitizeCanvasSessionsForPersistence(project.chatSessions || []),
+                    })),
                 }) as StorageValue<CanvasStore>["state"],
             onRehydrateStorage: () => () => {
                 useCanvasStore.setState({ hydrated: true });

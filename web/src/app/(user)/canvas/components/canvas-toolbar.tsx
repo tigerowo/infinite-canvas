@@ -24,6 +24,7 @@ export function CanvasToolbar({
     onUndo,
     onRedo,
     onUpload,
+    onUploadBoardToCloud,
     onDelete,
     onClear,
     onCanvasToolChange,
@@ -48,6 +49,7 @@ export function CanvasToolbar({
     onUndo: () => void;
     onRedo: () => void;
     onUpload: () => void;
+    onUploadBoardToCloud?: () => void;
     onDelete: () => void;
     onClear: () => void;
     onCanvasToolChange: (tool: "select" | "pan") => void;
@@ -107,6 +109,11 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-upload" label="上传素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
                     <Upload className="size-4.5" />
                 </ToolbarButton>
+                {onUploadBoardToCloud ? (
+                    <ToolbarButton id="tool-upload-cloud" label="一键上云" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUploadBoardToCloud}>
+                        <Upload className="size-4.5" />
+                    </ToolbarButton>
+                ) : null}
                 <Divider theme={theme} />
                 <ToolbarButton id="tool-library" label="素材库" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenAssetLibrary}>
                     <Library className="size-4.5" />
@@ -302,6 +309,7 @@ function toolLabel(id: string) {
     if (id === "tool-director") return "导演台";
     if (id === "tool-config") return "生成配置";
     if (id === "tool-upload") return "上传素材";
+    if (id === "tool-upload-cloud") return "一键上云";
     if (id === "tool-library") return "素材库";
     if (id === "tool-assets") return "我的素材";
     if (id === "tool-style") return "画布外观";

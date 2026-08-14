@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tigerowo/infinite-canvas/model"
-	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"gorm.io/gorm"
 )
 
@@ -220,10 +220,9 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
 	}
+	// Always expose same-origin content URL to browsers. PublicBaseURL may point at
+	// private WebDAV/S3 endpoints that <img>/<video> cannot authenticate against.
 	url := "/api/files/" + objectID + "/content"
-	if publicURL != "" {
-		url = publicURL
-	}
 	return UploadedStorageObject{ID: objectID, URL: url, StorageKey: "server:" + objectID, Bytes: int64(len(data)), MimeType: contentType}, nil
 }
 
@@ -405,10 +404,11 @@ func DownloadStorageObject(id string) (DownloadedStorageObject, error) {
 	if settings, loadErr := repository.GetSettings(); loadErr == nil {
 		providers = append(providers, normalizePrivateStorageSetting(settings.Private.Storage).Providers...)
 	}
-	if provider, ok := findStorageProviderForObject(object, providers); ok && storageProviderConfigured(provider) {
-		if data, readErr := getStorageObject(provider, object.ObjectKey); readErr == nil {
-			return DownloadedStorageObject{Object: object, Data: data}, nil
-		}
+	if data, readErr := readStorageObjectFromProviders(object, providers); readErr == nil {
+		return DownloadedStorageObject{Object: object, Data: data}, nil
+	} else if strings.TrimSpace(object.PublicURL) == "" {
+		// Surface a stable client message when only provider-backed storage is available.
+		return DownloadedStorageObject{}, safeMessageError{message: "对象存储读取失败，请检查存储配置或重新上传"}
 	}
 
 	if object.PublicURL != "" {
@@ -422,8 +422,8 @@ func DownloadStorageObject(id string) (DownloadedStorageObject, error) {
 		}
 		defer response.Body.Close()
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
-			body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-			return DownloadedStorageObject{}, fmt.Errorf("对象存储读取失败: %s %s", response.Status, string(body))
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+			return DownloadedStorageObject{}, safeMessageError{message: fmt.Sprintf("对象存储读取失败: %s", response.Status)}
 		}
 		data, err := io.ReadAll(response.Body)
 		if err != nil {
@@ -432,7 +432,51 @@ func DownloadStorageObject(id string) (DownloadedStorageObject, error) {
 		return DownloadedStorageObject{Object: object, Data: data}, nil
 	}
 
-	return DownloadedStorageObject{}, errors.New("无法读取对象存储文件")
+	return DownloadedStorageObject{}, safeMessageError{message: "无法读取对象存储文件"}
+}
+
+// readStorageObjectFromProviders 先按 providerId 精确匹配，再回退尝试其它已配置存储。
+// 管理员修改 WebDAV/S3 地址后 providerId 会变，但对象仍可能在同一网盘路径下。
+func readStorageObjectFromProviders(object model.StorageObject, providers []model.StorageProvider) ([]byte, error) {
+	tried := map[string]bool{}
+	var lastErr error
+
+	if provider, ok := findStorageProviderForObject(object, providers); ok && storageProviderConfigured(provider) {
+		key := provider.ID
+		if key == "" {
+			key = provider.Endpoint + "|" + provider.Bucket + "|" + provider.PathPrefix
+		}
+		tried[key] = true
+		data, err := getStorageObject(provider, object.ObjectKey)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+	}
+
+	for _, provider := range providers {
+		if !provider.Enabled || !storageProviderConfigured(provider) {
+			continue
+		}
+		key := provider.ID
+		if key == "" {
+			key = provider.Endpoint + "|" + provider.Bucket + "|" + provider.PathPrefix
+		}
+		if tried[key] {
+			continue
+		}
+		tried[key] = true
+		data, err := getStorageObject(provider, object.ObjectKey)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, errors.New("没有可用对象存储配置")
 }
 
 // selectStorageProvider 按权重选择一个启用的存储提供商。
@@ -744,6 +788,16 @@ func findStorageProviderForObject(object model.StorageObject, providers []model.
 				return provider, true
 			}
 		}
+	}
+	// WebDAV has empty bucket; if only one configured provider remains, use it.
+	var configured []model.StorageProvider
+	for _, provider := range providers {
+		if provider.Enabled && storageProviderConfigured(provider) {
+			configured = append(configured, provider)
+		}
+	}
+	if len(configured) == 1 {
+		return configured[0], true
 	}
 	return model.StorageProvider{}, false
 }

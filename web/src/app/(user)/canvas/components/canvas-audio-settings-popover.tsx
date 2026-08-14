@@ -6,7 +6,8 @@ import { Settings2 } from "lucide-react";
 import { Button } from "antd";
 
 import { AudioSettingsPanel, type AudioSettingKey } from "@/components/audio-settings-panel";
-import { audioFormatLabel, audioSpeedLabel, audioVoiceLabel } from "@/lib/audio-generation";
+import { audioFormatLabel, audioSpeedLabel, audioVoiceLabelFor } from "@/lib/audio-generation";
+import { channelInfoForModel } from "@/stores/use-config-store";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsVoiceLabel, normalizeMimoTtsFormat } from "@/lib/mimo-tts";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -122,7 +123,10 @@ function validCloneAudioNodeId(value: string | undefined, options: CanvasVideoRe
 
 function audioSettingsSummary(config: AiConfig, cloneAudioNodeId: string, audioOptions: CanvasVideoResourceOption[]) {
     const model = config.model || config.audioModel || "";
-    if (!isMimoTtsModel(model)) return `${audioVoiceLabel(config.audioVoice)} · ${audioFormatLabel(config.audioFormat)} · ${audioSpeedLabel(config.audioSpeed)}`;
+    if (!isMimoTtsModel(model)) {
+        const channel = channelInfoForModel(config, model);
+        return `${audioVoiceLabelFor(model, config.audioVoice, channel)} · ${audioFormatLabel(config.audioFormat)} · ${audioSpeedLabel(config.audioSpeed)}`;
+    }
     const format = normalizeMimoTtsFormat(config.mimoTtsFormat).toUpperCase();
     if (isMimoPresetTtsModel(model)) return `${mimoTtsVoiceLabel(config.mimoTtsVoice)} · ${format}`;
     if (isMimoVoiceDesignModel(model)) return `音色设计 · ${format}`;

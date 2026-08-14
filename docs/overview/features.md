@@ -123,6 +123,20 @@ OpenAI 兼容图像和文本能力继续复用现有接口：
 - OpenAI 风格视频：`POST /v1/videos`、`GET /v1/videos/{id}`、`GET /v1/videos/{id}/content`
 - 火山方舟 Agent Plan / Seedance 2.0：Base URL 使用 `https://ark.cn-beijing.volces.com/api/plan/v3`，创建任务为 `POST /contents/generations/tasks`，查询任务为 `GET /contents/generations/tasks/{id}`，成功结果读取 `content.video_url`
 
+Grok2API / xAI 渠道（`protocol=grok2api` 或 `protocol=xai`）：
+
+- 管理后台与本地渠道协议下拉可选 `Grok2API`、`xAI`
+- 图片：`POST /v1/images/generations`、`POST /v1/images/edits`；支持 `aspect_ratio`、`resolution`（`1k`/`2k`）、`n`、`response_format`
+- 图生图/编辑：单参考图用 `image:{url}`，多参考图用 `images:[{url}]`（不是视频的 `reference_images`）
+- 图片 `prompt`（含系统提示词）最长 8000 字符；超限会本地提示，不把无效请求打到上游
+- 视频：前端仍请求 `POST /v1/videos`，后端映射为上游 `/videos/generations`；轮询与内容下载保持 `/v1/videos/{id}`、`/v1/videos/{id}/content`
+- 视频字段支持 `duration`、`aspect_ratio`、`resolution`（`480p`/`720p`/`1080p`）
+- 文生视频不带图；首帧/单图用 `image:{url}` 且可 `1080p`（含 `grok-imagine-video-1.5`）；多参考图只用 `reference_images`，与 `image` 互斥，最高 `720p`
+- 视频比例不支持 `21:9` 时会吸附为 `16:9`
+- TTS：`POST /v1/audio/speech` 保持 OpenAI 字段透传；`POST /v1/tts` 走原生字段，缺省 `language=en`；音色可经 `/tts/voices` 拉取
+- 管理端“读取模型”优先上游 `/models`，并合并内置媒体目录；失败时回退内置文本+媒体目录
+- 参考文件先走本项目媒体引用上传拿到 URL；不支持本地文件直传 grok2api；视频编辑/延长接口暂未接入
+
 Base URL 如果已经以 `/v1`、`/api/v3` 或 `/api/plan/v3` 结尾，系统不会再追加 `/v1`。因此 cpa 反代或火山方舟 Agent Plan 可以继续通过现有 Base URL + API Key + Model 方式配置，不需要新增火山生图 Provider
 
 后台“拉取模型列表”会尝试真实请求 OpenAI `/models`，不会为 Agent Plan 伪造模型结果。如果火山方舟 Agent Plan 返回 404，请手动增加 `doubao-seedance-2.0` 或文档列出的其他模型名
@@ -225,7 +239,9 @@ Base URL 如果已经以 `/v1`、`/api/v3` 或 `/api/plan/v3` 结尾，系统不
 
 - 管理后台支持系统提示词、AI 调用日志、数据存储和渠道管理配置
 - 管理后台渠道可用模型支持按“新获取、已有”分组选择，编辑渠道时 API Key 留空表示沿用已保存密钥
+- 管理后台渠道协议支持 `openai`、`kie`、`mimo`、`grok2api`、`xai`
 - 管理员配置 S3/R2 后，用户上传参考图、生成结果和媒体文件可由服务端上传到对象存储，并在删除时同步清理对象和本地缓存
+- 画布打开时：本地浏览器缓存媒体可自动上传对象存储；已有 server: 指针直接回源；Grok 等上游 https 默认保留原链，可通过节点/工具栏一键上云转存
 - 登录后可将本地 IndexedDB 中的画布、素材、生成记录和媒体文件迁移到云端存储
 - 管理员可控制是否允许普通用户注册、是否允许用户自定义渠道，以及普通用户是否允许使用后台云端渠道
 - 登录用户可以同步本地直连模型渠道、画布偏好和用户 S3/R2 存储配置

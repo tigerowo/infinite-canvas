@@ -108,9 +108,9 @@ description: settings 表中 public 和 private 配置结构说明
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，当前为 `openai` |
+| `protocol` | string | 协议，当前支持 `openai`、`kie`、`mimo`、`grok2api`、`xai` |
 | `name` | string | 渠道名称 |
-| `baseUrl` | string | OpenAI 兼容接口地址 |
+| `baseUrl` | string | 模型接口地址。`openai` 为 OpenAI 兼容地址；`grok2api`/`xai` 走 xAI/Grok 媒体资源 API；`kie`/`mimo` 走各自协议适配 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |
@@ -118,6 +118,61 @@ description: settings 表中 public 和 private 配置结构说明
 | `remark` | string | 备注 |
 
 后端调用模型时，会从已启用、已配置 `baseUrl` 和 `apiKey`、且 `models` 包含目标模型的渠道中选择一个。
+
+### protocol 说明
+
+| protocol | 用途 | 说明 |
+| --- | --- | --- |
+| `openai` | OpenAI 兼容透传 | 默认协议。路径与字段基本原样转发；若模型名为 `grok-imagine-*` / `grok-voice-*`，后端仍会按 Grok 媒体能力做路径/字段适配，避免误打到错误接口 |
+| `kie` | KIE 渠道 | 图片/视频创建走 `/jobs/createTask`，轮询走 `/jobs/recordInfo` |
+| `mimo` | 小米 MiMo | 文本与 TTS 走 MiMo 适配；TTS 由 `/audio/speech` 转写为 MiMo chat 音频请求 |
+| `grok2api` | Grok2API 网关 | 图片：`/images/generations`、`/images/edits`；视频：`POST /videos` 映射为 `/videos/generations`，轮询/content 保持 `/videos/{id}`；TTS：`/audio/speech` 保持 OpenAI 字段，`/tts` 为原生字段且缺省 `language=en` |
+| `xai` | xAI 官方/兼容 | 与 `grok2api` 使用同一套媒体字段与路径映射；管理端优先读上游 `/models`，并合并内置媒体目录，失败时回退内置文本+媒体目录 |
+
+#### grok2api / xai 媒体字段约定
+
+图片生成 `/images/generations`：
+
+- 常用字段：`model`、`prompt`、`aspect_ratio`、`resolution`（`1k`/`2k`）、`n`、`response_format`
+- 不发送 OpenAI 风格 `quality`/`size`；非法比例会吸附到官方支持集（如 `21:9`→`20:9`）
+- `prompt`（含系统提示词）最长 8000 字符，超限本地直接报错
+
+图片编辑 `/images/edits`：
+
+- 单参考图：`image:{url}`
+- 多参考图：`images:[{url}]`（不要用视频字段 `reference_images`）
+- 可选 `size`：`auto` / `1024x1024` / `1024x1536` / `1536x1024`
+- `resolution` 支持 `1k`/`2k`（具体上游账号能力以实测为准）
+
+视频生成（本项目 `POST /videos` → 上游 `/videos/generations`）：
+
+- 常用字段：`model`、`prompt`、`duration`（1–15）、`aspect_ratio`、`resolution`（`480p`/`720p`/`1080p`）
+- 文生视频：不带图
+- 首帧/单图：`image:{url}`；**可使用 `1080p`**（含 `grok-imagine-video-1.5`）
+- 多参考图：仅 `reference_images:[{url}]`；与 `image` 互斥；**最高 `720p`**（选 1080p 会降为 720p）
+- 视频比例白名单：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`；UI `21:9` 会吸附为 `16:9`
+- 轮询识别 `request_id`、`status`（含 `done`/`pending`）、`video.url`
+
+TTS：
+
+- `/audio/speech`：OpenAI 字段 `input`/`voice`/`response_format`/`speed` 透传（上游可默认 `language=en`）
+- `/tts`：原生 `text`/`voice_id`/`language`，缺 `language` 时默认 `en`
+- 音色列表：`GET /tts/voices`
+
+`grok2api` / `xai` 管理端内置媒体模型目录（会与上游 `/models` 合并）：
+
+- `grok-imagine-image`
+- `grok-imagine-image-quality`
+- `grok-imagine-image-2.0`
+- `grok-imagine-image-edit`
+- `grok-imagine-video`
+- `grok-imagine-video-1.5`
+- `grok-voice-latest`
+- `grok-voice-think-fast-2.0`
+
+上游不可用时还会回退常见文本模型名（如 `grok-4`、`grok-3-mini` 等），实际权限需人工核对。
+
+参考图/音频请先上传到本项目 `/api/v1/media/references` 得到可访问 URL，再作为 `image.url`、`images[].url` 或 `reference_images[].url` 传入。当前不支持浏览器把本地文件直接 multipart 上传到 grok2api。视频编辑 `/videos/edits`、延长 `/videos/extensions` 暂未接入。
 
 `promptSync` 字段：
 
