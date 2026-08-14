@@ -18,9 +18,12 @@ function mediaPlaybackUrl(url?: string) {
     const value = String(url || "").trim();
     if (!value) return "";
     // Older builds may have persisted image-proxy URLs for video/audio; Safari cannot play those.
-    if (value.startsWith("/api/proxy-image?")) {
+    // Handle both relative (/api/proxy-image?...) and absolute (https://host/api/proxy-image?...) forms.
+    if (value.includes("/api/proxy-image?")) {
         try {
-            const query = value.includes("://") ? new URL(value).searchParams : new URL(value, "http://local.invalid").searchParams;
+            const query = value.startsWith("http://") || value.startsWith("https://")
+                ? new URL(value).searchParams
+                : new URL(value, typeof window === "undefined" ? "http://local.invalid" : window.location.origin).searchParams;
             const target = query.get("url");
             if (target) return target;
         } catch {
