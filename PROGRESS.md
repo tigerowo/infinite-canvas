@@ -17,3 +17,9 @@
 ## 状态
 
 - 基线及中间验证均以实际命令输出为准；最终验收贴 `go test -count=1 ./...` 输出。
+
+## 文档同步
+
+- 已更新 `docs/backend/system-settings.md`、`docs/overview/features.md`、`docs/progress/pending-test.md`、`CHANGELOG.md`。
+- 视频分辨率约束写清：首帧 `image` 可 1080p；多参考 `reference_images` 最高 720p。
+- 图生图多参考写清为 `images:[{url}]`，与视频 `reference_images` 区分。

@@ -127,9 +127,39 @@ description: settings 表中 public 和 private 配置结构说明
 | `kie` | KIE 渠道 | 图片/视频创建走 `/jobs/createTask`，轮询走 `/jobs/recordInfo` |
 | `mimo` | 小米 MiMo | 文本与 TTS 走 MiMo 适配；TTS 由 `/audio/speech` 转写为 MiMo chat 音频请求 |
 | `grok2api` | Grok2API 网关 | 图片：`/images/generations`、`/images/edits`；视频：`POST /videos` 映射为 `/videos/generations`，轮询/content 保持 `/videos/{id}`；TTS：`/audio/speech` 保持 OpenAI 字段，`/tts` 为原生字段且缺省 `language=en` |
-| `xai` | xAI 官方/兼容 | 与 `grok2api` 使用同一套媒体字段与路径映射；管理端读取模型列表返回内置 Grok 目录，不依赖上游 `/models` |
+| `xai` | xAI 官方/兼容 | 与 `grok2api` 使用同一套媒体字段与路径映射；管理端优先读上游 `/models`，并合并内置媒体目录，失败时回退内置文本+媒体目录 |
 
-`grok2api` / `xai` 管理端内置模型目录：
+#### grok2api / xai 媒体字段约定
+
+图片生成 `/images/generations`：
+
+- 常用字段：`model`、`prompt`、`aspect_ratio`、`resolution`（`1k`/`2k`）、`n`、`response_format`
+- 不发送 OpenAI 风格 `quality`/`size`；非法比例会吸附到官方支持集（如 `21:9`→`20:9`）
+- `prompt`（含系统提示词）最长 8000 字符，超限本地直接报错
+
+图片编辑 `/images/edits`：
+
+- 单参考图：`image:{url}`
+- 多参考图：`images:[{url}]`（不要用视频字段 `reference_images`）
+- 可选 `size`：`auto` / `1024x1024` / `1024x1536` / `1536x1024`
+- `resolution` 支持 `1k`/`2k`（具体上游账号能力以实测为准）
+
+视频生成（本项目 `POST /videos` → 上游 `/videos/generations`）：
+
+- 常用字段：`model`、`prompt`、`duration`（1–15）、`aspect_ratio`、`resolution`（`480p`/`720p`/`1080p`）
+- 文生视频：不带图
+- 首帧/单图：`image:{url}`；**可使用 `1080p`**（含 `grok-imagine-video-1.5`）
+- 多参考图：仅 `reference_images:[{url}]`；与 `image` 互斥；**最高 `720p`**（选 1080p 会降为 720p）
+- 视频比例白名单：`1:1`、`16:9`、`9:16`、`4:3`、`3:4`、`3:2`、`2:3`；UI `21:9` 会吸附为 `16:9`
+- 轮询识别 `request_id`、`status`（含 `done`/`pending`）、`video.url`
+
+TTS：
+
+- `/audio/speech`：OpenAI 字段 `input`/`voice`/`response_format`/`speed` 透传（上游可默认 `language=en`）
+- `/tts`：原生 `text`/`voice_id`/`language`，缺 `language` 时默认 `en`
+- 音色列表：`GET /tts/voices`
+
+`grok2api` / `xai` 管理端内置媒体模型目录（会与上游 `/models` 合并）：
 
 - `grok-imagine-image`
 - `grok-imagine-image-quality`
@@ -140,7 +170,9 @@ description: settings 表中 public 和 private 配置结构说明
 - `grok-voice-latest`
 - `grok-voice-think-fast-2.0`
 
-参考图/音频请先上传到本项目 `/api/v1/media/references` 得到可访问 URL，再作为 `image.url` 或 `reference_images[].url` 传入。当前不支持浏览器把本地文件直接 multipart 上传到 grok2api。视频延长接口 `/videos/extensions` 暂未接入。
+上游不可用时还会回退常见文本模型名（如 `grok-4`、`grok-3-mini` 等），实际权限需人工核对。
+
+参考图/音频请先上传到本项目 `/api/v1/media/references` 得到可访问 URL，再作为 `image.url`、`images[].url` 或 `reference_images[].url` 传入。当前不支持浏览器把本地文件直接 multipart 上传到 grok2api。视频编辑 `/videos/edits`、延长 `/videos/extensions` 暂未接入。
 
 `promptSync` 字段：
 

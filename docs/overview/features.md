@@ -126,13 +126,16 @@ OpenAI 兼容图像和文本能力继续复用现有接口：
 Grok2API / xAI 渠道（`protocol=grok2api` 或 `protocol=xai`）：
 
 - 管理后台与本地渠道协议下拉可选 `Grok2API`、`xAI`
-- 图片：`POST /v1/images/generations`、`POST /v1/images/edits`；支持 `aspect_ratio`、`resolution`、`n`、`response_format`
-- 图生图/编辑：单参考图映射为 `image:{url}`，多参考图映射为 `reference_images:[{url}]`
+- 图片：`POST /v1/images/generations`、`POST /v1/images/edits`；支持 `aspect_ratio`、`resolution`（`1k`/`2k`）、`n`、`response_format`
+- 图生图/编辑：单参考图用 `image:{url}`，多参考图用 `images:[{url}]`（不是视频的 `reference_images`）
+- 图片 `prompt`（含系统提示词）最长 8000 字符；超限会本地提示，不把无效请求打到上游
 - 视频：前端仍请求 `POST /v1/videos`，后端映射为上游 `/videos/generations`；轮询与内容下载保持 `/v1/videos/{id}`、`/v1/videos/{id}/content`
-- 视频字段支持 `duration`、`aspect_ratio`、`resolution`；文生视频不带图，首帧/单图用 `image:{url}`，多参考图用 `reference_images`
-- TTS：`POST /v1/audio/speech` 保持 OpenAI 字段透传；`POST /v1/tts` 走原生字段，缺省 `language=en`
-- 管理端“读取模型”返回内置 Grok 目录，不依赖上游 `/models`
-- 参考文件先走本项目媒体引用上传拿到 URL；不支持本地文件直传 grok2api；视频延长 `/videos/extensions` 暂未接入
+- 视频字段支持 `duration`、`aspect_ratio`、`resolution`（`480p`/`720p`/`1080p`）
+- 文生视频不带图；首帧/单图用 `image:{url}` 且可 `1080p`（含 `grok-imagine-video-1.5`）；多参考图只用 `reference_images`，与 `image` 互斥，最高 `720p`
+- 视频比例不支持 `21:9` 时会吸附为 `16:9`
+- TTS：`POST /v1/audio/speech` 保持 OpenAI 字段透传；`POST /v1/tts` 走原生字段，缺省 `language=en`；音色可经 `/tts/voices` 拉取
+- 管理端“读取模型”优先上游 `/models`，并合并内置媒体目录；失败时回退内置文本+媒体目录
+- 参考文件先走本项目媒体引用上传拿到 URL；不支持本地文件直传 grok2api；视频编辑/延长接口暂未接入
 
 Base URL 如果已经以 `/v1`、`/api/v3` 或 `/api/plan/v3` 结尾，系统不会再追加 `/v1`。因此 cpa 反代或火山方舟 Agent Plan 可以继续通过现有 Base URL + API Key + Model 方式配置，不需要新增火山生图 Provider
 
