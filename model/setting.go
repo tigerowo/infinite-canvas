@@ -56,14 +56,15 @@ type SystemPromptSetting struct {
 }
 
 type PublicModelChannelInfo struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	BaseURL string   `json:"baseUrl"`
-	Models  []string `json:"models"`
-	Weight  int      `json:"weight"`
-	Timeout int      `json:"timeout"`
-	Enabled bool     `json:"enabled"`
-	Remark  string   `json:"remark"`
+	ID       string   `json:"id"`
+	Protocol string   `json:"protocol"`
+	Name     string   `json:"name"`
+	BaseURL  string   `json:"baseUrl"`
+	Models   []string `json:"models"`
+	Weight   int      `json:"weight"`
+	Timeout  int      `json:"timeout"`
+	Enabled  bool     `json:"enabled"`
+	Remark   string   `json:"remark"`
 }
 
 // PublicSetting 公开配置。

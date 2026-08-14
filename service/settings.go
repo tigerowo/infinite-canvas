@@ -963,14 +963,15 @@ func publicChannelInfos(channels []model.ModelChannel) []model.PublicModelChanne
 			continue
 		}
 		result = append(result, model.PublicModelChannelInfo{
-			ID:      channel.ID,
-			Name:    channel.Name,
-			BaseURL: channel.BaseURL,
-			Models:  append([]string{}, channel.Models...),
-			Weight:  channel.Weight,
-			Timeout: channel.Timeout,
-			Enabled: channel.Enabled,
-			Remark:  channel.Remark,
+			ID:       channel.ID,
+			Protocol: channel.Protocol,
+			Name:     channel.Name,
+			BaseURL:  channel.BaseURL,
+			Models:   append([]string{}, channel.Models...),
+			Weight:   channel.Weight,
+			Timeout:  channel.Timeout,
+			Enabled:  channel.Enabled,
+			Remark:   channel.Remark,
 		})
 	}
 	return result

@@ -1,10 +1,10 @@
 import axios from "axios";
 import { nanoid } from "nanoid";
 
-import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
+import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValueFor, shouldUseGrokVoiceOptions } from "@/lib/audio-generation";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, channelInfoForModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceAudio } from "@/types/media";
 
@@ -166,14 +166,45 @@ async function buildAudioSpeechRequest(config: AiConfig, model: string, prompt: 
     }
 
     const instructions = config.audioInstructions.trim();
+    const channel = channelInfoForModel(config, model);
+    const voice = normalizeAudioVoiceValueFor(model, config.audioVoice, channel);
     return {
         model,
         input: prompt,
-        voice: normalizeAudioVoiceValue(config.audioVoice),
+        voice,
         response_format: normalizeAudioFormatValue(config.audioFormat),
         speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
         ...(instructions ? { instructions } : {}),
     };
+}
+
+export type TTSVoiceOption = { value: string; label: string };
+
+export async function fetchTTSVoices(config: AiConfig, modelName?: string): Promise<TTSVoiceOption[]> {
+    const model = (modelName || config.model || config.audioModel || "").trim();
+    const channel = channelInfoForModel(config, model);
+    if (!shouldUseGrokVoiceOptions(model, channel)) return [];
+    const headers = aiHeaders(config);
+    const url = `${aiApiUrl(config, "/tts/voices")}?model=${encodeURIComponent(model)}`;
+    const response = await axios.get(url, { headers });
+    const payload = response.data;
+    const list = Array.isArray(payload?.voices)
+        ? payload.voices
+        : Array.isArray(payload?.data?.voices)
+            ? payload.data.voices
+            : Array.isArray(payload?.data)
+                ? payload.data
+                : Array.isArray(payload)
+                    ? payload
+                    : [];
+    return list
+        .map((item: any) => {
+            const value = String(item?.voice_id || item?.id || item?.value || "").trim();
+            if (!value) return null;
+            const label = String(item?.name || item?.label || value).trim() || value;
+            return { value, label };
+        })
+        .filter((item: TTSVoiceOption | null): item is TTSVoiceOption => Boolean(item));
 }
 
 async function buildMiMoNativeRequest(config: AiConfig, model: string, prompt: string, referenceAudio?: ReferenceAudio) {

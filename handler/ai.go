@@ -85,6 +85,10 @@ func AITTS(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/tts")
 }
 
+func AITTSVoices(w http.ResponseWriter, r *http.Request) {
+	proxyAIGetRequest(w, r, "/tts/voices")
+}
+
 func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 	startedAt := time.Now()
 	user, ok := service.UserFromContext(r.Context())

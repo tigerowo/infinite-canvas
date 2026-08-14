@@ -73,7 +73,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; name?: string; baseUrl?: string; models?: string[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: string; name?: string; baseUrl?: string; models?: string[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -475,6 +475,25 @@ export function localChannelForActiveModel(config: AiConfig) {
     const channels = normalizeLocalChannels(config);
     const preferredId = channelIdForActiveModel(config);
     return channels.find((channel) => channel.id === preferredId && channel.models.includes(config.model)) || channels.find((channel) => channel.models.includes(config.model)) || channels.find((channel) => channel.id === preferredId) || channels[0];
+}
+
+export function channelInfoForModel(config: AiConfig, modelName = config.model || config.audioModel) {
+    const model = (modelName || "").trim();
+    if (config.channelMode === "local") {
+        const channel = localChannelForActiveModel({ ...config, model: model || config.model });
+        return channel ? { id: channel.id, protocol: channel.protocol, name: channel.name, baseUrl: channel.baseUrl, models: channel.models } : null;
+    }
+    const preferredId = modelMatchesCapability(model, "audio")
+        ? config.audioChannelId || config.activeChannelId
+        : channelIdForActiveModel({ ...config, model: model || config.model });
+    const channels = config.publicChannels || [];
+    return (
+        channels.find((channel) => channel.id === preferredId && (channel.models || []).includes(model)) ||
+        channels.find((channel) => (channel.models || []).includes(model)) ||
+        channels.find((channel) => channel.id === preferredId) ||
+        channels[0] ||
+        null
+    );
 }
 
 export type DirectAIProvider = "kie" | "apimart";

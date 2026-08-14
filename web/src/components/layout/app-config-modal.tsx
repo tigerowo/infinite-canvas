@@ -8,9 +8,10 @@ import { fetchImageModels } from "@/services/api/image";
 import { fetchUserConfig, measureUserStorageProvider, syncUserModelConfig, syncUserStorageProvider } from "@/services/api/user-config";
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, loadStorageConfig, loadUserS3StorageProvider, loadUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, type UserStorageProvider } from "@/services/image-storage";
-import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
+import { audioFormatOptions, audioVoiceOptionsFor, normalizeAudioSpeedValue, normalizeAudioVoiceValueFor, shouldUseGrokVoiceOptions } from "@/lib/audio-generation";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
-import { filterModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
+import { channelInfoForModel, filterModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
+import { fetchTTSVoices } from "@/services/api/audio";
 import { useUserStore } from "@/stores/use-user-store";
 
 type ModelGroup = {
@@ -41,6 +42,8 @@ export function AppConfigModal() {
     const [measuringStorageType, setMeasuringStorageType] = useState<"s3" | "webdav" | null>(null);
     const [storageUsageText, setStorageUsageText] = useState("");
     const [webDAVStorageUsageText, setWebDAVStorageUsageText] = useState("");
+    const [grokVoiceOptions, setGrokVoiceOptions] = useState(() => audioVoiceOptionsFor("grok-voice-latest"));
+    const [loadingGrokVoices, setLoadingGrokVoices] = useState(false);
     const config = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
@@ -48,6 +51,40 @@ export function AppConfigModal() {
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
     const publicSettings = useConfigStore((state) => state.publicSettings);
+    const audioChannel = channelInfoForModel(config, config.audioModel);
+    const useGrokVoices = shouldUseGrokVoiceOptions(config.audioModel, audioChannel);
+    const voiceOptions = useGrokVoices ? grokVoiceOptions : audioVoiceOptionsFor(config.audioModel, audioChannel);
+    const selectedAudioVoice = normalizeAudioVoiceValueFor(config.audioModel, config.audioVoice, audioChannel);
+
+    useEffect(() => {
+        if (!useGrokVoices) return;
+        let cancelled = false;
+        setLoadingGrokVoices(true);
+        fetchTTSVoices({ ...config, model: config.audioModel }, config.audioModel)
+            .then((voices) => {
+                if (cancelled || !voices.length) return;
+                setGrokVoiceOptions(voices);
+                if (!voices.some((item) => item.value === selectedAudioVoice)) {
+                    updateConfig("audioVoice", voices[0].value);
+                }
+            })
+            .catch(() => {
+                if (cancelled) return;
+                setGrokVoiceOptions(audioVoiceOptionsFor(config.audioModel, audioChannel));
+            })
+            .finally(() => {
+                if (!cancelled) setLoadingGrokVoices(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [useGrokVoices, config.audioModel, config.audioChannelId, config.channelMode, audioChannel?.protocol, audioChannel?.baseUrl]);
+
+    useEffect(() => {
+        if (isMimoTtsModel(config.audioModel)) return;
+        const nextVoice = normalizeAudioVoiceValueFor(config.audioModel, config.audioVoice, audioChannel);
+        if (nextVoice !== config.audioVoice) updateConfig("audioVoice", nextVoice);
+    }, [config.audioModel, config.audioVoice, audioChannel?.protocol, audioChannel?.baseUrl]);
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
     const effectiveConfig = useEffectiveConfig();
@@ -385,7 +422,13 @@ export function AppConfigModal() {
                             </Form.Item>
                         ) : isMimoTtsModel(config.audioModel) ? null : (
                             <Form.Item label="默认音频声音" className="mb-4">
-                                <Select value={config.audioVoice} options={audioVoiceOptions} onChange={(value) => updateConfig("audioVoice", value)} />
+                                <Select
+                                    value={selectedAudioVoice}
+                                    options={voiceOptions}
+                                    loading={loadingGrokVoices}
+                                    placeholder={useGrokVoices ? "Grok 音色" : "OpenAI 音色"}
+                                    onChange={(value) => updateConfig("audioVoice", value)}
+                                />
                             </Form.Item>
                         )}
                         <Form.Item label="默认音频格式" className="mb-4">
