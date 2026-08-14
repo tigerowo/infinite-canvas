@@ -13,7 +13,7 @@ import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask 
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
-import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -1933,10 +1933,27 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [message],
     );
 
-    const downloadNodeImage = useCallback((node: CanvasNodeData) => {
+    const downloadNodeImage = useCallback(async (node: CanvasNodeData) => {
         if ((!isCanvasImageNodeType(node.type) && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content)}`);
-    }, []);
+        const isVideo = node.type === CanvasNodeType.Video;
+        const isAudio = node.type === CanvasNodeType.Audio;
+        const filename = `canvas-${node.type}-${node.id}.${isVideo ? "mp4" : isAudio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.mimeType || node.metadata.content)}`;
+        try {
+            const source = isVideo || isAudio
+                ? await resolveMediaUrl(node.metadata.storageKey, node.metadata.content)
+                : await resolveImageUrl(node.metadata.storageKey, node.metadata.content);
+            if (!source) throw new Error("媒体地址不可用");
+            // blob:/data: can download directly; /api/files and remote URLs should be fetched first.
+            if (source.startsWith("blob:") || source.startsWith("data:")) {
+                saveAs(source, filename);
+                return;
+            }
+            const blob = await downloadRemoteMedia(source);
+            saveAs(blob, filename);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "下载失败");
+        }
+    }, [message]);
 
     const uploadNodeMediaToCloud = useCallback(async (node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || node.metadata.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
@@ -4387,8 +4404,9 @@ function Shortcut({ keys, value }: { keys: string[]; value: string }) {
     );
 }
 
-function imageExtension(dataUrl: string) {
-    return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
+function imageExtension(value?: string) {
+    const text = String(value || "");
+    return text.match(/^data:image[/]([^;]+)/)?.[1] || text.match(/image[/]([^;,\s]+)/)?.[1] || (text.includes(".jpg") || text.includes(".jpeg") ? "jpg" : text.includes(".webp") ? "webp" : "png");
 }
 
 function audioExtension(mimeType?: string) {
