@@ -305,6 +305,9 @@ func normalizeVideoCreateBody(body []byte, contentType string, modelName string,
 	if isAPIMartChannel(channel, modelName) && upstreamPath == "/videos/generations" {
 		return normalizeAPIMartVideoBody(body, contentType, modelName, channel)
 	}
+	if isGrok2APIFamilyChannel(channel, modelName) && upstreamPath == "/videos/generations" {
+		return normalizeGrok2APIVideoBody(body, contentType, modelName)
+	}
 	return body, contentType, nil
 }
 

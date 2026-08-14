@@ -81,6 +81,10 @@ func AIAudioSpeech(w http.ResponseWriter, r *http.Request) {
 	proxyAIRequest(w, r, "/audio/speech")
 }
 
+func AITTS(w http.ResponseWriter, r *http.Request) {
+	proxyAIRequest(w, r, "/tts")
+}
+
 func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 	startedAt := time.Now()
 	user, ok := service.UserFromContext(r.Context())
@@ -164,6 +168,13 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		if err != nil {
 			log.Printf("AI proxy normalize APIMart image request failed: model=%s err=%v", modelName, err)
 			Fail(w, "AI 接口请求失败")
+			return
+		}
+	} else if isGrok2APIFamilyChannel(channel, modelName) {
+		body, contentType, err = normalizeGrok2APIRequestBody(body, contentType, modelName, upstreamPath)
+		if err != nil {
+			log.Printf("AI proxy normalize grok2api request failed: model=%s err=%v", modelName, err)
+			Fail(w, err.Error())
 			return
 		}
 	}
@@ -540,6 +551,12 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 			if taskID != "" && !strings.Contains(taskID, "/") {
 				return "/tasks/" + url.PathEscape(taskID) + "?language=zh"
 			}
+		}
+		return path
+	}
+	if isGrok2APIFamilyChannel(channel, modelName) {
+		if path == "/videos" {
+			return "/videos/generations"
 		}
 		return path
 	}

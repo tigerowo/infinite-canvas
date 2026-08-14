@@ -108,9 +108,9 @@ description: settings 表中 public 和 private 配置结构说明
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `protocol` | string | 协议，当前为 `openai` |
+| `protocol` | string | 协议，当前支持 `openai`、`grok2api`、`xai` 等 |
 | `name` | string | 渠道名称 |
-| `baseUrl` | string | OpenAI 兼容接口地址 |
+| `baseUrl` | string | 模型接口地址；`grok2api`/`xai` 按标准 xAI 资源 API 调用 |
 | `apiKey` | string | 渠道密钥 |
 | `models` | string[] | 该渠道可用模型 |
 | `weight` | number | 渠道权重；同一模型有多个可用渠道时按权重随机 |

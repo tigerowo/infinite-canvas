@@ -491,6 +491,11 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 		sort.Strings(result)
 		return result, nil
 	}
+	if isGrok2APIAdminChannel(channel) {
+		result := grok2APIModels()
+		sort.Strings(result)
+		return result, nil
+	}
 	request, err := http.NewRequest(http.MethodGet, BuildModelChannelURL(channel, "/models"), nil)
 	if err != nil {
 		return nil, err
@@ -528,6 +533,25 @@ func isKIEAdminChannel(channel model.ModelChannel) bool {
 	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
 	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
 	return protocol == "kie" || strings.Contains(baseURL, "kie.ai")
+}
+
+func isGrok2APIAdminChannel(channel model.ModelChannel) bool {
+	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
+	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
+	return protocol == "grok2api" || protocol == "xai" || strings.Contains(baseURL, "grok2api")
+}
+
+func grok2APIModels() []string {
+	return []string{
+		"grok-imagine-image",
+		"grok-imagine-image-quality",
+		"grok-imagine-image-2.0",
+		"grok-imagine-image-edit",
+		"grok-imagine-video",
+		"grok-imagine-video-1.5",
+		"grok-voice-latest",
+		"grok-voice-think-fast-2.0",
+	}
 }
 
 func kieMarketModels() []string {
