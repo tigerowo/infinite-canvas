@@ -517,12 +517,20 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
             if (repaired.changed) {
-                // Persist repaired stable URLs / server keys so reverse-proxy opens keep working.
+                // Persist repaired stable URLs / server keys / task backfills so other browsers keep working.
                 updateProject(projectId, { nodes: repaired.nodes, chatSessions: repaired.sessions });
+                if (repaired.uploaded > 0 || repaired.broken >= 0) {
+                    const parts = [];
+                    if (repaired.uploaded > 0) parts.push(`已上云 ${repaired.uploaded} 个本地文件`);
+                    // Count recovered displayable nodes roughly via changed without exposing more stats.
+                    parts.push("已尝试从云端/生成任务恢复媒体");
+                    if (repaired.broken > 0) parts.push(`${repaired.broken} 个仍失效`);
+                    message.info(parts.join("，"));
+                }
             }
         };
         void restore();
-    }, [hydrated, openProject, projectId, router, updateProject]);
+    }, [hydrated, message, openProject, projectId, router, updateProject]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -4773,7 +4781,8 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
                 ...mediaFieldsFromStableSource({ url, storageKey: "", mimeType: "image/png", bytes: 0 }),
                 status: NODE_STATUS_SUCCESS,
                 progress: 100,
-                imageTaskId: undefined,
+                // Keep task ids so another browser can backfill from canvas image-tasks.
+                imageTaskId: task.id,
                 imageTaskResultId: task.id,
                 isBatchRoot: undefined,
                 batchChildIds: undefined,

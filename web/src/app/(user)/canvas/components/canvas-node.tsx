@@ -535,7 +535,7 @@ function BrokenMediaContent({ node, theme, onRetry }: Pick<NodeContentRendererPr
                 <AlertTriangle className="size-5 opacity-70" />
             </div>
             <div className="max-w-[240px] text-xs leading-5 opacity-80">
-                {node.metadata?.mediaError || "媒体仅存于原浏览器本地，已失效"}
+                {node.metadata?.mediaError || "本地缓存丢失；若无法从生成任务恢复，请重新生成"}
             </div>
             {onRetry ? (
                 <button

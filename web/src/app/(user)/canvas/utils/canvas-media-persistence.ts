@@ -299,13 +299,13 @@ export async function repairCanvasMediaRef(
         } else {
             content = "";
             mediaStatus = "broken";
-            mediaError = "媒体仅存于原浏览器本地，已失效";
+            mediaError = "本地缓存丢失；若无法从生成任务恢复，请重新生成";
         }
     } else if (isBlobUrl(content)) {
         // Foreign/local blob without readable storageKey cannot be recovered on another origin.
         content = "";
         mediaStatus = "broken";
-        mediaError = "媒体仅存于原浏览器本地，已失效";
+        mediaError = "本地缓存丢失；若无法从生成任务恢复，请重新生成";
     } else if (!content && !storageKey) {
         mediaStatus = ref.mediaStatus;
         mediaError = ref.mediaError;
@@ -318,12 +318,12 @@ export async function repairCanvasMediaRef(
             if (blobOrigin !== "null" && blobOrigin !== window.location.origin) {
                 content = "";
                 mediaStatus = "broken";
-                mediaError = "媒体仅存于原浏览器本地，已失效";
+                mediaError = "本地缓存丢失；若无法从生成任务恢复，请重新生成";
             }
         } catch {
             content = "";
             mediaStatus = "broken";
-            mediaError = "媒体仅存于原浏览器本地，已失效";
+            mediaError = "本地缓存丢失；若无法从生成任务恢复，请重新生成";
         }
     }
 
@@ -357,14 +357,256 @@ function applyRefToMetadata(metadata: CanvasNodeMetadata | undefined, ref: Canva
     };
 }
 
+function nodeHasDisplayableMedia(metadata: CanvasNodeMetadata | undefined) {
+    const content = (metadata?.content || "").trim();
+    const storageKey = (metadata?.storageKey || "").trim();
+    if (storageKey.startsWith("server:")) return true;
+    if (isStableMediaUrl(content) && !isBlobUrl(content)) return true;
+    return false;
+}
+
+function collectImageTaskIds(nodes: CanvasNodeData[]) {
+    const ids: string[] = [];
+    for (const node of nodes) {
+        if (!isCanvasImageNodeType(node.type)) continue;
+        if (nodeHasDisplayableMedia(node.metadata)) continue;
+        const id = (node.metadata?.imageTaskResultId || node.metadata?.imageTaskId || "").trim();
+        if (id) ids.push(id);
+    }
+    return Array.from(new Set(ids));
+}
+
+async function authJsonHeaders() {
+    const token = useUserStore.getState().token;
+    if (!token) return null;
+    return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
+async function batchFetchImageTasks(ids: string[]) {
+    const headers = await authJsonHeaders();
+    if (!headers || !ids.length) return new Map<string, Record<string, any>>();
+    const unique = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+    const map = new Map<string, Record<string, any>>();
+    // Chunk to avoid oversized payloads.
+    for (let i = 0; i < unique.length; i += 50) {
+        const chunk = unique.slice(i, i + 50);
+        try {
+            const response = await fetch("/api/v1/canvas/image-tasks/status", {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ ids: chunk }),
+            });
+            if (!response.ok) continue;
+            const payload = (await response.json().catch(() => null)) as { code?: number; data?: any[] } | null;
+            if (payload?.code !== 0 || !Array.isArray(payload.data)) continue;
+            for (const task of payload.data) {
+                const id = String(task?.id || "").trim();
+                if (id) map.set(id, task);
+            }
+        } catch {
+            // ignore chunk failures; remaining nodes stay broken
+        }
+    }
+    return map;
+}
+
+async function fetchVideoTask(taskId: string) {
+    const headers = await authJsonHeaders();
+    if (!headers || !taskId) return null;
+    try {
+        // Prefer account video-task record (has video_url after completion).
+        const listResponse = await fetch("/api/v1/video-tasks", { headers });
+        if (listResponse.ok) {
+            const listPayload = (await listResponse.json().catch(() => null)) as { code?: number; data?: any[] } | null;
+            if (listPayload?.code === 0 && Array.isArray(listPayload.data)) {
+                const hit = listPayload.data.find((item) => {
+                    const id = String(item?.id || item?.task_id || "").trim();
+                    const upstream = String(item?.upstreamTaskId || item?.upstream_task_id || item?.video_id || "").trim();
+                    return id === taskId || upstream === taskId;
+                });
+                if (hit) return hit;
+            }
+        }
+        const response = await fetch(`/api/v1/videos/${encodeURIComponent(taskId)}`, { headers });
+        if (!response.ok) return null;
+        const payload = (await response.json().catch(() => null)) as { code?: number; data?: any } | null;
+        if (payload?.code === 0 && payload.data) return payload.data;
+        // Some handlers return the task object directly under data-less body.
+        if (payload && !("code" in payload)) return payload as any;
+        return payload?.data || null;
+    } catch {
+        return null;
+    }
+}
+
+async function fetchAudioTask(taskId: string) {
+    const headers = await authJsonHeaders();
+    if (!headers || !taskId) return null;
+    try {
+        const response = await fetch(`/api/v1/canvas/audio-tasks/${encodeURIComponent(taskId)}`, { headers });
+        if (!response.ok) return null;
+        const payload = (await response.json().catch(() => null)) as { code?: number; data?: any } | null;
+        if (payload?.code !== 0 || !payload.data) return null;
+        return payload.data;
+    } catch {
+        return null;
+    }
+}
+
+function taskMediaUrl(task: Record<string, any> | null | undefined, kind: "image" | "video" | "audio") {
+    if (!task) return { url: "", storageKey: "" };
+    const status = String(task.status || "").toLowerCase();
+    const failed = ["failed", "fail", "error", "cancelled", "canceled"].includes(status);
+    if (failed) return { url: "", storageKey: "" };
+    const storageKey = String(task.storageKey || task.storage_key || "").trim();
+    if (kind === "image") {
+        const urls = [
+            task.image_url,
+            task.url,
+            ...(Array.isArray(task.image_urls) ? task.image_urls : []),
+        ]
+            .map((item) => String(item || "").trim())
+            .filter(Boolean);
+        return { url: urls[0] || "", storageKey };
+    }
+    if (kind === "video") {
+        const url = String(task.video_url || task.url || task.videoUrl || "").trim();
+        return { url, storageKey };
+    }
+    const url = String(task.audio_url || task.url || "").trim();
+    return { url, storageKey };
+}
+
+function isTaskCompletedEnough(task: Record<string, any> | null | undefined, url: string) {
+    if (!task) return false;
+    if (url) return true;
+    const status = String(task.status || "").toLowerCase();
+    return ["completed", "complete", "done", "succeeded", "success"].includes(status);
+}
+
+async function backfillNodeFromTasks(
+    node: CanvasNodeData,
+    imageTasks: Map<string, Record<string, any>>,
+): Promise<{ node: CanvasNodeData; changed: boolean }> {
+    const metadata = node.metadata || {};
+    if (nodeHasDisplayableMedia(metadata)) return { node, changed: false };
+
+    if (isCanvasImageNodeType(node.type)) {
+        const taskId = (metadata.imageTaskResultId || metadata.imageTaskId || "").trim();
+        if (!taskId) return { node, changed: false };
+        const task = imageTasks.get(taskId);
+        const media = taskMediaUrl(task, "image");
+        if (!isTaskCompletedEnough(task, media.url) || (!media.url && !media.storageKey.startsWith("server:"))) {
+            return { node, changed: false };
+        }
+        const fields = mediaFieldsFromStableSource({
+            url: media.url,
+            storageKey: media.storageKey,
+            mimeType: String(task?.mimeType || metadata.mimeType || "image/png"),
+            bytes: Number(task?.bytes || metadata.bytes || 0) || undefined,
+            width: Number(task?.width || metadata.naturalWidth || 0) || undefined,
+            height: Number(task?.height || metadata.naturalHeight || 0) || undefined,
+        });
+        // Prefer proxied display for remote http(s).
+        if (isHttpUrl(fields.content)) fields.content = displayUrl(fields.content || "");
+        if (fields.storageKey?.startsWith("server:") && !fields.content) {
+            const resolved = await resolveImageUrl(fields.storageKey, "");
+            fields.content = resolved || fields.content;
+        }
+        return {
+            node: {
+                ...node,
+                metadata: {
+                    ...metadata,
+                    ...fields,
+                    status: "success",
+                    mediaStatus: fields.mediaStatus || "ok",
+                    mediaError: undefined,
+                    imageTaskId: metadata.imageTaskId || taskId,
+                    imageTaskResultId: metadata.imageTaskResultId || taskId,
+                },
+            },
+            changed: true,
+        };
+    }
+
+    if (node.type === CanvasNodeType.Video) {
+        const taskId = (metadata.videoTaskId || "").trim();
+        if (!taskId) return { node, changed: false };
+        const task = await fetchVideoTask(taskId);
+        const media = taskMediaUrl(task, "video");
+        if (!media.url && !media.storageKey.startsWith("server:")) return { node, changed: false };
+        const fields = mediaFieldsFromStableSource({
+            url: media.url,
+            storageKey: media.storageKey,
+            mimeType: metadata.mimeType || "video/mp4",
+        });
+        if (isHttpUrl(fields.content)) fields.content = displayUrl(fields.content || "");
+        if (fields.storageKey?.startsWith("server:") && !fields.content) {
+            fields.content = (await resolveMediaUrl(fields.storageKey, "")) || "";
+        }
+        return {
+            node: {
+                ...node,
+                metadata: {
+                    ...metadata,
+                    ...fields,
+                    status: "success",
+                    mediaStatus: fields.mediaStatus || "ok",
+                    mediaError: undefined,
+                    videoTaskId: metadata.videoTaskId || taskId,
+                },
+            },
+            changed: true,
+        };
+    }
+
+    if (node.type === CanvasNodeType.Audio) {
+        const taskId = (metadata.audioTaskResultId || metadata.audioTaskId || "").trim();
+        if (!taskId) return { node, changed: false };
+        const task = await fetchAudioTask(taskId);
+        const media = taskMediaUrl(task, "audio");
+        if (!media.url && !media.storageKey.startsWith("server:")) return { node, changed: false };
+        const fields = mediaFieldsFromStableSource({
+            url: media.url,
+            storageKey: media.storageKey,
+            mimeType: String(task?.mimeType || metadata.mimeType || "audio/mpeg"),
+            bytes: Number(task?.bytes || metadata.bytes || 0) || undefined,
+        });
+        if (isHttpUrl(fields.content)) fields.content = displayUrl(fields.content || "");
+        if (fields.storageKey?.startsWith("server:") && !fields.content) {
+            fields.content = (await resolveMediaUrl(fields.storageKey, "")) || "";
+        }
+        return {
+            node: {
+                ...node,
+                metadata: {
+                    ...metadata,
+                    ...fields,
+                    status: "success",
+                    mediaStatus: fields.mediaStatus || "ok",
+                    mediaError: undefined,
+                    audioTaskId: metadata.audioTaskId || taskId,
+                    audioTaskResultId: metadata.audioTaskResultId || taskId,
+                },
+            },
+            changed: true,
+        };
+    }
+
+    return { node, changed: false };
+}
+
 export async function repairCanvasNodeMedia(node: CanvasNodeData, options: { allowUpload?: boolean } = {}) {
     const metadata = node.metadata || {};
     const isImage = isCanvasImageNodeType(node.type);
     const isMedia = node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio;
     if (!isImage && !isMedia) return { node, changed: false, uploaded: false };
 
-    // Skip empty idle placeholders.
-    if (!metadata.content && !metadata.storageKey && metadata.status !== "success") {
+    // Skip empty idle placeholders that were never generated.
+    const hasTask =
+        Boolean(metadata.imageTaskId || metadata.imageTaskResultId || metadata.videoTaskId || metadata.audioTaskId || metadata.audioTaskResultId);
+    if (!metadata.content && !metadata.storageKey && metadata.status !== "success" && !hasTask) {
         return { node, changed: false, uploaded: false };
     }
 
@@ -398,13 +640,47 @@ export async function repairCanvasNodesMedia(nodes: CanvasNodeData[], options: {
     let changed = false;
     let uploaded = 0;
     let broken = 0;
-    const next = [];
+    let next: CanvasNodeData[] = [];
     for (const node of nodes) {
         const result = await repairCanvasNodeMedia(node, options);
         next.push(result.node);
         if (result.changed) changed = true;
         if (result.uploaded) uploaded += 1;
-        if (result.node.metadata?.mediaStatus === "broken") broken += 1;
+    }
+
+    // Task backfill for nodes still missing portable media.
+    const imageTaskIds = collectImageTaskIds(next);
+    const imageTasks = await batchFetchImageTasks(imageTaskIds);
+    const afterBackfill: CanvasNodeData[] = [];
+    for (const node of next) {
+        if (nodeHasDisplayableMedia(node.metadata)) {
+            afterBackfill.push(node);
+            continue;
+        }
+        const result = await backfillNodeFromTasks(node, imageTasks);
+        if (result.changed) changed = true;
+        afterBackfill.push(result.node);
+    }
+    next = afterBackfill;
+
+    for (const node of next) {
+        if (node.metadata?.mediaStatus === "broken" || (!nodeHasDisplayableMedia(node.metadata) && (node.metadata?.status === "success" || node.metadata?.mediaStatus === "broken"))) {
+            // Ensure explicit broken mark when still empty after all recovery paths.
+            if (!nodeHasDisplayableMedia(node.metadata) && (node.metadata?.status === "success" || node.metadata?.imageTaskId || node.metadata?.videoTaskId || node.metadata?.audioTaskId)) {
+                if (node.metadata?.mediaStatus !== "broken") {
+                    changed = true;
+                    node.metadata = {
+                        ...node.metadata,
+                        content: "",
+                        mediaStatus: "broken",
+                        mediaError: node.metadata?.mediaError || "本地缓存丢失，任务恢复失败，请重新生成",
+                    };
+                }
+                broken += 1;
+            } else if (node.metadata?.mediaStatus === "broken") {
+                broken += 1;
+            }
+        }
     }
     return { nodes: next, changed, uploaded, broken };
 }
