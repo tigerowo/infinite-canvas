@@ -14,6 +14,23 @@ import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 import { getProxyUrl } from "@/services/image-storage";
 
+function mediaPlaybackUrl(url?: string) {
+    const value = String(url || "").trim();
+    if (!value) return "";
+    // Older builds may have persisted image-proxy URLs for video/audio; Safari cannot play those.
+    if (value.startsWith("/api/proxy-image?")) {
+        try {
+            const query = value.includes("://") ? new URL(value).searchParams : new URL(value, "http://local.invalid").searchParams;
+            const target = query.get("url");
+            if (target) return target;
+        } catch {
+            // keep original
+        }
+    }
+    return value;
+}
+
+
 type ResizeCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 const selectionBlue = "#2f80ff";
 const CanvasPanoramaViewer = dynamic(() => import("./canvas-panorama-viewer"), { ssr: false, loading: () => null });
@@ -705,7 +722,7 @@ function VideoNodeContent({ node, theme, onRetry }: NodeContentRendererProps) {
     }
     return (
         <div className="relative h-full w-full">
-            <video src={getProxyUrl(node.metadata.content)} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />
+            <video src={mediaPlaybackUrl(node.metadata.content)} controls playsInline preload="metadata" className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />
             {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge theme={theme} /> : null}
         </div>
     );
@@ -727,7 +744,7 @@ function AudioNodeContent({ node, theme, onRetry }: NodeContentRendererProps) {
                 <Music2 className="size-4 shrink-0" />
                 <span className="truncate">{node.title || "音频"}</span>
             </div>
-            <audio src={getProxyUrl(node.metadata.content)} controls className="w-full" data-canvas-no-zoom />
+            <audio src={mediaPlaybackUrl(node.metadata.content)} controls preload="metadata" className="w-full" data-canvas-no-zoom />
             {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge theme={theme} /> : null}
         </div>
     );

@@ -86,7 +86,7 @@ export async function canUploadCanvasMediaToServer() {
 /** Sync sanitize for persistence/sync. Never keep blob: in saved JSON. */
 export function normalizeCanvasMediaRefForPersistence(ref: CanvasMediaRef): CanvasMediaRef {
     const storageKey = (ref.storageKey || "").trim();
-    const content = (ref.content || "").trim();
+    const content = unwrapProxyImageUrl((ref.content || "").trim());
     if (!isBlobUrl(content)) {
         return {
             ...ref,
@@ -159,10 +159,30 @@ export function sanitizeCanvasSessionsForPersistence(sessions: CanvasAssistantSe
     }));
 }
 
-function displayUrl(url: string) {
+function displayImageUrl(url: string) {
     if (!url) return "";
+    // Images may need same-origin proxy for canvas/CORS; never use this for video/audio playback.
     if (isHttpUrl(url)) return getProxyUrl(url);
     return url;
+}
+
+function displayMediaUrl(url: string) {
+    // Safari needs direct media URLs with Range support; /api/proxy-image breaks video.
+    return unwrapProxyImageUrl(url);
+}
+
+function unwrapProxyImageUrl(url: string) {
+    const value = String(url || "").trim();
+    if (!value) return "";
+    if (!value.includes("/api/proxy-image?")) return value;
+    try {
+        const query = value.startsWith("http://") || value.startsWith("https://")
+            ? new URL(value).searchParams
+            : new URL(value, "http://local.invalid").searchParams;
+        return query.get("url") || value;
+    } catch {
+        return value;
+    }
 }
 
 async function tryUploadImageSource(source: string | Blob, filename: string) {
@@ -206,7 +226,7 @@ export async function repairCanvasMediaRef(
 ): Promise<{ ref: CanvasMediaRef; changed: boolean; uploaded: boolean }> {
     const allowUpload = options.allowUpload ?? true;
     const filename = options.filename || (kind === "image" ? "canvas-image.png" : "canvas-media.bin");
-    const originalContent = (ref.content || "").trim();
+    const originalContent = unwrapProxyImageUrl((ref.content || "").trim());
     const originalKey = (ref.storageKey || "").trim();
     let content = originalContent;
     let storageKey = originalKey;
@@ -238,12 +258,12 @@ export async function repairCanvasMediaRef(
             } else {
                 mediaStatus = "ok";
                 mediaError = undefined;
-                content = displayUrl(content);
+                content = kind === "image" ? displayImageUrl(content) : displayMediaUrl(content);
             }
         } else {
             mediaStatus = "ok";
             mediaError = undefined;
-            content = isHttpUrl(content) ? displayUrl(content) : content;
+            content = isHttpUrl(content) ? (kind === "image" ? displayImageUrl(content) : displayMediaUrl(content)) : content;
         }
     } else if (storageKey.startsWith("server:")) {
         const resolved =
@@ -268,7 +288,7 @@ export async function repairCanvasMediaRef(
                         kind === "image"
                             ? await tryUploadImageSource(localBlob, filename)
                             : await tryUploadMediaSource(localBlob, filename);
-                    content = isHttpUrl(result.url) ? displayUrl(result.url) : result.url;
+                    content = isHttpUrl(result.url) ? (kind === "image" ? displayImageUrl(result.url) : displayMediaUrl(result.url)) : result.url;
                     storageKey = result.storageKey;
                     uploaded = result.storageKey.startsWith("server:");
                     mediaStatus = uploaded || isHttpUrl(result.url) ? "ok" : "local-only";
@@ -293,7 +313,7 @@ export async function repairCanvasMediaRef(
                 mediaError = "未上云，换域名不可见";
             }
         } else if (isHttpUrl(originalContent)) {
-            content = displayUrl(originalContent);
+            content = kind === "image" ? displayImageUrl(originalContent) : displayMediaUrl(originalContent);
             mediaStatus = "ok";
             mediaError = undefined;
         } else {
@@ -508,7 +528,7 @@ async function backfillNodeFromTasks(
             height: Number(task?.height || metadata.naturalHeight || 0) || undefined,
         });
         // Prefer proxied display for remote http(s).
-        if (isHttpUrl(fields.content)) fields.content = displayUrl(fields.content || "");
+        if (isHttpUrl(fields.content)) fields.content = displayImageUrl(fields.content || "");
         if (fields.storageKey?.startsWith("server:") && !fields.content) {
             const resolved = await resolveImageUrl(fields.storageKey, "");
             fields.content = resolved || fields.content;
@@ -541,7 +561,7 @@ async function backfillNodeFromTasks(
             storageKey: media.storageKey,
             mimeType: metadata.mimeType || "video/mp4",
         });
-        if (isHttpUrl(fields.content)) fields.content = displayUrl(fields.content || "");
+        if (isHttpUrl(fields.content)) fields.content = displayMediaUrl(fields.content || "");
         if (fields.storageKey?.startsWith("server:") && !fields.content) {
             fields.content = (await resolveMediaUrl(fields.storageKey, "")) || "";
         }
@@ -573,7 +593,7 @@ async function backfillNodeFromTasks(
             mimeType: String(task?.mimeType || metadata.mimeType || "audio/mpeg"),
             bytes: Number(task?.bytes || metadata.bytes || 0) || undefined,
         });
-        if (isHttpUrl(fields.content)) fields.content = displayUrl(fields.content || "");
+        if (isHttpUrl(fields.content)) fields.content = displayMediaUrl(fields.content || "");
         if (fields.storageKey?.startsWith("server:") && !fields.content) {
             fields.content = (await resolveMediaUrl(fields.storageKey, "")) || "";
         }

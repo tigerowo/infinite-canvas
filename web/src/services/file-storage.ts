@@ -92,7 +92,8 @@ function stableMediaUrl(url = "") {
 
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     const stableFallback = stableMediaUrl(fallback);
-    if (!storageKey) return stableFallback ? getProxyUrl(stableFallback) : "";
+    // Never route video/audio through /api/proxy-image (Safari Range/streaming breaks).
+    if (!storageKey) return stableFallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey).catch(() => null);
@@ -103,12 +104,12 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     }
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        if (stableFallback) return getProxyUrl(stableFallback);
+        if (stableFallback) return stableFallback;
         const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
         if (!info) return "";
         return info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
     }
-    if (stableFallback) return getProxyUrl(stableFallback);
+    if (stableFallback) return stableFallback;
     return "";
 }
 

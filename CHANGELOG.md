@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] Safari 画布视频黑屏：视频/音频不再经图片代理，恢复直链播放
 + [新增] 管理后台与本地渠道协议支持 `grok2api`、`xai`
 + [新增] grok2api/xAI 媒体协议适配：图片、视频路径映射、字段归一化、TTS `/tts` 与内置 Grok 模型目录
 + [修复] 修复 `grok-imagine-video-1.5` 在 openai 协议渠道下误打 `/videos` 导致 404 的问题

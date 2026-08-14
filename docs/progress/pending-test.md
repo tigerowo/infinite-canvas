@@ -20,3 +20,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 清空本机图片缓存后打开画布：若节点仍有 imageTaskId/imageTaskResultId 且服务端任务仍有 image_url，应自动回填显示并写回云端画布。
 - 换浏览器同账号：仅含 server: 或稳定 https 或可任务回填的节点应可见；无 task id 的纯 blob 历史裂图仍失效。
 - 确认不会把 Grok https 强制转存 WebDAV；本地上传图在 WebDAV 可用时应出现 server:。
+- Safari 打开画布视频节点应能播放（不要走 /api/proxy-image）；Edge/Firefox 回归正常。
