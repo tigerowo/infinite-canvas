@@ -619,7 +619,10 @@ function ImageNodeContent(props: NodeContentRendererProps) {
             </BatchFrame>
         );
     }
-    if (!props.node.metadata?.content) return <EmptyImageContent {...props} />;
+    if (!props.node.metadata?.content) {
+        if (props.node.metadata?.mediaStatus === "broken") return <BrokenMediaContent {...props} kind="image" />;
+        return <EmptyImageContent {...props} />;
+    }
 
     return (
         <ImageContent
@@ -655,6 +658,28 @@ function PanoramaNodeContent(props: NodeContentRendererProps) {
     );
 }
 
+
+function LocalOnlyBadge() {
+    return (
+        <div className="pointer-events-none absolute left-2.5 top-2.5 z-20 rounded-full px-2 py-1 text-[10px] font-medium tracking-wide text-white/95" style={{ background: "rgba(15,23,42,.62)" }}>
+            未上云
+        </div>
+    );
+}
+
+function BrokenMediaContent({ node, theme, kind }: NodeContentRendererProps & { kind: "image" | "video" | "audio" }) {
+    const label = kind === "video" ? "视频" : kind === "audio" ? "音频" : "图片";
+    return (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center" style={{ color: theme.node.placeholder }}>
+            <div className="flex size-14 items-center justify-center rounded-2xl" style={{ background: theme.toolbar.activeBg }}>
+                {kind === "video" ? <Video className="size-6 opacity-35" /> : kind === "audio" ? <Music2 className="size-6 opacity-35" /> : <ImageIcon className="size-6 opacity-30" />}
+            </div>
+            <span className="text-sm" style={{ color: theme.node.text }}>本地{label}已失效</span>
+            <span className="text-xs leading-5 opacity-70">{node.metadata?.mediaError || "本地缓存丢失，云端无指针，请重新生成或上传至云存储"}</span>
+        </div>
+    );
+}
+
 function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded, batchOpening, batchRecovering, onToggleBatch }: NodeContentRendererProps) {
     const content = (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
@@ -673,32 +698,44 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
     return content;
 }
 
-function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
-    if (!node.metadata?.content)
+function VideoNodeContent(props: NodeContentRendererProps) {
+    const { node, theme } = props;
+    if (!node.metadata?.content) {
+        if (node.metadata?.mediaStatus === "broken") return <BrokenMediaContent {...props} kind="video" />;
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
                 <Video className="size-7 opacity-35" />
                 <span className="text-sm">空视频节点</span>
             </div>
         );
-    return <video src={mediaPlaybackUrl(node.metadata.content)} controls playsInline preload="metadata" className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />;
+    }
+    return (
+        <div className="relative h-full w-full">
+            <video src={mediaPlaybackUrl(node.metadata.content)} controls playsInline preload="metadata" className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />
+            {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge /> : null}
+        </div>
+    );
 }
 
-function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
-    if (!node.metadata?.content)
+function AudioNodeContent(props: NodeContentRendererProps) {
+    const { node, theme } = props;
+    if (!node.metadata?.content) {
+        if (node.metadata?.mediaStatus === "broken") return <BrokenMediaContent {...props} kind="audio" />;
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
                 <Music2 className="size-7 opacity-35" />
                 <span className="text-sm">空音频节点</span>
             </div>
         );
+    }
     return (
-        <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
+        <div className="relative flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
             <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
                 <Music2 className="size-4 shrink-0" />
                 <span className="truncate">{node.title || "音频"}</span>
             </div>
             <audio src={mediaPlaybackUrl(node.metadata.content)} controls preload="metadata" className="w-full" data-canvas-no-zoom />
+            {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge /> : null}
         </div>
     );
 }
@@ -739,6 +776,7 @@ function ImageContent({
                         className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
                     />
                 )}
+                {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge /> : null}
             </div>
             {isBatchRoot ? (
                 <button

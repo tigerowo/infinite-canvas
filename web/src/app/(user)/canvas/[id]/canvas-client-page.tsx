@@ -12,8 +12,9 @@ import { createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion,
 import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
-import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, type UploadedImage } from "@/services/image-storage";
+import { canUploadCanvasMediaToServer, nodeNeedsCloudUpload, repairCanvasProjectMedia, uploadCanvasNodeToCloud } from "../utils/canvas-media-persistence";
+import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -482,8 +483,23 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
 
         const restore = async () => {
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
-            const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            const hideRepair = message.loading("正在恢复媒体…", 0);
+            let restoredNodes = resetInterruptedGeneration(project.nodes);
+            let restoredSessions = project.chatSessions || [];
+            try {
+                const repaired = await repairCanvasProjectMedia(restoredNodes, restoredSessions, { allowUpload: true });
+                restoredNodes = repaired.nodes;
+                restoredSessions = repaired.sessions;
+                if (repaired.uploaded > 0) {
+                    message.success(`已自动上传 ${repaired.uploaded} 个本地媒体到云存储`);
+                }
+            } catch {
+                // fall back to lightweight hydrate
+                restoredNodes = await hydrateCanvasImages(restoredNodes);
+                restoredSessions = await hydrateAssistantImages(restoredSessions);
+            } finally {
+                hideRepair();
+            }
             setNodes(restoredNodes);
             setConnections(project.connections);
             setChatSessions(restoredSessions);
@@ -511,7 +527,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             setProjectLoaded(true);
         };
         void restore();
-    }, [hydrated, openProject, projectId, router]);
+    }, [hydrated, message, openProject, projectId, router]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -1956,38 +1972,21 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [message]);
 
     const uploadNodeMediaToCloud = useCallback(async (node: CanvasNodeData) => {
-        if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || node.metadata.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
+        if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || node.metadata?.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
+        if (!node.metadata?.content && !node.metadata?.storageKey) return;
         uploadingMediaNodeIdsRef.current.add(node.id);
         const isAudio = node.type === CanvasNodeType.Audio;
         const mediaName = isAudio ? "音频" : "视频";
         const hideLoading = message.loading(`正在上传${mediaName}至云存储...`, 0);
         try {
-            const mediaUrl = await resolveMediaUrl(node.metadata.storageKey, node.metadata.content);
-            if (!mediaUrl) throw new Error("本地媒体不可用，请重新生成后再上传");
-            const filename = `canvas-${node.type}-${node.id}.${isAudio ? audioExtension(node.metadata.mimeType) : "mp4"}`;
-            const uploaded = await uploadRemoteMediaToServer(mediaUrl, filename);
-            const contentUrl = uploaded.url?.startsWith("blob:")
-                ? uploaded.url
-                : uploaded.storageKey?.startsWith("server:")
-                    ? `/api/files/${encodeURIComponent(uploaded.storageKey.slice("server:".length))}/content`
-                    : uploaded.url;
-            setNodes((nodes) => nodes.map((item) => (item.id === node.id ? {
-                ...item,
-                metadata: {
-                    ...item.metadata,
-                    content: contentUrl,
-                    storageKey: uploaded.storageKey,
-                    bytes: uploaded.bytes,
-                    mimeType: uploaded.mimeType,
-                    naturalWidth: uploaded.width || item.metadata?.naturalWidth,
-                    naturalHeight: uploaded.height || item.metadata?.naturalHeight,
-                },
-            } : item)));
+            if (!(await canUploadCanvasMediaToServer())) throw new Error("服务端对象存储未启用");
+            const { node: next } = await uploadCanvasNodeToCloud(node);
+            setNodes((nodes) => nodes.map((item) => (item.id === node.id ? next : item)));
             message.success(`${mediaName}已上传至云存储`);
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "";
-            if (errorMessage.includes("服务端对象存储未启用") || errorMessage.includes("用户对象存储配置不完整")) {
-                message.error("未添加云存储");
+            if (errorMessage.includes("服务端对象存储未启用") || errorMessage.includes("用户对象存储配置不完整") || errorMessage.includes("请先登录")) {
+                message.error(errorMessage.includes("登录") ? "请先登录后再上传云存储" : "未添加云存储");
             } else {
                 message.error(errorMessage || `${mediaName}上传失败`);
             }
@@ -1997,38 +1996,53 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
     }, [message]);
 
+    const uploadBoardMediaToCloud = useCallback(async () => {
+        const targets = nodesRef.current.filter((node) => nodeNeedsCloudUpload(node));
+        if (!targets.length) {
+            message.info("当前画板没有可上传的媒体");
+            return;
+        }
+        if (!(await canUploadCanvasMediaToServer())) {
+            message.error("未添加云存储或未登录");
+            return;
+        }
+        const hideLoading = message.loading(`正在上传 ${targets.length} 个媒体到云存储...`, 0);
+        let ok = 0;
+        let fail = 0;
+        try {
+            for (const node of targets) {
+                try {
+                    const { node: next, uploaded } = await uploadCanvasNodeToCloud(node);
+                    if (uploaded) {
+                        ok += 1;
+                        setNodes((prev) => prev.map((item) => (item.id === node.id ? next : item)));
+                    }
+                } catch {
+                    fail += 1;
+                }
+            }
+            if (ok) message.success(`已上传 ${ok} 个媒体到云存储`);
+            if (fail) message.warning(`${fail} 个媒体上传失败`);
+            if (!ok && !fail) message.info("没有需要上传的媒体");
+        } finally {
+            hideLoading();
+        }
+    }, [message]);
+
     const uploadNodeImageToCloud = useCallback(async (node: CanvasNodeData) => {
-        if (!isCanvasImageNodeType(node.type) || !node.metadata?.content || node.metadata.storageKey?.startsWith("server:") || uploadingImageNodeIdsRef.current.has(node.id)) return;
+        if (!isCanvasImageNodeType(node.type) || node.metadata?.storageKey?.startsWith("server:") || uploadingImageNodeIdsRef.current.has(node.id)) return;
+        if (!node.metadata?.content && !node.metadata?.storageKey) return;
         uploadingImageNodeIdsRef.current.add(node.id);
         const hideLoading = message.loading("正在上传图片至云存储...", 0);
         try {
-            // Prefer local blob/object URL first; do not send dead remote placeholders.
-            const imageUrl = await resolveImageUrl(node.metadata.storageKey, node.metadata.content);
-            if (!imageUrl) throw new Error("本地图片不可用，请重新生成后再上传");
-            const uploaded = await uploadRemoteImageToServer(imageUrl, "canvas-image-" + node.id + ".png");
-            // Prefer local blob preview returned by upload helper; fall back to same-origin content URL.
-            const contentUrl = uploaded.url?.startsWith("blob:")
-                ? uploaded.url
-                : uploaded.storageKey?.startsWith("server:")
-                    ? `/api/files/${encodeURIComponent(uploaded.storageKey.slice("server:".length))}/content`
-                    : uploaded.url;
-            setNodes((nodes) => nodes.map((item) => (item.id === node.id ? {
-                ...item,
-                metadata: {
-                    ...item.metadata,
-                    content: contentUrl,
-                    storageKey: uploaded.storageKey,
-                    bytes: uploaded.bytes,
-                    mimeType: uploaded.mimeType,
-                    naturalWidth: uploaded.width || item.metadata?.naturalWidth,
-                    naturalHeight: uploaded.height || item.metadata?.naturalHeight,
-                },
-            } : item)));
+            if (!(await canUploadCanvasMediaToServer())) throw new Error("服务端对象存储未启用");
+            const { node: next } = await uploadCanvasNodeToCloud(node);
+            setNodes((nodes) => nodes.map((item) => (item.id === node.id ? next : item)));
             message.success("图片已上传至云存储");
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "";
-            if (errorMessage.includes("服务端对象存储未启用") || errorMessage.includes("用户对象存储配置不完整")) {
-                message.error("未添加云存储");
+            if (errorMessage.includes("服务端对象存储未启用") || errorMessage.includes("用户对象存储配置不完整") || errorMessage.includes("请先登录")) {
+                message.error(errorMessage.includes("登录") ? "请先登录后再上传云存储" : "未添加云存储");
             } else {
                 message.error(errorMessage || "图片上传失败");
             }
@@ -3932,6 +3946,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     onUpload={() => handleUploadRequest()}
+                    onUploadBoardToCloud={() => void uploadBoardMediaToCloud()}
                     onDelete={() => deleteNodes(new Set(selectedNodeIds))}
                     onClear={() => setClearConfirmOpen(true)}
                     onCanvasToolChange={setCanvasTool}

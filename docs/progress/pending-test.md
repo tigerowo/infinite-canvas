@@ -16,3 +16,6 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Safari 打开画布视频应能播放；若节点 content 仍是 /api/proxy-image?url=视频地址，前端会解成直链。
 - 本地生成/上传图片后点“上传至云存储”，图片应仍可显示（content 为 /api/files/.../content 或可用预览，不应变 X）。
 - 更换 WebDAV/S3 地址后，旧 providerId 的云端图应仍能通过当前存储回源显示；上传至云存储后当前页不应立刻变 X（可先本地预览）。
+- 打开画板：本机 IndexedDB 本地媒体应自动上传 WebDAV/S3 并回写 server:；已有 server: 直接显示；Grok 等 https 原链只显示不自动转存。
+- 节点/工具栏「上传至云存储」「一键上云」可将本地未上云与 Grok https 主动转存为 /api/files/...；另一浏览器同账号应可见。
+- 失效 blob 且无 server/原链时显示失效占位，不白屏；保存/同步 JSON 不含 blob:。
