@@ -19,3 +19,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 打开画板：本机 IndexedDB 本地媒体应自动上传 WebDAV/S3 并回写 server:；已有 server: 直接显示；Grok 等 https 原链只显示不自动转存。
 - 节点/工具栏「上传至云存储」「一键上云」可将本地未上云与 Grok https 主动转存为 /api/files/...；另一浏览器同账号应可见。
 - 失效 blob 且无 server/原链时显示失效占位，不白屏；保存/同步 JSON 不含 blob:。
+- Safari 打开 content 为 /api/files/.../content 的云端视频/音频应能正常播放（需支持 Range）。

@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
@@ -104,6 +106,7 @@ func DeleteFile(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 // FileContent 获取文件内容。
+// 使用 ServeContent 以支持 Safari 视频/音频所需的 Range 请求。
 func FileContent(w http.ResponseWriter, r *http.Request, id string) {
 	download, err := service.DownloadStorageObject(id)
 	if err != nil {
@@ -114,9 +117,19 @@ func FileContent(w http.ResponseWriter, r *http.Request, id string) {
 		http.Redirect(w, r, download.RedirectURL, http.StatusTemporaryRedirect)
 		return
 	}
-	w.Header().Set("Content-Type", download.Object.MimeType)
+	contentType := strings.TrimSpace(download.Object.MimeType)
+	if contentType == "" {
+		contentType = http.DetectContentType(download.Data)
+	}
+	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	_, _ = w.Write(download.Data)
+	w.Header().Set("Accept-Ranges", "bytes")
+	modTime := time.Now()
+	if parsed, parseErr := time.Parse(time.RFC3339, strings.TrimSpace(download.Object.CreatedAt)); parseErr == nil {
+		modTime = parsed
+	}
+	// Safari <video>/<audio> requires HTTP 206 partial content for progressive playback.
+	http.ServeContent(w, r, id, modTime, bytes.NewReader(download.Data))
 }
 
 // FileInfo 获取文件元数据。
