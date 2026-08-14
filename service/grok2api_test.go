@@ -16,10 +16,10 @@ func TestFetchAdminChannelModelsGrok2API(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Unreachable base URL falls back to built-in media catalog.
-	if !containsAllStrings(models, grok2APIModels()) {
-		t.Fatalf("models missing built-in grok media catalog: %#v", models)
+	if !containsAllStrings(models, append(grok2APIChatModels(), grok2APIModels()...)) {
+		t.Fatalf("models missing built-in grok chat/media catalog: %#v", models)
 	}
-	if len(models) < len(grok2APIModels()) {
+	if len(models) < len(grok2APIModels())+len(grok2APIChatModels()) {
 		t.Fatalf("models length = %d", len(models))
 	}
 }
@@ -33,15 +33,21 @@ func TestFetchAdminChannelModelsXAIFallsBackToBuiltin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsAllStrings(models, grok2APIModels()) {
-		t.Fatalf("models missing built-in grok media catalog: %#v", models)
+	if !containsAllStrings(models, append(grok2APIChatModels(), grok2APIModels()...)) {
+		t.Fatalf("models missing built-in grok chat/media catalog: %#v", models)
+	}
+	if !containsAllStrings(models, []string{"grok-4", "grok-3-mini", "grok-imagine-video-1.5"}) {
+		t.Fatalf("xai fallback missing expected chat/media models: %#v", models)
 	}
 }
 
 func TestMergeGrok2APIChannelModelsKeepsUpstreamChatModels(t *testing.T) {
-	merged := uniqueModelNames(append([]string{"grok-4", "grok-3-mini", "grok-imagine-video"}, grok2APIModels()...))
+	merged := uniqueModelNames(append(append([]string{"custom-chat-model", "grok-imagine-video"}, grok2APIChatModels()...), grok2APIModels()...))
 	if !containsAllStrings(merged, []string{"grok-4", "grok-3-mini", "grok-imagine-video-1.5", "grok-voice-latest"}) {
 		t.Fatalf("merged models = %#v", merged)
+	}
+	if !containsAllStrings(merged, []string{"custom-chat-model"}) {
+		t.Fatalf("merged models lost upstream custom model: %#v", merged)
 	}
 }
 

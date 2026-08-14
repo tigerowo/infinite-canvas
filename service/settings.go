@@ -505,9 +505,9 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 func fetchGrok2APIChannelModels(channel model.ModelChannel) ([]string, error) {
 	// Prefer upstream /models so chat/text LLMs remain available.
 	// Always merge the built-in media catalog because some gateways omit image/video/voice ids.
-	builtin := grok2APIModels()
+	builtin := append(grok2APIChatModels(), grok2APIModels()...)
 	upstream, err := fetchOpenAICompatibleModels(channel)
-	if err != nil {
+	if err != nil || len(upstream) == 0 {
 		result := append([]string{}, builtin...)
 		sort.Strings(result)
 		return result, nil
@@ -575,6 +575,21 @@ func grok2APIModels() []string {
 		"grok-imagine-video-1.5",
 		"grok-voice-latest",
 		"grok-voice-think-fast-2.0",
+	}
+}
+
+func grok2APIChatModels() []string {
+	// Fallback text models for grok2api/xai when upstream /models is unavailable or empty.
+	return []string{
+		"grok-4",
+		"grok-4-0709",
+		"grok-3",
+		"grok-3-mini",
+		"grok-3-fast",
+		"grok-3-mini-fast",
+		"grok-2",
+		"grok-2-vision-1212",
+		"grok-2-image-1212",
 	}
 }
 
