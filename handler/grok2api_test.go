@@ -302,3 +302,50 @@ func TestGrok2APIMultipartVideoBody(t *testing.T) {
 		t.Fatalf("duration = %#v", duration)
 	}
 }
+
+func TestNormalizeGrok2APIVideoSanitizesAspectAndReferenceMode(t *testing.T) {
+	body := []byte(`{"model":"grok-imagine-video-1.5","prompt":"move","aspect_ratio":"21:9","resolution":"1080p","duration":"8","images":[{"url":"https://example.com/a.png"},{"url":"https://example.com/b.png"}],"image":{"url":"https://example.com/first.png"}}`)
+	encoded, _, err := normalizeGrok2APIVideoBody(body, "application/json", "grok-imagine-video-1.5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := testGrok2APIRecord(t, encoded)
+	if payload["aspect_ratio"] != "16:9" {
+		t.Fatalf("aspect_ratio = %#v", payload["aspect_ratio"])
+	}
+	if payload["resolution"] != "720p" {
+		t.Fatalf("resolution = %#v want 720p for reference mode", payload["resolution"])
+	}
+	if payload["duration"] != float64(8) {
+		t.Fatalf("duration = %#v", payload["duration"])
+	}
+	if _, ok := payload["image"]; ok {
+		t.Fatal("image must not coexist with reference_images")
+	}
+	items, ok := payload["reference_images"].([]any)
+	if !ok || len(items) < 2 {
+		t.Fatalf("reference_images = %#v", payload["reference_images"])
+	}
+}
+
+func TestNormalizeGrok2APIFirstFrameKeepsImageOnly(t *testing.T) {
+	body := []byte(`{"model":"grok-imagine-video","prompt":"move","image":{"url":"https://example.com/first.png"},"resolution":"2k","aspect_ratio":"20:9"}`)
+	encoded, _, err := normalizeGrok2APIVideoBody(body, "application/json", "grok-imagine-video")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := testGrok2APIRecord(t, encoded)
+	image := testGrok2APIRecord(t, payload["image"])
+	if image["url"] != "https://example.com/first.png" {
+		t.Fatalf("image = %#v", image)
+	}
+	if _, ok := payload["reference_images"]; ok {
+		t.Fatal("single first frame should stay on image")
+	}
+	if payload["resolution"] != "1080p" {
+		t.Fatalf("resolution = %#v", payload["resolution"])
+	}
+	if payload["aspect_ratio"] != "16:9" {
+		t.Fatalf("aspect_ratio = %#v", payload["aspect_ratio"])
+	}
+}

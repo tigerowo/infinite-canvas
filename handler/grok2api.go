@@ -69,9 +69,158 @@ func normalizeGrok2APIVideoBody(body []byte, contentType string, modelName strin
 		payload["model"] = finalModel
 	}
 	normalizeGrok2APIMediaReferences(payload, false)
+	sanitizeGrok2APIVideoParams(payload)
 	return marshalGrok2APIPayload(payload, []string{
 		"model", "prompt", "aspect_ratio", "duration", "resolution", "n", "response_format", "reference_audios", "video", "image", "reference_images",
 	})
+}
+
+func sanitizeGrok2APIVideoParams(payload map[string]any) {
+	// Official video ratios are stricter than image: no 21:9 / 20:9 / auto.
+	if ratio := strings.TrimSpace(toStringSafe(payload["aspect_ratio"])); ratio != "" {
+		if snapped := snapGrok2APIVideoAspectRatio(ratio); snapped != "" {
+			payload["aspect_ratio"] = snapped
+		} else {
+			delete(payload, "aspect_ratio")
+		}
+	}
+
+	resolution := strings.ToLower(strings.TrimSpace(toStringSafe(payload["resolution"])))
+	switch resolution {
+	case "480p", "720p", "1080p":
+		payload["resolution"] = resolution
+	case "480", "low":
+		payload["resolution"] = "480p"
+	case "720", "medium", "std", "standard", "":
+		if resolution != "" {
+			payload["resolution"] = "720p"
+		}
+	case "1080", "pro", "high", "hd", "2k", "4k":
+		payload["resolution"] = "1080p"
+	default:
+		if strings.HasSuffix(resolution, "p") {
+			// unknown *p values drop
+			delete(payload, "resolution")
+		} else if resolution != "" {
+			delete(payload, "resolution")
+		}
+	}
+
+	// image XOR reference_images/reference_audios
+	hasImage := false
+	if value, ok := payload["image"]; ok {
+		if len(collectGrok2APIReferenceURLs(value)) > 0 {
+			hasImage = true
+		} else {
+			delete(payload, "image")
+		}
+	}
+	refCount := 0
+	if value, ok := payload["reference_images"]; ok {
+		urls := collectGrok2APIReferenceURLs(value)
+		if len(urls) == 0 {
+			delete(payload, "reference_images")
+		} else {
+			refCount = len(urls)
+			payload["reference_images"] = grok2APIReferenceImageList(urls)
+		}
+	}
+	hasRefAudio := false
+	if value, ok := payload["reference_audios"]; ok {
+		switch typed := value.(type) {
+		case []any:
+			hasRefAudio = len(typed) > 0
+		case string:
+			hasRefAudio = strings.TrimSpace(typed) != ""
+		default:
+			hasRefAudio = value != nil
+		}
+	}
+	if hasImage && (refCount > 0 || hasRefAudio) {
+		// Prefer multi-reference mode when both were present.
+		delete(payload, "image")
+		hasImage = false
+	}
+	if (refCount > 0 || hasRefAudio) && strings.EqualFold(toStringSafe(payload["resolution"]), "1080p") {
+		payload["resolution"] = "720p"
+	}
+
+	// duration: keep number/string if parseable 1-15; else drop invalid values.
+	if raw, ok := payload["duration"]; ok {
+		text := strings.TrimSpace(toStringSafe(raw))
+		if text == "" {
+			delete(payload, "duration")
+		} else {
+			var seconds int
+			if _, err := fmt.Sscanf(text, "%d", &seconds); err != nil || seconds < 1 || seconds > 15 {
+				delete(payload, "duration")
+			} else {
+				payload["duration"] = seconds
+			}
+		}
+	}
+
+	// video generation must not carry video input
+	delete(payload, "video")
+}
+
+func snapGrok2APIVideoAspectRatio(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3":
+		return value
+	case "21:9", "20:9", "19.5:9", "2:1":
+		return "16:9"
+	case "9:21", "9:20", "9:19.5", "1:2":
+		return "9:16"
+	case "auto", "adaptive":
+		return ""
+	}
+	if parts := strings.Split(value, "x"); len(parts) == 2 {
+		var width, height float64
+		if _, err := fmt.Sscanf(parts[0], "%f", &width); err == nil {
+			if _, err := fmt.Sscanf(parts[1], "%f", &height); err == nil && width > 0 && height > 0 {
+				return snapGrok2APIVideoAspectRatioByValue(width / height)
+			}
+		}
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return ""
+	}
+	var width, height float64
+	if _, err := fmt.Sscanf(parts[0], "%f", &width); err != nil || width <= 0 {
+		return ""
+	}
+	if _, err := fmt.Sscanf(parts[1], "%f", &height); err != nil || height <= 0 {
+		return ""
+	}
+	return snapGrok2APIVideoAspectRatioByValue(width / height)
+}
+
+func snapGrok2APIVideoAspectRatioByValue(ratio float64) string {
+	candidates := []struct {
+		label string
+		value float64
+	}{
+		{"1:1", 1},
+		{"16:9", 16.0 / 9.0},
+		{"9:16", 9.0 / 16.0},
+		{"4:3", 4.0 / 3.0},
+		{"3:4", 3.0 / 4.0},
+		{"3:2", 3.0 / 2.0},
+		{"2:3", 2.0 / 3.0},
+	}
+	best := "16:9"
+	bestScore := math.MaxFloat64
+	for _, item := range candidates {
+		score := math.Abs(math.Log(ratio) - math.Log(item.value))
+		if score < bestScore {
+			best = item.label
+			bestScore = score
+		}
+	}
+	return best
 }
 
 func marshalGrok2APIPayload(payload map[string]any, keys []string) ([]byte, string, error) {

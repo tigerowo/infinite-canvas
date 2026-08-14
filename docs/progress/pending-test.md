@@ -13,3 +13,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 - Grok/xAI 图片 prompt（含系统提示词）超过 8000 字符时，前端/后端应给出明确错误，不再透传上游 400。
 - Grok 图生图多参考图应传 `images:[{url}]`，不再误映射为视频字段 `reference_images`；非法 `aspect_ratio`/`quality`/`size` 会被清洗。
+- 全量复核后修复：前端 finalizeImagePrompt 自调用死循环；Grok 视频 image 与 reference_images 互斥；参考图模式 resolution 最高 720p；视频 21:9 吸附为 16:9。

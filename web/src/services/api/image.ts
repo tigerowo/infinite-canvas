@@ -553,7 +553,7 @@ function withPromptGuard(config: AiConfig, prompt: string) {
 }
 
 function finalizeImagePrompt(config: AiConfig, prompt: string) {
-    const value = finalizeImagePrompt(config, prompt);
+    const value = withPromptGuard(config, withSystemPrompt(config, prompt));
     if (isGrokImageModel(config.model) && [...value].length > GROK_IMAGE_PROMPT_MAX_CHARS) {
         throw new Error(`Grok/xAI 图片 prompt 最长 ${GROK_IMAGE_PROMPT_MAX_CHARS} 字符，当前 ${[...value].length}（含系统提示词）。请缩短提示词或系统提示词`);
     }

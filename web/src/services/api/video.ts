@@ -177,9 +177,15 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
 }
 
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
-    if (!["grok-imagine-video", "grok-imagine-video-1.5"].includes(model.trim().toLowerCase())) return false;
-    const channel = videoChannelText(config, model);
-    return !channel.includes("kie") && !channel.includes("apimart");
+    const name = model.trim().toLowerCase();
+    const channel = localChannelForActiveModel(config);
+    const protocol = String(channel?.protocol || "").trim().toLowerCase();
+    const baseUrl = String(channel?.baseUrl || config.baseUrl || "").trim().toLowerCase();
+    const family = protocol === "grok2api" || protocol === "xai" || baseUrl.includes("grok2api") || baseUrl.includes("api.x.ai") || baseUrl.includes("x.ai/") || name.startsWith("grok-imagine-video");
+    if (!family) return false;
+    // Keep KIE/APIMart Grok-branded market models on their own adapters.
+    const channelText = videoChannelText(config, model);
+    return !channelText.includes("kie") && !channelText.includes("apimart");
 }
 
 async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: VideoResponse) {
@@ -193,20 +199,20 @@ async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: Vi
 }
 
 async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    const references = [input.firstFrame, ...input.references, input.lastFrame].filter((reference): reference is ReferenceImage => Boolean(reference));
+    const urls = await Promise.all(references.map((reference) => imageToDataUrl(reference)));
+    const hasRefs = urls.length > 0;
+    // grok2api: image XOR reference_images; multi-ref mode must not also send image.
     const body: Record<string, unknown> = {
         model,
         prompt,
-        duration: Number(normalizeVideoSeconds(config.videoSeconds)),
-        resolution: normalizeGrok2APIVideoResolution(config.vquality),
+        duration: normalizeGrok2APIVideoDuration(config.videoSeconds),
+        resolution: normalizeGrok2APIVideoResolution(config.vquality, hasRefs),
     };
-    const aspectRatio = normalizeSeedanceRatio(config.size);
-    if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
-
-    const references = [input.firstFrame, ...input.references, input.lastFrame].filter((reference): reference is ReferenceImage => Boolean(reference));
-    const urls = await Promise.all(references.map((reference) => imageToDataUrl(reference)));
-    if (urls.length) body.image = { url: urls[0] };
-    if (urls.length > 1) body.reference_images = urls.slice(1).map((url) => ({ url }));
-
+    const aspectRatio = normalizeGrok2APIVideoAspectRatio(config.size);
+    if (aspectRatio) body.aspect_ratio = aspectRatio;
+    if (urls.length === 1) body.image = { url: urls[0] };
+    if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
     return body;
 }
 
@@ -536,22 +542,55 @@ function normalizeVideoResolution(value: string) {
     return /k$/i.test(resolution) ? resolution.toLowerCase() : `${resolution}p`;
 }
 
-function normalizeGrok2APIVideoResolution(value: string) {
+function normalizeGrok2APIVideoResolution(value: string, hasReferenceImages = false) {
     // grok2api/xAI video API only accepts 480p|720p|1080p.
+    // Reference-image mode rejects 1080p (max 720p).
     const raw = String(value || "").trim().toLowerCase();
-    if (!raw || raw === "auto" || raw === "medium" || raw === "high") return "720p";
-    if (raw === "low" || raw === "480" || raw === "480p") return "480p";
-    if (raw === "720" || raw === "720p") return "720p";
-    if (raw === "1080" || raw === "1080p" || raw === "pro") return "1080p";
-    // UI may offer 2K/4K for other providers; clamp to max supported 1080p for Grok/xAI.
-    if (raw === "2k" || raw === "4k" || raw.endsWith("k")) return "1080p";
-    const number = Number(raw.replace(/p$/i, ""));
-    if (Number.isFinite(number)) {
-        if (number <= 480) return "480p";
-        if (number <= 720) return "720p";
-        return "1080p";
+    let resolution = "720p";
+    if (!raw || raw === "auto" || raw === "medium" || raw === "high") resolution = "720p";
+    else if (raw === "low" || raw === "480" || raw === "480p") resolution = "480p";
+    else if (raw === "720" || raw === "720p") resolution = "720p";
+    else if (raw === "1080" || raw === "1080p" || raw === "pro") resolution = "1080p";
+    else if (raw === "2k" || raw === "4k" || raw.endsWith("k")) resolution = "1080p";
+    else {
+        const number = Number(raw.replace(/p$/i, ""));
+        if (Number.isFinite(number)) {
+            if (number <= 480) resolution = "480p";
+            else if (number <= 720) resolution = "720p";
+            else resolution = "1080p";
+        }
     }
-    return "720p";
+    if (hasReferenceImages && resolution === "1080p") return "720p";
+    return resolution;
+}
+
+function normalizeGrok2APIVideoDuration(value: string) {
+    const seconds = Math.floor(Number(normalizeVideoSeconds(value)) || 8);
+    return Math.max(1, Math.min(15, seconds));
+}
+
+const GROK_VIDEO_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"] as const;
+
+function normalizeGrok2APIVideoAspectRatio(size: string) {
+    const ratio = normalizeSeedanceRatio(size);
+    if (!ratio || ratio === "adaptive") return "";
+    if ((GROK_VIDEO_ASPECT_RATIOS as readonly string[]).includes(ratio)) return ratio;
+    // UI widescreen 21:9 is not accepted by grok2api/xAI video.
+    if (ratio === "21:9") return "16:9";
+    const parts = ratio.split(":").map(Number);
+    if (parts.length !== 2 || !parts[0] || !parts[1]) return "16:9";
+    const target = parts[0] / parts[1];
+    let best: (typeof GROK_VIDEO_ASPECT_RATIOS)[number] = "16:9";
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const item of GROK_VIDEO_ASPECT_RATIOS) {
+        const [w, h] = item.split(":").map(Number);
+        const score = Math.abs(Math.log(target) - Math.log(w / h));
+        if (score < bestScore) {
+            best = item;
+            bestScore = score;
+        }
+    }
+    return best;
 }
 
 function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
