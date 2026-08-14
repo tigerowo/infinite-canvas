@@ -201,13 +201,15 @@ async function cacheProtectedGrokVideo(config: AiConfig, model: string, task: Vi
 async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     const references = [input.firstFrame, ...input.references, input.lastFrame].filter((reference): reference is ReferenceImage => Boolean(reference));
     const urls = await Promise.all(references.map((reference) => imageToDataUrl(reference)));
-    const hasRefs = urls.length > 0;
+    // Official rule: only reference_images/reference_audios mode caps at 720p.
+    // Single first-frame image (video-1.5) may still use 1080p.
+    const multiReferenceMode = urls.length > 1;
     // grok2api: image XOR reference_images; multi-ref mode must not also send image.
     const body: Record<string, unknown> = {
         model,
         prompt,
         duration: normalizeGrok2APIVideoDuration(config.videoSeconds),
-        resolution: normalizeGrok2APIVideoResolution(config.vquality, hasRefs),
+        resolution: normalizeGrok2APIVideoResolution(config.vquality, multiReferenceMode),
     };
     const aspectRatio = normalizeGrok2APIVideoAspectRatio(config.size);
     if (aspectRatio) body.aspect_ratio = aspectRatio;
@@ -542,9 +544,9 @@ function normalizeVideoResolution(value: string) {
     return /k$/i.test(resolution) ? resolution.toLowerCase() : `${resolution}p`;
 }
 
-function normalizeGrok2APIVideoResolution(value: string, hasReferenceImages = false) {
+function normalizeGrok2APIVideoResolution(value: string, multiReferenceMode = false) {
     // grok2api/xAI video API only accepts 480p|720p|1080p.
-    // Reference-image mode rejects 1080p (max 720p).
+    // Multi reference_images mode rejects 1080p (max 720p). First-frame image keeps 1080p.
     const raw = String(value || "").trim().toLowerCase();
     let resolution = "720p";
     if (!raw || raw === "auto" || raw === "medium" || raw === "high") resolution = "720p";
@@ -560,7 +562,7 @@ function normalizeGrok2APIVideoResolution(value: string, hasReferenceImages = fa
             else resolution = "1080p";
         }
     }
-    if (hasReferenceImages && resolution === "1080p") return "720p";
+    if (multiReferenceMode && resolution === "1080p") return "720p";
     return resolution;
 }
 
