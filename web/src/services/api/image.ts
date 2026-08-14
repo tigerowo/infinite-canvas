@@ -166,19 +166,25 @@ function isGrokImageModel(model: string) {
 function normalizeGrokImageResolution(quality: string, size: string, operation: "generation" | "edit", model: string) {
     // grok2api/xAI image API only accepts resolution=1k|2k (not quality/size pixels).
     if (operation === "edit" && model.includes("edit")) return "1k";
+    const normalizedSize = size.trim().toLowerCase();
+    // Explicit 2K/4K size presets must win. UI options like "9:16-2k" / "1152x2048"
+    // previously collapsed through quality=auto/low into 720x1280 + resolution=1k.
+    if (/(^|[^a-z0-9])(2k|4k)([^a-z0-9]|$)/i.test(normalizedSize)) return "2k";
+    if (/(^|[^a-z0-9])1k([^a-z0-9]|$)/i.test(normalizedSize)) return "1k";
+
+    const match = normalizedSize.match(/^(\d+)x(\d+)$/);
+    if (match) {
+        const longSide = Math.max(Number(match[1]), Number(match[2]));
+        // Treat common 2K long-edge sizes as 2k even when quality is low/auto.
+        if (longSide >= 1536) return "2k";
+        if (longSide > 0) return "1k";
+    }
+
     const normalizedQuality = normalizeQuality(quality);
     if (normalizedQuality !== "auto" && QUALITY_BASE[normalizedQuality]) {
         return QUALITY_BASE[normalizedQuality] > 1024 ? "2k" : "1k";
     }
-    const match = size.trim().toLowerCase().match(/^(\d+)x(\d+)$/);
-    if (match) {
-        const longSide = Math.max(Number(match[1]), Number(match[2]));
-        if (longSide >= 1536) return "2k";
-        if (longSide > 0) return "1k";
-    }
-    if (/(^|[^a-z])(2k|4k)([^a-z]|$)/i.test(size)) return "2k";
-    if (/(^|[^a-z])1k([^a-z]|$)/i.test(size)) return "1k";
-    return "";
+    return "1k";
 }
 
 function normalizeGrokImageAspectRatio(size: string) {
@@ -200,7 +206,9 @@ function applyImageGenerationParams(body: Record<string, unknown>, config: AiCon
     const model = config.model.trim().toLowerCase();
     const grok = isGrokImageModel(model) && (operation === "edit" || !model.includes("edit"));
     if (grok) {
-        const size = String(params.size || config.size || "").trim();
+        // Prefer original UI size (e.g. 1152x2048 / 9:16-2k). params.size may already be
+        // collapsed by resolveRequestSize(quality=auto) into 720x1280 for portrait ratios.
+        const size = String(config.size || params.size || "").trim();
         const aspectRatio = normalizeGrokImageAspectRatio(size);
         if (aspectRatio) body.aspect_ratio = aspectRatio;
         const resolution = normalizeGrokImageResolution(params.quality || config.quality || "auto", size, operation, model);
