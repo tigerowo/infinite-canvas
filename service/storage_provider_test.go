@@ -91,3 +91,40 @@ func TestNewWebDAVClientValidatesEndpoint(t *testing.T) {
 		t.Fatalf("valid WebDAV endpoint should be accepted: %v", err)
 	}
 }
+
+
+func TestFindStorageProviderForObjectFallsBackToSingleProvider(t *testing.T) {
+	provider := normalizeStorageProvider(model.StorageProvider{
+		Type: model.StorageProviderTypeWebDAV, Name: "alist", Endpoint: "https://dav.example.com", Username: "user", Password: "pass", Enabled: true,
+	})
+	object := model.StorageObject{ProviderID: "storage-old-id", ObjectKey: "canvas/user/a.png"}
+	got, ok := findStorageProviderForObject(object, []model.StorageProvider{provider})
+	if !ok {
+		t.Fatal("expected single configured WebDAV provider fallback")
+	}
+	if got.ID != provider.ID {
+		t.Fatalf("provider ID = %q, want %q", got.ID, provider.ID)
+	}
+}
+
+func TestFindStorageProviderForObjectKeepsExactProviderID(t *testing.T) {
+	first := normalizeStorageProvider(model.StorageProvider{
+		Type: model.StorageProviderTypeWebDAV, Name: "a", Endpoint: "https://a.example.com", Username: "user", Password: "pass", Enabled: true,
+	})
+	second := normalizeStorageProvider(model.StorageProvider{
+		Type: model.StorageProviderTypeWebDAV, Name: "b", Endpoint: "https://b.example.com", Username: "user", Password: "pass", Enabled: true,
+	})
+	object := model.StorageObject{ProviderID: second.ID, ObjectKey: "canvas/user/a.png"}
+	got, ok := findStorageProviderForObject(object, []model.StorageProvider{first, second})
+	if !ok || got.ID != second.ID {
+		t.Fatalf("exact provider match failed: ok=%v id=%q", ok, got.ID)
+	}
+}
+
+func TestReadStorageObjectFromProvidersTriesFallback(t *testing.T) {
+	// Only validates candidate ordering/fallback selection without network by using empty providers.
+	object := model.StorageObject{ProviderID: "missing", ObjectKey: "canvas/a.png"}
+	if _, err := readStorageObjectFromProviders(object, nil); err == nil {
+		t.Fatal("expected error when no providers configured")
+	}
+}

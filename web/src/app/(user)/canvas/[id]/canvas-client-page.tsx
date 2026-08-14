@@ -1966,9 +1966,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             if (!mediaUrl) throw new Error("本地媒体不可用，请重新生成后再上传");
             const filename = `canvas-${node.type}-${node.id}.${isAudio ? audioExtension(node.metadata.mimeType) : "mp4"}`;
             const uploaded = await uploadRemoteMediaToServer(mediaUrl, filename);
-            const contentUrl = uploaded.storageKey?.startsWith("server:")
-                ? `/api/files/${encodeURIComponent(uploaded.storageKey.slice("server:".length))}/content`
-                : uploaded.url;
+            const contentUrl = uploaded.url?.startsWith("blob:")
+                ? uploaded.url
+                : uploaded.storageKey?.startsWith("server:")
+                    ? `/api/files/${encodeURIComponent(uploaded.storageKey.slice("server:".length))}/content`
+                    : uploaded.url;
             setNodes((nodes) => nodes.map((item) => (item.id === node.id ? {
                 ...item,
                 metadata: {
@@ -2004,9 +2006,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const imageUrl = await resolveImageUrl(node.metadata.storageKey, node.metadata.content);
             if (!imageUrl) throw new Error("本地图片不可用，请重新生成后再上传");
             const uploaded = await uploadRemoteImageToServer(imageUrl, "canvas-image-" + node.id + ".png");
-            const contentUrl = uploaded.storageKey?.startsWith("server:")
-                ? `/api/files/${encodeURIComponent(uploaded.storageKey.slice("server:".length))}/content`
-                : uploaded.url;
+            // Prefer local blob preview returned by upload helper; fall back to same-origin content URL.
+            const contentUrl = uploaded.url?.startsWith("blob:")
+                ? uploaded.url
+                : uploaded.storageKey?.startsWith("server:")
+                    ? `/api/files/${encodeURIComponent(uploaded.storageKey.slice("server:".length))}/content`
+                    : uploaded.url;
             setNodes((nodes) => nodes.map((item) => (item.id === node.id ? {
                 ...item,
                 metadata: {

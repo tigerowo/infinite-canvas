@@ -57,6 +57,37 @@ let queuedPersistState: PersistedCanvasState | null = null;
 let accountCanvasSyncEnabled = false;
 const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+function stableServerContent(storageKey?: string, content?: string) {
+    const key = String(storageKey || "").trim();
+    if (key.startsWith("server:")) {
+        const id = key.slice("server:".length).trim();
+        if (id) return `/api/files/${encodeURIComponent(id)}/content`;
+    }
+    const value = String(content || "").trim();
+    if (value.startsWith("blob:") || value.startsWith("data:")) return "";
+    return value;
+}
+
+function sanitizeProjectForSave(project: CanvasProject): CanvasProject {
+    return {
+        ...project,
+        nodes: (project.nodes || []).map((node) => {
+            const metadata = node.metadata;
+            if (!metadata) return node;
+            const content = String(metadata.content || "");
+            const storageKey = String(metadata.storageKey || "");
+            if (!content.startsWith("blob:") && !content.startsWith("data:")) return node;
+            return {
+                ...node,
+                metadata: {
+                    ...metadata,
+                    content: stableServerContent(storageKey, content),
+                },
+            };
+        }),
+    };
+}
+
 function waitForUserStoreHydration() {
     if (useUserStore.persist.hasHydrated()) return Promise.resolve();
 
@@ -91,7 +122,7 @@ function queueProjectSave(project: CanvasProject) {
             ) {
                 return;
             }
-            void saveCanvasProject(token, project).catch(() => undefined);
+            void saveCanvasProject(token, sanitizeProjectForSave(project)).catch(() => undefined);
         }, 400),
     );
 }
@@ -371,7 +402,7 @@ export const useCanvasStore = create<CanvasStore>()(
             storage: canvasStorage,
             partialize: (state) =>
                 ({
-                    projects: state.projects,
+                    projects: state.projects.map((project) => sanitizeProjectForSave(project)),
                 }) as StorageValue<CanvasStore>["state"],
             onRehydrateStorage: () => () => {
                 useCanvasStore.setState({ hydrated: true });

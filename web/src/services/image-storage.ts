@@ -166,17 +166,18 @@ function browserSafeFileUrl(storageKey?: string, fallbackUrl = "") {
 
 async function finalizeUploadedImage(data: UploadedImage, blob: Blob): Promise<UploadedImage> {
     const storageKey = data.storageKey || "";
-    const url = browserSafeFileUrl(storageKey, data.url);
+    const stableUrl = browserSafeFileUrl(storageKey, data.url);
+    let preview = stableUrl;
     if (storageKey.startsWith("server:")) {
-        serverUrls.set(storageKey.slice("server:".length), url);
-        // Keep a local cache so the node can render immediately even if remote fetch is slow.
-        await setImageBlob(storageKey, blob).catch(() => undefined);
+        serverUrls.set(storageKey.slice("server:".length), stableUrl);
+        // Keep a local cache so the node can render immediately even if remote fetch fails.
+        preview = await setImageBlob(storageKey, blob).catch(() => stableUrl);
     }
-    const preview = storageKey.startsWith("server:") ? (objectUrls.get(storageKey) || url) : url;
     const meta = await readImageMeta(preview.startsWith("blob:") || preview.startsWith("data:") ? preview : await blobToDataUrl(blob));
     return {
         ...data,
-        url: preview.startsWith("blob:") ? url : url,
+        // Prefer local blob preview after upload; hydrate will still resolve server content later.
+        url: preview || stableUrl,
         storageKey,
         width: data.width || meta.width,
         height: data.height || meta.height,

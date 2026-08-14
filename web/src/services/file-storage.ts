@@ -67,8 +67,25 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<Up
     const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "媒体同步失败");
-    const meta = payload.data.mimeType?.startsWith("video/") ? await readVideoMeta(payload.data.url) : {};
-    return { ...payload.data, bytes: payload.data.bytes || blob.size, mimeType: payload.data.mimeType || blob.type || "application/octet-stream", ...meta };
+    const storageKey = payload.data.storageKey || "";
+    const stableUrl = storageKey.startsWith("server:")
+        ? `/api/files/${encodeURIComponent(storageKey.slice("server:".length))}/content`
+        : payload.data.url;
+    let preview = stableUrl;
+    if (storageKey.startsWith("server:")) {
+        preview = await setMediaBlob(storageKey, blob).catch(() => stableUrl);
+    }
+    const meta = (payload.data.mimeType || blob.type || "").startsWith("video/")
+        ? await readVideoMeta(preview.startsWith("blob:") ? preview : stableUrl)
+        : {};
+    return {
+        ...payload.data,
+        url: preview || stableUrl,
+        storageKey,
+        bytes: payload.data.bytes || blob.size,
+        mimeType: payload.data.mimeType || blob.type || "application/octet-stream",
+        ...meta,
+    };
 }
 
 async function loadStorageConfig() {
