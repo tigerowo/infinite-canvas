@@ -13,7 +13,6 @@ import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask 
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
-import { mediaFieldsFromStableSource, repairCanvasProjectMedia } from "../utils/canvas-media-persistence";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
@@ -483,17 +482,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         }
 
         const restore = async () => {
-            const baseNodes = resetInterruptedGeneration(project.nodes);
-            const baseSessions = project.chatSessions || [];
-            // Prefer full media repair (stable URL / local upload / broken mark) on every open.
-            const repaired = await repairCanvasProjectMedia(baseNodes, baseSessions, { allowUpload: true }).catch(async () => {
-                const restoredNodes = await hydrateCanvasImages(baseNodes);
-                const restoredSessions = await hydrateAssistantImages(baseSessions);
-                return { nodes: restoredNodes, sessions: restoredSessions, changed: false, uploaded: 0, broken: 0 };
-            });
-            setNodes(repaired.nodes);
+            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(project.nodes));
+            const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
+            setNodes(restoredNodes);
             setConnections(project.connections);
-            setChatSessions(repaired.sessions);
+            setChatSessions(restoredSessions);
             setActiveChatId(project.activeChatId || null);
             setAgentConfig(project.agentConfig || null);
             setBackgroundMode(project.backgroundMode);
@@ -509,28 +502,16 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 historyCommitTimerRef.current = null;
             }
             lastHistoryRef.current = {
-                nodes: repaired.nodes,
+                nodes: restoredNodes,
                 connections: project.connections,
                 backgroundMode: project.backgroundMode,
                 showImageInfo: project.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
-            if (repaired.changed) {
-                // Persist repaired stable URLs / server keys / task backfills so other browsers keep working.
-                updateProject(projectId, { nodes: repaired.nodes, chatSessions: repaired.sessions });
-                if (repaired.uploaded > 0 || repaired.broken >= 0) {
-                    const parts = [];
-                    if (repaired.uploaded > 0) parts.push(`已上云 ${repaired.uploaded} 个本地文件`);
-                    // Count recovered displayable nodes roughly via changed without exposing more stats.
-                    parts.push("已尝试从云端/生成任务恢复媒体");
-                    if (repaired.broken > 0) parts.push(`${repaired.broken} 个仍失效`);
-                    message.info(parts.join("，"));
-                }
-            }
         };
         void restore();
-    }, [hydrated, message, openProject, projectId, router, updateProject]);
+    }, [hydrated, openProject, projectId, router]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -4411,32 +4392,11 @@ function audioExtension(mimeType?: string) {
 }
 
 function imageMetadata(image: UploadedImage): CanvasNodeMetadata {
-    return {
-        status: "success",
-        ...mediaFieldsFromStableSource({
-            url: image.url,
-            storageKey: image.storageKey,
-            mimeType: image.mimeType,
-            bytes: image.bytes,
-            width: image.width,
-            height: image.height,
-        }),
-    };
+    return { content: image.url, storageKey: image.storageKey, status: "success", naturalWidth: image.width, naturalHeight: image.height, bytes: image.bytes, mimeType: image.mimeType };
 }
 
 function videoMetadata(video: UploadedFile): CanvasNodeMetadata {
-    return {
-        status: "success",
-        ...mediaFieldsFromStableSource({
-            url: video.url,
-            storageKey: video.storageKey,
-            mimeType: video.mimeType || "video/mp4",
-            bytes: video.bytes,
-            width: video.width,
-            height: video.height,
-            durationMs: video.durationMs,
-        }),
-    };
+    return { content: video.url, storageKey: video.storageKey, status: "success", naturalWidth: video.width, naturalHeight: video.height, bytes: video.bytes, mimeType: video.mimeType || "video/mp4", durationMs: video.durationMs };
 }
 
 function buildImportedVideoNode(video: UploadedFile, title: string, center: Position): CanvasNodeData {
@@ -4467,16 +4427,7 @@ function getNextDirectorOutputY(
 }
 
 function audioMetadata(audio: UploadedFile): CanvasNodeMetadata {
-    return {
-        status: "success",
-        ...mediaFieldsFromStableSource({
-            url: audio.url,
-            storageKey: audio.storageKey,
-            mimeType: audio.mimeType || "audio/mpeg",
-            bytes: audio.bytes,
-            durationMs: audio.durationMs,
-        }),
-    };
+    return { content: audio.url, storageKey: audio.storageKey, status: "success", bytes: audio.bytes, mimeType: audio.mimeType || "audio/mpeg", durationMs: audio.durationMs };
 }
 
 function buildImageGenerationMetadata(type: CanvasImageGenerationType, config: AiConfig, count: number, references: ReferenceImage[]): CanvasNodeMetadata {
@@ -4558,22 +4509,10 @@ async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
 async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
     return Promise.all(
         nodes.map(async (node) => {
-            const content = node.metadata?.content || "";
-            const storageKey = node.metadata?.storageKey || "";
-            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && (storageKey || content)) {
-                const url = await resolveMediaUrl(storageKey, content);
-                return { ...node, metadata: { ...node.metadata, content: url || (content.startsWith("blob:") ? "" : content) } };
-            }
-            if (!isCanvasImageNodeType(node.type)) return node;
-            if (!content && !storageKey) return node;
-            if (storageKey || content.startsWith("http://") || content.startsWith("https://") || content.startsWith("/api/")) {
-                const url = await resolveImageUrl(storageKey, content);
-                return { ...node, metadata: { ...node.metadata, content: url || (content.startsWith("blob:") ? "" : content) } };
-            }
-            if (content.startsWith("blob:")) {
-                // Foreign/local blob URLs are not portable across reverse-proxy origins.
-                return { ...node, metadata: { ...node.metadata, content: "" } };
-            }
+            const content = node.metadata?.content;
+            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveMediaUrl(node.metadata.storageKey, content) } };
+            if (!isCanvasImageNodeType(node.type) || !content) return node;
+            if (node.metadata?.storageKey) return { ...node, metadata: { ...node.metadata, content: await resolveImageUrl(node.metadata.storageKey, content) } };
             if (!content.startsWith("data:image/")) return node;
             return { ...node, metadata: { ...node.metadata, ...imageMetadata(await uploadImage(content)) } };
         }),
@@ -4695,15 +4634,13 @@ function applyCanvasVideoTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             position: { x: node.position.x + node.width / 2 - videoSize.width / 2, y: node.position.y + node.height / 2 - videoSize.height / 2 },
             metadata: {
                 ...metadata,
-                ...mediaFieldsFromStableSource({
-                    url,
-                    storageKey: task.storageKey || "",
-                    mimeType: "video/mp4",
-                    bytes: 0,
-                    width: taskSize.width,
-                    height: taskSize.height,
-                }),
+                content: url,
+                storageKey: task.storageKey || "",
                 status: NODE_STATUS_SUCCESS,
+                naturalWidth: taskSize.width,
+                naturalHeight: taskSize.height,
+                bytes: 0,
+                mimeType: "video/mp4",
                 progress: 100,
             },
         };
@@ -4749,15 +4686,13 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             position: { x: node.position.x + node.width / 2 - imageSize.width / 2, y: node.position.y + node.height / 2 - imageSize.height / 2 },
             metadata: {
                 ...metadata,
-                ...mediaFieldsFromStableSource({
-                    url,
-                    storageKey: task.storageKey || "",
-                    mimeType: task.mimeType || "image/png",
-                    bytes: task.bytes || 0,
-                    width: naturalWidth,
-                    height: naturalHeight,
-                }),
+                content: url,
+                storageKey: task.storageKey || "",
                 status: NODE_STATUS_SUCCESS,
+                naturalWidth,
+                naturalHeight,
+                bytes: task.bytes || 0,
+                mimeType: task.mimeType || "image/png",
                 progress: 100,
                 imageTaskResultId: task.id,
                 panoramaProjection: isPanorama ? ("equirectangular" as const) : undefined,
@@ -4778,11 +4713,13 @@ function applyCanvasImageTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             },
             metadata: {
                 ...root.metadata,
-                ...mediaFieldsFromStableSource({ url, storageKey: "", mimeType: "image/png", bytes: 0 }),
+                content: url,
                 status: NODE_STATUS_SUCCESS,
                 progress: 100,
-                // Keep task ids so another browser can backfill from canvas image-tasks.
-                imageTaskId: task.id,
+                storageKey: "",
+                mimeType: "image/png",
+                bytes: 0,
+                imageTaskId: undefined,
                 imageTaskResultId: task.id,
                 isBatchRoot: undefined,
                 batchChildIds: undefined,
@@ -4832,13 +4769,11 @@ function applyCanvasAudioTaskUpdate(nodes: CanvasNodeData[], nodeId: string, tas
             ...node,
             metadata: {
                 ...metadata,
-                ...mediaFieldsFromStableSource({
-                    url,
-                    storageKey: task.storageKey || "",
-                    mimeType: task.mimeType || "audio/mpeg",
-                    bytes: task.bytes || 0,
-                }),
+                content: url,
+                storageKey: task.storageKey || "",
                 status: NODE_STATUS_SUCCESS,
+                bytes: task.bytes || 0,
+                mimeType: task.mimeType || "audio/mpeg",
                 progress: 100,
                 audioTaskResultId: task.id,
             },

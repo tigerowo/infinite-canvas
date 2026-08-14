@@ -175,18 +175,11 @@ export function clearStorageConfigCache() {
     storageConfigPromise = null;
 }
 
-function stableMediaUrl(url = "") {
-    const value = String(url || "").trim();
-    if (!value || value.startsWith("blob:")) return "";
-    return value;
-}
-
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
-    const stableFallback = stableMediaUrl(fallback);
-    if (!storageKey) return stableFallback ? getProxyUrl(stableFallback) : "";
+    if (!storageKey) return fallback;
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        if (stableFallback) return getProxyUrl(stableFallback);
+        if (fallback && !fallback.startsWith("blob:")) return fallback;
         const cached = objectUrls.get(storageKey);
         if (cached) return cached;
         const blob = await store.getItem<Blob>(storageKey).catch(() => null);
@@ -198,22 +191,18 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
         const cachedUrl = serverUrls.get(id);
         if (cachedUrl) return cachedUrl;
         const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
-        if (!info) return "";
+        if (!info) return fallback;
         const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
         serverUrls.set(id, url);
         return url;
     }
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
-    const blob = await store.getItem<Blob>(storageKey).catch(() => null);
-    if (blob) {
-        const url = URL.createObjectURL(blob);
-        objectUrls.set(storageKey, url);
-        return url;
-    }
-    // Different browser origin / device: local IndexedDB is empty; never return foreign blob: URLs.
-    if (stableFallback) return getProxyUrl(stableFallback);
-    return "";
+    const blob = await store.getItem<Blob>(storageKey);
+    if (!blob) return fallback;
+    const url = URL.createObjectURL(blob);
+    objectUrls.set(storageKey, url);
+    return url;
 }
 
 async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | null> {

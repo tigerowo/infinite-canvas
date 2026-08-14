@@ -84,16 +84,8 @@ export async function uploadMediaBlob(blob: Blob, filename: string): Promise<Upl
     return uploadMediaBlobToServer(blob, filename);
 }
 
-function stableMediaUrl(url = "") {
-    const value = String(url || "").trim();
-    if (!value || value.startsWith("blob:")) return "";
-    return value;
-}
-
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
-    const stableFallback = stableMediaUrl(fallback);
-    // Never route video/audio through /api/proxy-image (Safari Range/streaming breaks).
-    if (!storageKey) return stableFallback;
+    if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey).catch(() => null);
@@ -104,13 +96,13 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     }
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        if (stableFallback) return stableFallback;
+        if (fallback && !fallback.startsWith("blob:")) return fallback;
         const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
-        if (!info) return "";
-        return info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        if (!info) return fallback;
+        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
+        return url;
     }
-    if (stableFallback) return stableFallback;
-    return "";
+    return fallback;
 }
 
 export async function getMediaBlob(storageKey: string) {

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { AlertTriangle, ChevronRight, CloudOff, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
+import { ChevronRight, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
@@ -12,13 +12,11 @@ import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textare
 import { CanvasNodeType, type CanvasNodeData, type Position } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
-import { getProxyUrl } from "@/services/image-storage";
 
 function mediaPlaybackUrl(url?: string) {
     const value = String(url || "").trim();
     if (!value) return "";
-    // Older builds may have persisted image-proxy URLs for video/audio; Safari cannot play those.
-    // Handle both relative (/api/proxy-image?...) and absolute (https://host/api/proxy-image?...) forms.
+    // Cloud data may still contain image-proxy URLs from a previous build; Safari cannot play those.
     if (value.includes("/api/proxy-image?")) {
         try {
             const query = value.startsWith("http://") || value.startsWith("https://")
@@ -455,9 +453,6 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.isBatchRoot) return props.node.type === CanvasNodeType.Panorama ? <PanoramaNodeContent {...props} /> : <ImageNodeContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} now={props.now} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
-    if (props.node.metadata?.mediaStatus === "broken" && !props.node.metadata?.content) {
-        return <BrokenMediaContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
-    }
 
     const Renderer = nodeContentRenderers[props.node.type];
     return Renderer ? <Renderer {...props} /> : <UnknownNodeContent theme={props.theme} />;
@@ -548,34 +543,6 @@ function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "
     );
 }
 
-function BrokenMediaContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
-    return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-5 text-center" style={{ color: theme.node.text }}>
-            <div className="flex size-12 items-center justify-center rounded-2xl" style={{ background: theme.toolbar.activeBg }}>
-                <AlertTriangle className="size-5 opacity-70" />
-            </div>
-            <div className="max-w-[240px] text-xs leading-5 opacity-80">
-                {node.metadata?.mediaError || "本地缓存丢失；若无法从生成任务恢复，请重新生成"}
-            </div>
-            {onRetry ? (
-                <button
-                    type="button"
-                    className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
-                    style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        onRetry(node);
-                    }}
-                    onMouseDown={(event) => event.stopPropagation()}
-                >
-                    <RefreshCw className="size-3.5" />
-                    重新生成
-                </button>
-            ) : null}
-        </div>
-    );
-}
-
 function UnknownNodeContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
     return (
         <div className="flex h-full w-full items-center justify-center text-sm" style={{ color: theme.node.placeholder }}>
@@ -643,8 +610,6 @@ function ImageNodeContent(props: NodeContentRendererProps) {
                 <LoadingContent node={props.node} theme={props.theme} now={props.now} />
             ) : props.node.metadata?.status === "error" ? (
                 <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />
-            ) : props.node.metadata?.mediaStatus === "broken" ? (
-                <BrokenMediaContent node={props.node} theme={props.theme} onRetry={props.onRetry} />
             ) : (
                 <EmptyImageContent {...props} isBatchRoot={false} />
             );
@@ -654,12 +619,7 @@ function ImageNodeContent(props: NodeContentRendererProps) {
             </BatchFrame>
         );
     }
-    if (!props.node.metadata?.content) {
-        if (props.node.metadata?.mediaStatus === "broken") {
-            return <BrokenMediaContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
-        }
-        return <EmptyImageContent {...props} />;
-    }
+    if (!props.node.metadata?.content) return <EmptyImageContent {...props} />;
 
     return (
         <ImageContent
@@ -713,55 +673,32 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
     return content;
 }
 
-function VideoNodeContent({ node, theme, onRetry }: NodeContentRendererProps) {
-    if (!node.metadata?.content) {
-        if (node.metadata?.mediaStatus === "broken") return <BrokenMediaContent node={node} theme={theme} onRetry={onRetry} />;
+function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
+    if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
                 <Video className="size-7 opacity-35" />
                 <span className="text-sm">空视频节点</span>
             </div>
         );
-    }
-    return (
-        <div className="relative h-full w-full">
-            <video src={mediaPlaybackUrl(node.metadata.content)} controls playsInline preload="metadata" className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />
-            {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge theme={theme} /> : null}
-        </div>
-    );
+    return <video src={mediaPlaybackUrl(node.metadata.content)} controls playsInline preload="metadata" className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />;
 }
 
-function AudioNodeContent({ node, theme, onRetry }: NodeContentRendererProps) {
-    if (!node.metadata?.content) {
-        if (node.metadata?.mediaStatus === "broken") return <BrokenMediaContent node={node} theme={theme} onRetry={onRetry} />;
+function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
+    if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
                 <Music2 className="size-7 opacity-35" />
                 <span className="text-sm">空音频节点</span>
             </div>
         );
-    }
     return (
-        <div className="relative flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
+        <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
             <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
                 <Music2 className="size-4 shrink-0" />
                 <span className="truncate">{node.title || "音频"}</span>
             </div>
             <audio src={mediaPlaybackUrl(node.metadata.content)} controls preload="metadata" className="w-full" data-canvas-no-zoom />
-            {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge theme={theme} /> : null}
-        </div>
-    );
-}
-
-function LocalOnlyBadge({ theme }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
-    return (
-        <div
-            className="pointer-events-none absolute left-2.5 top-2.5 z-20 inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium shadow-sm backdrop-blur-md"
-            style={{ background: `${theme.toolbar.panel}e6`, borderColor: `${theme.toolbar.border}cc`, color: theme.node.text }}
-            title="未上云，换域名不可见"
-        >
-            <CloudOff className="size-3 opacity-70" />
-            未上云
         </div>
     );
 }
@@ -792,17 +729,16 @@ function ImageContent({
 
     return (
         <BatchFrame batchCount={isBatchRoot ? batchCount : 0} batchExpanded={batchExpanded} batchOpening={batchOpening} batchRecovering={batchRecovering} onToggleBatch={onToggleBatch}>
-            <div className="relative h-full w-full overflow-hidden rounded-3xl">
+            <div className="h-full w-full overflow-hidden rounded-3xl">
                 {media ?? (
                     <img
-                        src={getProxyUrl(node.metadata!.content!)}
+                        src={node.metadata!.content!}
                         alt={node.title}
                         draggable={false}
                         onDragStart={(event) => event.preventDefault()}
                         className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
                     />
                 )}
-                {node.metadata?.mediaStatus === "local-only" ? <LocalOnlyBadge theme={theme} /> : null}
             </div>
             {isBatchRoot ? (
                 <button
