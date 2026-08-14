@@ -900,6 +900,8 @@ export default function AdminSettingsPage() {
                                             { label: "OpenAI", value: "openai" },
                                             { label: "KIE", value: "kie" },
                                             { label: "MiMo", value: "mimo" },
+                                            { label: "Grok2API", value: "grok2api" },
+                                            { label: "xAI", value: "xai" },
                                         ]}
                                     />
                                 </Form.Item>

@@ -319,6 +319,8 @@ export function AppConfigModal() {
                                                     { label: "OpenAI", value: "openai" },
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },
+                                                    { label: "Grok2API", value: "grok2api" },
+                                                    { label: "xAI", value: "xai" },
                                                 ]}
                                                 onChange={(protocol) => patchLocalChannel(channel.id, { protocol: protocol as LocalModelChannel["protocol"] })}
                                             />
