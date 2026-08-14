@@ -96,11 +96,9 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     }
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        if (fallback && !fallback.startsWith("blob:")) return fallback;
-        const info = await apiGet<{ publicUrl?: string }>(`/api/files/${encodeURIComponent(id)}`).catch(() => null);
-        if (!info) return fallback;
-        const url = info?.publicUrl || `/api/files/${encodeURIComponent(id)}/content`;
-        return url;
+        if (fallback && fallback.startsWith("/api/files/") && fallback.includes("/content")) return fallback;
+        // Same-origin content API is reliable for <video>/<img>; private WebDAV public URLs often are not.
+        return `/api/files/${encodeURIComponent(id)}/content`;
     }
     return fallback;
 }

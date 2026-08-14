@@ -14,3 +14,4 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Grok 图生图多参考图应传 `images:[{url}]`，不再误映射为视频字段 `reference_images`；非法 `aspect_ratio`/`quality`/`size` 会被清洗。
 - Grok 视频：`image` 与 `reference_images` 互斥；**首帧单图（含 video-1.5）可选 1080p**；**仅多参考图模式最高 720p**；视频 `21:9` 吸附为 `16:9`。
 - Safari 打开画布视频应能播放；若节点 content 仍是 /api/proxy-image?url=视频地址，前端会解成直链。
+- 本地生成/上传图片后点“上传至云存储”，图片应仍可显示（content 为 /api/files/.../content 或可用预览，不应变 X）。

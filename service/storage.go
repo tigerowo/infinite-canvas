@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tigerowo/infinite-canvas/model"
-	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"gorm.io/gorm"
 )
 
@@ -220,10 +220,9 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
 	}
+	// Always expose same-origin content URL to browsers. PublicBaseURL may point at
+	// private WebDAV/S3 endpoints that <img>/<video> cannot authenticate against.
 	url := "/api/files/" + objectID + "/content"
-	if publicURL != "" {
-		url = publicURL
-	}
 	return UploadedStorageObject{ID: objectID, URL: url, StorageKey: "server:" + objectID, Bytes: int64(len(data)), MimeType: contentType}, nil
 }
 
