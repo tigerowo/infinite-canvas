@@ -14,7 +14,16 @@ import (
 func isGrok2APIFamilyChannel(channel model.ModelChannel, modelName string) bool {
 	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
 	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
-	return protocol == "grok2api" || protocol == "xai" || strings.Contains(baseURL, "grok2api")
+	if protocol == "grok2api" || protocol == "xai" {
+		return true
+	}
+	if strings.Contains(baseURL, "grok2api") || strings.Contains(baseURL, "api.x.ai") || strings.Contains(baseURL, "x.ai/") {
+		return true
+	}
+	// When channel protocol is still openai but the selected model is native Grok media,
+	// route it through the grok2api/xAI adapter. KIE/APIMart are checked earlier.
+	model := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(model, "grok-imagine-") || strings.HasPrefix(model, "grok-voice-")
 }
 
 func normalizeGrok2APIRequestBody(body []byte, contentType string, modelName string, upstreamPath string) ([]byte, string, error) {

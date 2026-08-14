@@ -560,7 +560,7 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 		}
 		return path
 	}
-	if strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-video") && path == "/videos" {
+	if isGrokImagineVideoModel(modelName) && path == "/videos" {
 		return "/videos/generations"
 	}
 	if isArkSeedanceVideo(channel.BaseURL, modelName) {
@@ -582,6 +582,11 @@ func isArkSeedanceVideo(baseURL string, modelName string) bool {
 
 func isAgnesVideoModel(modelName string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(modelName)), "agnes-video")
+}
+
+func isGrokImagineVideoModel(modelName string) bool {
+	model := strings.ToLower(strings.TrimSpace(modelName))
+	return strings.HasPrefix(model, "grok-imagine-video")
 }
 
 var errMissingModel = &aiError{"缺少模型名称"}

@@ -19,10 +19,16 @@ func TestIsGrok2APIFamilyChannel(t *testing.T) {
 		{name: "protocol grok2api", channel: model.ModelChannel{Protocol: "grok2api", BaseURL: "https://example.com"}, want: true},
 		{name: "protocol xai", channel: model.ModelChannel{Protocol: "xai", BaseURL: "https://api.x.ai"}, want: true},
 		{name: "base url grok2api", channel: model.ModelChannel{Protocol: "openai", BaseURL: "https://grok2api.example.com"}, want: true},
-		{name: "openai", channel: model.ModelChannel{Protocol: "openai", BaseURL: "https://example.com"}, want: false},
+		{name: "base url xai", channel: model.ModelChannel{Protocol: "openai", BaseURL: "https://api.x.ai/v1"}, want: true},
+		{name: "openai with grok video model", channel: model.ModelChannel{Protocol: "openai", BaseURL: "https://proxy.example.com"}, want: true},
+		{name: "openai text model", channel: model.ModelChannel{Protocol: "openai", BaseURL: "https://example.com"}, want: false},
 	}
 	for _, item := range cases {
-		if got := isGrok2APIFamilyChannel(item.channel, "grok-imagine-video-1.5"); got != item.want {
+		modelName := "grok-imagine-video-1.5"
+		if item.name == "openai text model" {
+			modelName = "gpt-4o"
+		}
+		if got := isGrok2APIFamilyChannel(item.channel, modelName); got != item.want {
 			t.Fatalf("%s: isGrok2APIFamilyChannel = %v, want %v", item.name, got, item.want)
 		}
 	}
@@ -32,6 +38,10 @@ func TestResolveAIProxyPathGrok2APIVideos(t *testing.T) {
 	channel := model.ModelChannel{Protocol: "grok2api", BaseURL: "https://grok2api.example.com"}
 	if got := resolveAIProxyPath(channel, "grok-imagine-video-1.5", "/videos"); got != "/videos/generations" {
 		t.Fatalf("resolveAIProxyPath(/videos) = %q, want /videos/generations", got)
+	}
+	openaiChannel := model.ModelChannel{Protocol: "openai", BaseURL: "https://proxy.example.com/v1"}
+	if got := resolveAIProxyPath(openaiChannel, "grok-imagine-video-1.5", "/videos"); got != "/videos/generations" {
+		t.Fatalf("openai channel resolveAIProxyPath(/videos) = %q, want /videos/generations", got)
 	}
 	for _, path := range []string{
 		"/images/generations",

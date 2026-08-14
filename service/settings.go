@@ -538,7 +538,10 @@ func isKIEAdminChannel(channel model.ModelChannel) bool {
 func isGrok2APIAdminChannel(channel model.ModelChannel) bool {
 	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
 	baseURL := strings.ToLower(strings.TrimSpace(channel.BaseURL))
-	return protocol == "grok2api" || protocol == "xai" || strings.Contains(baseURL, "grok2api")
+	return protocol == "grok2api" || protocol == "xai" ||
+		strings.Contains(baseURL, "grok2api") ||
+		strings.Contains(baseURL, "api.x.ai") ||
+		strings.Contains(baseURL, "x.ai/")
 }
 
 func grok2APIModels() []string {
