@@ -1,7 +1,6 @@
 package service
 
 import (
-	"reflect"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -16,22 +15,16 @@ func TestFetchAdminChannelModelsGrok2API(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{
-		"grok-imagine-image",
-		"grok-imagine-image-2.0",
-		"grok-imagine-image-edit",
-		"grok-imagine-image-quality",
-		"grok-imagine-video",
-		"grok-imagine-video-1.5",
-		"grok-voice-latest",
-		"grok-voice-think-fast-2.0",
+	// Unreachable base URL falls back to built-in media catalog.
+	if !containsAllStrings(models, grok2APIModels()) {
+		t.Fatalf("models missing built-in grok media catalog: %#v", models)
 	}
-	if !reflect.DeepEqual(models, want) {
-		t.Fatalf("models = %#v, want %#v", models, want)
+	if len(models) < len(grok2APIModels()) {
+		t.Fatalf("models length = %d", len(models))
 	}
 }
 
-func TestFetchAdminChannelModelsXAISkipsModelsRequest(t *testing.T) {
+func TestFetchAdminChannelModelsXAIFallsBackToBuiltin(t *testing.T) {
 	models, err := fetchAdminChannelModels(model.ModelChannel{
 		Protocol: "xai",
 		BaseURL:  "https://api.x.ai",
@@ -40,7 +33,27 @@ func TestFetchAdminChannelModelsXAISkipsModelsRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 8 {
-		t.Fatalf("models length = %d", len(models))
+	if !containsAllStrings(models, grok2APIModels()) {
+		t.Fatalf("models missing built-in grok media catalog: %#v", models)
 	}
+}
+
+func TestMergeGrok2APIChannelModelsKeepsUpstreamChatModels(t *testing.T) {
+	merged := uniqueModelNames(append([]string{"grok-4", "grok-3-mini", "grok-imagine-video"}, grok2APIModels()...))
+	if !containsAllStrings(merged, []string{"grok-4", "grok-3-mini", "grok-imagine-video-1.5", "grok-voice-latest"}) {
+		t.Fatalf("merged models = %#v", merged)
+	}
+}
+
+func containsAllStrings(items []string, required []string) bool {
+	set := map[string]bool{}
+	for _, item := range items {
+		set[item] = true
+	}
+	for _, item := range required {
+		if !set[item] {
+			return false
+		}
+	}
+	return true
 }

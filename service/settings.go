@@ -492,10 +492,32 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 		return result, nil
 	}
 	if isGrok2APIAdminChannel(channel) {
-		result := grok2APIModels()
+		return fetchGrok2APIChannelModels(channel)
+	}
+	result, err := fetchOpenAICompatibleModels(channel)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func fetchGrok2APIChannelModels(channel model.ModelChannel) ([]string, error) {
+	// Prefer upstream /models so chat/text LLMs remain available.
+	// Always merge the built-in media catalog because some gateways omit image/video/voice ids.
+	builtin := grok2APIModels()
+	upstream, err := fetchOpenAICompatibleModels(channel)
+	if err != nil {
+		result := append([]string{}, builtin...)
 		sort.Strings(result)
 		return result, nil
 	}
+	result := uniqueModelNames(append(upstream, builtin...))
+	sort.Strings(result)
+	return result, nil
+}
+
+func fetchOpenAICompatibleModels(channel model.ModelChannel) ([]string, error) {
 	request, err := http.NewRequest(http.MethodGet, BuildModelChannelURL(channel, "/models"), nil)
 	if err != nil {
 		return nil, err
@@ -525,7 +547,6 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 			result = append(result, item.ID)
 		}
 	}
-	sort.Strings(result)
 	return result, nil
 }
 
