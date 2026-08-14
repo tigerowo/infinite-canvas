@@ -94,10 +94,73 @@ func TestNormalizeGrok2APIImageEditBody(t *testing.T) {
 		t.Fatalf("size = %#v", payload["size"])
 	}
 	if _, ok := payload["images"]; ok {
-		t.Fatal("legacy images key should be removed")
+		t.Fatal("single edit image should collapse to image, not keep images")
 	}
 	if _, ok := payload["reference_images"]; ok {
-		t.Fatal("single edit image should not become reference_images")
+		t.Fatal("image edit must not emit video-only reference_images")
+	}
+}
+
+func TestNormalizeGrok2APIImageEditMultiReferenceBody(t *testing.T) {
+	body := []byte(`{"model":"grok-imagine-image-edit","prompt":"merge styles","images":[{"url":"https://example.com/a.png"},{"url":"https://example.com/b.png"}],"aspect_ratio":"21:9","quality":"high","resolution":"4k"}`)
+	encoded, _, err := normalizeGrok2APIImageBody(body, "application/json", "grok-imagine-image-edit", "/images/edits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := testGrok2APIRecord(t, encoded)
+	items, ok := payload["images"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("images = %#v", payload["images"])
+	}
+	if testGrok2APIRecord(t, items[0])["url"] != "https://example.com/a.png" || testGrok2APIRecord(t, items[1])["url"] != "https://example.com/b.png" {
+		t.Fatalf("images = %#v", items)
+	}
+	if _, ok := payload["image"]; ok {
+		t.Fatal("multi edit refs should use images, not image")
+	}
+	if _, ok := payload["reference_images"]; ok {
+		t.Fatal("image edit must not emit video-only reference_images")
+	}
+	if payload["aspect_ratio"] != "20:9" {
+		t.Fatalf("aspect_ratio = %#v, want 20:9", payload["aspect_ratio"])
+	}
+	if payload["resolution"] != "2k" {
+		t.Fatalf("resolution = %#v, want 2k", payload["resolution"])
+	}
+	if _, ok := payload["quality"]; ok {
+		t.Fatal("quality must be stripped for grok image requests")
+	}
+}
+
+func TestNormalizeGrok2APIImagePromptTooLong(t *testing.T) {
+	prompt := strings.Repeat("测", 8001)
+	body, _ := json.Marshal(map[string]any{
+		"model":  "grok-imagine-image-2.0",
+		"prompt": prompt,
+	})
+	_, _, err := normalizeGrok2APIImageBody(body, "application/json", "grok-imagine-image-2.0", "/images/generations")
+	if err == nil || !strings.Contains(err.Error(), "8000") {
+		t.Fatalf("expected prompt length error, got %v", err)
+	}
+}
+
+func TestNormalizeGrok2APIImageGenerationSanitizesAspectAndDropsSize(t *testing.T) {
+	body := []byte(`{"model":"grok-imagine-image","prompt":"cat","aspect_ratio":"21:9","size":"1792x1024","quality":"high","resolution":"4k"}`)
+	encoded, _, err := normalizeGrok2APIImageBody(body, "application/json", "grok-imagine-image", "/images/generations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := testGrok2APIRecord(t, encoded)
+	if payload["aspect_ratio"] != "20:9" {
+		t.Fatalf("aspect_ratio = %#v", payload["aspect_ratio"])
+	}
+	if payload["resolution"] != "2k" {
+		t.Fatalf("resolution = %#v", payload["resolution"])
+	}
+	for _, key := range []string{"size", "quality"} {
+		if _, ok := payload[key]; ok {
+			t.Fatalf("unexpected key %q in %#v", key, payload)
+		}
 	}
 }
 

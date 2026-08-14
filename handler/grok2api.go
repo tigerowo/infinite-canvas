@@ -4,12 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"mime"
 	"mime/multipart"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
+
+const grok2APIImagePromptMaxRunes = 8000
 
 func isGrok2APIFamilyChannel(channel model.ModelChannel, modelName string) bool {
 	protocol := strings.ToLower(strings.TrimSpace(channel.Protocol))
@@ -47,11 +52,11 @@ func normalizeGrok2APIImageBody(body []byte, contentType string, modelName strin
 	if finalModel := strings.TrimSpace(firstNonEmpty(modelName, toStringSafe(payload["model"]))); finalModel != "" {
 		payload["model"] = finalModel
 	}
-	normalizeGrok2APIImageReferences(payload)
-	keys := []string{"model", "prompt", "aspect_ratio", "resolution", "n", "response_format", "partial_images", "stream", "image", "reference_images"}
-	if upstreamPath == "/images/edits" {
-		keys = append(keys, "size")
+	normalizeGrok2APIMediaReferences(payload, upstreamPath == "/images/edits")
+	if err := sanitizeGrok2APIImageParams(payload, upstreamPath); err != nil {
+		return nil, "", err
 	}
+	keys := []string{"model", "prompt", "aspect_ratio", "resolution", "n", "response_format", "partial_images", "stream", "image", "images", "size"}
 	return marshalGrok2APIPayload(payload, keys)
 }
 
@@ -63,7 +68,7 @@ func normalizeGrok2APIVideoBody(body []byte, contentType string, modelName strin
 	if finalModel := strings.TrimSpace(firstNonEmpty(modelName, toStringSafe(payload["model"]))); finalModel != "" {
 		payload["model"] = finalModel
 	}
-	normalizeGrok2APIImageReferences(payload)
+	normalizeGrok2APIMediaReferences(payload, false)
 	return marshalGrok2APIPayload(payload, []string{
 		"model", "prompt", "aspect_ratio", "duration", "resolution", "n", "response_format", "reference_audios", "video", "image", "reference_images",
 	})
@@ -83,39 +88,171 @@ func marshalGrok2APIPayload(payload map[string]any, keys []string) ([]byte, stri
 	return encoded, "application/json", nil
 }
 
-func normalizeGrok2APIImageReferences(payload map[string]any) {
-	if value, ok := payload["image"]; ok {
-		if urls := collectGrok2APIReferenceURLs(value); len(urls) > 0 {
-			payload["image"] = map[string]any{"url": urls[0]}
+func sanitizeGrok2APIImageParams(payload map[string]any, upstreamPath string) error {
+	delete(payload, "quality")
+
+	prompt := toStringSafe(payload["prompt"])
+	if runes := utf8.RuneCountInString(prompt); runes > grok2APIImagePromptMaxRunes {
+		return fmt.Errorf("Grok/xAI 图片 prompt 最长 %d 字符，当前 %d（含系统提示词）。请缩短提示词或系统提示词", grok2APIImagePromptMaxRunes, runes)
+	}
+
+	if ratio := strings.TrimSpace(toStringSafe(payload["aspect_ratio"])); ratio != "" {
+		if snapped := snapGrok2APIImageAspectRatio(ratio); snapped != "" {
+			payload["aspect_ratio"] = snapped
 		} else {
-			delete(payload, "image")
+			delete(payload, "aspect_ratio")
 		}
+	}
+
+	size := strings.ToLower(strings.TrimSpace(toStringSafe(payload["size"])))
+	if upstreamPath == "/images/edits" {
+		switch size {
+		case "", "auto", "1024x1024", "1024x1536", "1536x1024":
+			if size != "" {
+				payload["size"] = size
+			}
+		default:
+			// Invalid OpenAI-style sizes are dropped; aspect_ratio already carries the intent.
+			delete(payload, "size")
+		}
+	} else {
+		delete(payload, "size")
+	}
+
+	resolution := strings.ToLower(strings.TrimSpace(toStringSafe(payload["resolution"])))
+	switch resolution {
+	case "1k", "2k":
+		payload["resolution"] = resolution
+	case "4k", "high", "hd", "medium":
+		payload["resolution"] = "2k"
+	case "low", "standard":
+		payload["resolution"] = "1k"
+	default:
+		if resolution != "" {
+			delete(payload, "resolution")
+		}
+	}
+
+	if format := strings.ToLower(strings.TrimSpace(toStringSafe(payload["response_format"]))); format != "" {
+		if format != "url" && format != "b64_json" {
+			delete(payload, "response_format")
+		}
+	}
+	return nil
+}
+
+func snapGrok2APIImageAspectRatio(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "20:9", "9:20", "19.5:9", "9:19.5", "auto":
+		return value
+	case "21:9", "7:3":
+		return "20:9"
+	case "9:21", "3:7":
+		return "9:20"
+	}
+	if parts := strings.Split(value, "x"); len(parts) == 2 {
+		var width, height float64
+		if _, err := fmt.Sscanf(parts[0], "%f", &width); err == nil {
+			if _, err := fmt.Sscanf(parts[1], "%f", &height); err == nil && width > 0 && height > 0 {
+				return snapGrok2APIImageAspectRatioByValue(width / height)
+			}
+		}
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return ""
+	}
+	var width, height float64
+	if _, err := fmt.Sscanf(parts[0], "%f", &width); err != nil || width <= 0 {
+		return ""
+	}
+	if _, err := fmt.Sscanf(parts[1], "%f", &height); err != nil || height <= 0 {
+		return ""
+	}
+	return snapGrok2APIImageAspectRatioByValue(width / height)
+}
+
+func snapGrok2APIImageAspectRatioByValue(ratio float64) string {
+	candidates := []struct {
+		label string
+		value float64
+	}{
+		{"1:1", 1},
+		{"16:9", 16.0 / 9.0},
+		{"9:16", 9.0 / 16.0},
+		{"4:3", 4.0 / 3.0},
+		{"3:4", 3.0 / 4.0},
+		{"3:2", 3.0 / 2.0},
+		{"2:3", 2.0 / 3.0},
+		{"2:1", 2},
+		{"1:2", 0.5},
+		{"20:9", 20.0 / 9.0},
+		{"9:20", 9.0 / 20.0},
+		{"19.5:9", 19.5 / 9.0},
+		{"9:19.5", 9.0 / 19.5},
+	}
+	best := "1:1"
+	bestScore := math.MaxFloat64
+	for _, item := range candidates {
+		score := math.Abs(math.Log(ratio) - math.Log(item.value))
+		if score < bestScore {
+			best = item.label
+			bestScore = score
+		}
+	}
+	return best
+}
+
+// normalizeGrok2APIMediaReferences maps legacy image fields.
+// Image edits use image/images; video uses image/reference_images.
+func normalizeGrok2APIMediaReferences(payload map[string]any, imageEdit bool) {
+	var urls []string
+	if value, ok := payload["image"]; ok {
+		urls = append(urls, collectGrok2APIReferenceURLs(value)...)
+		delete(payload, "image")
 	}
 	legacy := []string{
 		"images", "image_url", "image_urls", "reference_image", "reference_image_url",
 		"reference_image_urls", "first_frame_url", "first_frame_image",
-		"input_reference", "input_reference[]", "image_input",
+		"input_reference", "input_reference[]", "image_input", "reference_images",
 	}
-	var urls []string
 	for _, key := range legacy {
 		if value, ok := payload[key]; ok {
 			urls = append(urls, collectGrok2APIReferenceURLs(value)...)
 			delete(payload, key)
 		}
 	}
-	if len(urls) == 1 {
-		payload["image"] = map[string]any{"url": urls[0]}
-	} else if len(urls) > 1 {
-		payload["reference_images"] = grok2APIReferenceImageList(urls)
-	}
-	if value, ok := payload["reference_images"]; ok {
-		urls = collectGrok2APIReferenceURLs(value)
-		if len(urls) > 0 {
-			payload["reference_images"] = grok2APIReferenceImageList(urls)
-		} else {
-			delete(payload, "reference_images")
+	// de-dup while preserving order
+	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(urls))
+	for _, url := range urls {
+		url = strings.TrimSpace(url)
+		if url == "" {
+			continue
 		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		unique = append(unique, url)
 	}
+	if len(unique) == 0 {
+		return
+	}
+	if imageEdit {
+		if len(unique) == 1 {
+			payload["image"] = map[string]any{"url": unique[0]}
+			return
+		}
+		payload["images"] = grok2APIReferenceImageList(unique)
+		return
+	}
+	if len(unique) == 1 {
+		payload["image"] = map[string]any{"url": unique[0]}
+		return
+	}
+	payload["reference_images"] = grok2APIReferenceImageList(unique)
 }
 
 func grok2APIReferenceImageList(urls []string) []any {
