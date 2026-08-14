@@ -2,6 +2,9 @@
 
 ## Unreleased
 
++ [新增] 管理后台与本地渠道协议支持 `grok2api`、`xai`
++ [新增] grok2api/xAI 媒体协议适配：图片、视频路径映射、字段归一化、TTS `/tts` 与内置 Grok 模型目录
++ [修复] 修复 `grok-imagine-video-1.5` 在 openai 协议渠道下误打 `/videos` 导致 404 的问题
 + [新增] 3D 导演台加入运镜时间轴
 + [新增] 3D 导演台场景开关项增加网格显示控制
 + [修复] 完善 MiMo 文本模型的画布 Agent 多轮工具调用与图片理解支持
