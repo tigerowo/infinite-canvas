@@ -76,6 +76,7 @@ function PanoramaSurface({ src, alt, proxyGeneratedPanorama, viewerEntry }: Pano
         if (!registerPanoramaViewer(viewerEntry)) return;
         setStatus("loading");
         let viewer: Viewer | null = null;
+        let cancelled = false;
 
         function handleReady() {
             setStatus("ready");
@@ -108,22 +109,49 @@ function PanoramaSurface({ src, alt, proxyGeneratedPanorama, viewerEntry }: Pano
             }
         }
 
+        // 大图(超 2048px)先降采样到安全尺寸再喂给 viewer,规避大纹理上传挂起。
+        async function preparePanoramaSource() {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            await new Promise<void>((resolve, reject) => {
+                img.onload = () => resolve();
+                img.onerror = () => reject(new Error("全景图加载失败"));
+                img.src = panoramaSrc;
+            });
+            if (cancelled) return panoramaSrc;
+            if (img.width <= 2048) return panoramaSrc;
+            const ratio = 2048 / img.width;
+            const scaled = document.createElement("canvas");
+            scaled.width = Math.floor(img.width * ratio);
+            scaled.height = Math.floor(img.height * ratio);
+            const ctx = scaled.getContext("2d");
+            if (!ctx) return panoramaSrc;
+            ctx.drawImage(img, 0, 0, scaled.width, scaled.height);
+            const blob = await new Promise<Blob | null>((resolve) => scaled.toBlob(resolve, "image/jpeg", 0.92));
+            return blob ? URL.createObjectURL(blob) : panoramaSrc;
+        }
+
         try {
             SYSTEM.load();
-            viewer = new Viewer({
-                container,
-                panorama: panoramaSrc,
-                navbar: false,
-                mousewheel: true,
-                mousemove: true,
-                touchmoveTwoFingers: false,
-                moveInertia: false,
-                defaultZoomLvl: 50,
-                minFov: 25,
-                maxFov: 110,
+            void preparePanoramaSource().then((safeSrc) => {
+                if (cancelled) return;
+                viewer = new Viewer({
+                    container,
+                    panorama: safeSrc,
+                    navbar: false,
+                    mousewheel: true,
+                    mousemove: true,
+                    touchmoveTwoFingers: false,
+                    moveInertia: false,
+                    defaultZoomLvl: 50,
+                    minFov: 25,
+                    maxFov: 110,
+                });
+                viewer.addEventListener("ready", handleReady);
+                viewer.addEventListener("panorama-error", handleError);
+            }).catch(() => {
+                if (!cancelled) setStatus("error");
             });
-            viewer.addEventListener("ready", handleReady);
-            viewer.addEventListener("panorama-error", handleError);
         } catch {
             destroyAndReleaseViewer();
             container.replaceChildren();
@@ -131,7 +159,10 @@ function PanoramaSurface({ src, alt, proxyGeneratedPanorama, viewerEntry }: Pano
             return;
         }
 
-        return destroyViewer;
+        return () => {
+            cancelled = true;
+            destroyViewer();
+        };
     }, [panoramaSrc, viewerEntry]);
 
     return (
