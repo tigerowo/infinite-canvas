@@ -1,3 +1,4 @@
+import { mimoTextModels } from "@/lib/mimo-tts";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
 import type { AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
@@ -5,6 +6,7 @@ import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas
 
 export type CanvasAgentModelTurn = {
     content: string;
+    reasoningContent?: string;
     toolCalls: CanvasAgentToolCall[];
     usedJsonFallback: boolean;
 };
@@ -25,6 +27,7 @@ type ChatCompletionPayload = {
     choices?: Array<{
         message?: {
             content?: string | null;
+            reasoning_content?: string | null;
             tool_calls?: Array<{
                 id?: string;
                 function?: { name?: string; arguments?: string | Record<string, unknown> };
@@ -35,6 +38,7 @@ type ChatCompletionPayload = {
         choices?: Array<{
             message?: {
                 content?: string | null;
+                reasoning_content?: string | null;
                 tool_calls?: Array<{
                     id?: string;
                     function?: { name?: string; arguments?: string | Record<string, unknown> };
@@ -112,10 +116,14 @@ async function requestCompletion(config: AiConfig, systemPrompt: string, message
     }
     const message = payload.choices?.[0]?.message || payload.data?.choices?.[0]?.message;
     if (!message) throw new CanvasAgentRequestError(readError(payload, response.status) || "文本模型没有返回内容", response.status);
+    const normalizedModel = config.model.trim().toLowerCase();
+    const preservesReasoningContent = normalizedModel.startsWith("glm-") || mimoTextModels.some((model) => model === normalizedModel);
+    const reasoningContent = preservesReasoningContent && typeof message.reasoning_content === "string" ? message.reasoning_content : undefined;
 
     refreshRemoteUser(config);
     return {
         content: typeof message.content === "string" ? message.content : "",
+        ...(reasoningContent !== undefined ? { reasoningContent } : {}),
         toolCalls: (message.tool_calls || []).flatMap((toolCall, index) => {
             const name = toolCall.function?.name?.trim();
             if (!name) return [];
@@ -135,6 +143,7 @@ function toRequestMessage(message: CanvasAgentProtocolMessage) {
         return {
             role: "assistant",
             content: message.content || null,
+            ...(message.reasoningContent !== undefined ? { reasoning_content: message.reasoningContent } : {}),
             ...(message.toolCalls?.length
                 ? {
                       tool_calls: message.toolCalls.map((toolCall) => ({

@@ -105,7 +105,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
 
         input.onEvent?.({ status: "running", label: actions.length === 1 ? canvasAgentActionLabel(actions[0]) : "正在执行 " + actions.length + " 个画布操作" });
         const assistantToolMessage: CanvasAgentProtocolMessage = nativeActions.length
-            ? { role: "assistant", content: turn.content || undefined, toolCalls: actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
+            ? { role: "assistant", content: turn.content || undefined, ...(turn.reasoningContent !== undefined ? { reasoningContent: turn.reasoningContent } : {}), toolCalls: actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
             : { role: "assistant", content: turn.content };
 
         const results = await executeActions(actions, state, input.executeAction, input.signal, input.onEvent);
@@ -192,7 +192,7 @@ function buildUserContent(text: string, references: CanvasAssistantReference[], 
 
 function supportsCanvasAgentImageInput(modelName: string) {
     const model = modelName.trim().toLowerCase();
-    return /gpt-(?:4o|4\.1|5)|(?:^|[\\/_-])o[134](?:[\\/_-]|$)|gemini|claude|qwen.*(?:vl|vision)|glm-4v|pixtral|llava|internvl|deepseek.*vl|vision/.test(model);
+    return model === "mimo-v2.5" || /gpt-(?:4o|4\.1|5)|(?:^|[\\/_-])o[134](?:[\\/_-]|$)|gemini|claude|qwen.*(?:vl|vision)|glm-4v|pixtral|llava|internvl|deepseek.*vl|vision/.test(model);
 }
 
 function looksLikeClarifyingQuestion(text: string) {

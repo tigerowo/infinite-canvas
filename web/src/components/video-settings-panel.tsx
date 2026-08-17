@@ -6,7 +6,7 @@ import { Input, Switch } from "antd";
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
 import { boolConfig, isSeedanceFastOrMiniModel, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio, normalizeSeedanceResolution, seedanceDurationOptions, seedancePixelLabel, seedanceRatioOptions, seedanceResolutionOptions } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
-import { modelKey, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
+import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 
 export const videoResolutionOptions = [
@@ -67,7 +67,8 @@ export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, s
 
     const model = modelName || config.model || config.videoModel;
     const grokMode = config.videoMode === "fun" || config.videoMode === "spicy" ? config.videoMode : "normal";
-    const seconds = config.videoSeconds || "6";
+    const cogVideoX3 = isCogVideoX3Model(model);
+    const seconds = cogVideoX3 ? normalizeCogVideoX3Duration(config.videoSeconds) : config.videoSeconds || "6";
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
     const resolution = normalizeVideoResolutionValue(config.vquality);
@@ -166,12 +167,12 @@ export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, s
                     <>
                         <SettingGroup title="秒数" color={theme.node.muted}>
                             <div className="grid grid-cols-3 gap-2.5">
-                                {secondOptions.map((value) => (
+                                {(cogVideoX3 ? COGVIDEOX3_DURATIONS : secondOptions).map((value) => (
                                     <OptionPill key={value} selected={seconds === String(value)} theme={theme} onClick={() => onConfigChange("videoSeconds", String(value))}>
                                         {value}s
                                     </OptionPill>
                                 ))}
-                                <NumberInput value={seconds} min={1} max={30} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />
+                                {cogVideoX3 ? null : <NumberInput value={seconds} min={1} max={30} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />}
                             </div>
                         </SettingGroup>
                         {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
@@ -482,7 +483,14 @@ export function isAPIMartKlingMotionControlConfig(config: AiConfig, modelName: s
 }
 
 export function isKIEKlingV3Config(config: AiConfig, modelName: string) {
-    return isProviderKlingConfig(config, modelName, "kling-3-0-video", "kie");
+    return isProviderKlingConfig(config, modelName, "kling-3-0-video", "kie") || Boolean(kieKlingOmniVariant(config, modelName));
+}
+
+export function kieKlingOmniVariant(config: AiConfig, modelName: string) {
+    const key = modelKey(modelName || config.model || config.videoModel);
+    const variant = key.startsWith("kling-3-0-omni-") ? key.slice("kling-3-0-omni-".length) : "";
+    if (!["text-to-video", "image-to-video", "reference-to-video", "transformation"].includes(variant)) return "";
+    return isProviderKlingConfig(config, modelName, key, "kie") ? variant : "";
 }
 
 export function isKIEKlingMotionControlConfig(config: AiConfig, modelName: string) {

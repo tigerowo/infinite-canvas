@@ -18,7 +18,7 @@ import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { UserStatusActions } from "@/components/layout/user-status-actions";
-import { isKIEKlingV3Config } from "@/components/video-settings-panel";
+import { isKIEKlingV3Config, kieKlingOmniVariant } from "@/components/video-settings-panel";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { cropDataUrl, splitDataUrl, upscaleDataUrl } from "../utils/canvas-image-data";
@@ -27,8 +27,9 @@ import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasI
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { App, Button, Dropdown, Modal } from "antd";
-import { modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
+import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
+import { isGlmTtsModel } from "@/lib/audio-generation";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { NODE_DEFAULT_SIZE, getNodeSpec } from "../constants";
 import { ActiveConnectionPath, ConnectionPath } from "../components/canvas-connections";
@@ -68,6 +69,7 @@ import {
     type CanvasConnection,
     type CanvasDirectorCapture,
     type CanvasDirectorPanorama,
+    type CanvasDirectorVideo,
     type CanvasImageGenerationType,
     type CanvasNodeData,
     type CanvasNodeMetadata,
@@ -1557,23 +1559,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         const hideLoading = message.loading("正在上传视频...", 0);
         try {
             const video = await uploadMediaFile(file, "video");
-            const size = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
-            const id = `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-            setNodes((prev) => [
-                ...prev,
-                {
-                    id,
-                    type: CanvasNodeType.Video,
-                    title: file.name,
-                    position: { x: position.x - size.width / 2, y: position.y - size.height / 2 },
-                    width: size.width,
-                    height: size.height,
-                    metadata: videoMetadata(video),
-                },
-            ]);
-            setSelectedNodeIds(new Set([id]));
+            const node = buildImportedVideoNode(video, file.name, position);
+            setNodes((prev) => [...prev, node]);
+            setSelectedNodeIds(new Set([node.id]));
             setSelectedConnectionId(null);
-            setDialogNodeId(id);
+            setDialogNodeId(node.id);
         } catch (error) {
             console.error("Upload video node failed:", error);
             message.error("视频上传失败");
@@ -1879,14 +1869,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         };
                     }),
                 );
-                let y = director.position.y;
-                for (const connection of connectionsRef.current) {
-                    if (connection.fromNodeId !== director.id) continue;
-                    const outputNode = nodesRef.current.find((node) => node.id === connection.toNodeId);
-                    if (outputNode?.type === CanvasNodeType.Image) {
-                        y = Math.max(y, outputNode.position.y + outputNode.height + 36);
-                    }
-                }
+                let y = getNextDirectorOutputY(director, nodesRef.current, connectionsRef.current);
                 const imageNodes = images.map((image) => {
                     const node = {
                         id: image.id,
@@ -1908,6 +1891,42 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             } catch (error) {
                 console.error("Send director captures to canvas failed:", error);
                 message.error("截图发送到画布失败");
+            } finally {
+                hideLoading();
+            }
+        },
+        [message],
+    );
+
+    const handleDirectorVideoSent = useCallback(
+        async (directorNodeId: string, output: CanvasDirectorVideo) => {
+            const director = nodesRef.current.find((node) => node.id === directorNodeId && node.type === CanvasNodeType.Director);
+            if (!director) return;
+
+            const hideLoading = message.loading("正在发送视频到画布...", 0);
+            try {
+                const uploaded = await uploadMediaFile(output.blob, "video");
+                const video = {
+                    ...uploaded,
+                    width: uploaded.width || output.width,
+                    height: uploaded.height || output.height,
+                    durationMs: uploaded.durationMs || Math.round(output.durationSeconds * 1000),
+                };
+                const y = getNextDirectorOutputY(director, nodesRef.current, connectionsRef.current);
+                const size = fitNodeSize(video.width, video.height, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+                const node = buildImportedVideoNode(video, output.fileName, {
+                    x: director.position.x + director.width + 96 + size.width / 2,
+                    y: y + size.height / 2,
+                });
+                setNodes((prev) => [...prev, node]);
+                setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: director.id, toNodeId: node.id }]);
+                setSelectedNodeIds(new Set([node.id]));
+                setSelectedConnectionId(null);
+                setDialogNodeId(node.id);
+                message.success("视频已发送到画布");
+            } catch (error) {
+                console.error("Send director video to canvas failed:", error);
+                message.error("视频发送到画布失败");
             } finally {
                 hideLoading();
             }
@@ -3052,8 +3071,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         videoGenerateAudio: agentEffectiveConfig.videoGenerateAudio,
                         videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
                         videoDuration: canvasAgentVideoDurationHint(videoModel),
-                        audioVoice: agentEffectiveConfig.audioVoice,
-                        audioFormat: agentEffectiveConfig.audioFormat,
+                        audioVoice: isGlmTtsModel(agentEffectiveConfig.audioModel) ? agentEffectiveConfig.glmTtsVoice : agentEffectiveConfig.audioVoice,
+                        audioFormat: isGlmTtsModel(agentEffectiveConfig.audioModel) ? agentEffectiveConfig.glmTtsFormat : agentEffectiveConfig.audioFormat,
                     };
                 }
 
@@ -3277,8 +3296,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         metadata.generateAudio = String(generateAudio);
                     }
                     if (mode === "audio") {
-                        metadata.audioVoice = stringValue("voice") || generationConfig.audioVoice;
-                        metadata.audioInstructions = stringValue("instructions") || generationConfig.audioInstructions;
+                        if (isGlmTtsModel(generationConfig.model)) {
+                            metadata.glmTtsVoice = stringValue("voice") || generationConfig.glmTtsVoice;
+                            metadata.glmTtsFormat = generationConfig.glmTtsFormat;
+                            metadata.glmTtsSpeed = generationConfig.glmTtsSpeed;
+                        } else {
+                            metadata.audioVoice = stringValue("voice") || generationConfig.audioVoice;
+                            metadata.audioInstructions = stringValue("instructions") || generationConfig.audioInstructions;
+                        }
                     }
 
                     const layoutSourceNodes = mode === "image" ? [] : mode === "video" ? nodesRef.current.filter((node) => !node.metadata?.groupId && (node.type === CanvasNodeType.Text || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Group)) : sourceNodes;
@@ -3825,6 +3850,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         onProjectChange={handleDirectorProjectChange}
                         onPanoramaRemoved={handleDirectorPanoramaRemoved}
                         onCapturesSent={handleDirectorCapturesSent}
+                        onVideoSent={handleDirectorVideoSent}
                     />
                 ) : null}
 
@@ -4309,10 +4335,10 @@ function CanvasTopBar({
             </div>
             <Modal title="快捷键" open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
                 <div className="space-y-2 border-t pt-4 text-sm" style={{ borderColor: theme.node.stroke }}>
-                    <Shortcut keys={["Ctrl / Space", "拖动"]} value="临时反转选择/移动工具" />
+                    <Shortcut keys={["Space", "拖动"]} value="临时反转选择/移动工具" />
                     <Shortcut keys={["滚轮"]} value="缩放画布" />
                     <Shortcut keys={["拖动"]} value="使用当前工具操作画布" />
-                    <Shortcut keys={["Shift / Cmd", "点击"]} value="追加选择节点" />
+                    <Shortcut keys={["Shift / Ctrl / Cmd", "点击"]} value="追加选择节点" />
                     <Shortcut keys={["Ctrl / Cmd", "G"]} value="创建组" />
                     <Shortcut keys={["Ctrl / Cmd", "C / V"]} value="复制 / 粘贴节点，或粘贴剪切板文本/图片" />
                     <Shortcut keys={["Ctrl / Cmd", "Z"]} value="撤销" />
@@ -4377,6 +4403,33 @@ function videoMetadata(video: UploadedFile): CanvasNodeMetadata {
     return { content: video.url, storageKey: video.storageKey, status: "success", naturalWidth: video.width, naturalHeight: video.height, bytes: video.bytes, mimeType: video.mimeType || "video/mp4", durationMs: video.durationMs };
 }
 
+function buildImportedVideoNode(video: UploadedFile, title: string, center: Position): CanvasNodeData {
+    const size = fitNodeSize(video.width || 1280, video.height || 720, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT);
+    return {
+        id: `video-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        type: CanvasNodeType.Video,
+        title,
+        position: { x: center.x - size.width / 2, y: center.y - size.height / 2 },
+        width: size.width,
+        height: size.height,
+        metadata: videoMetadata(video),
+    };
+}
+
+function getNextDirectorOutputY(
+    director: CanvasNodeData,
+    nodes: CanvasNodeData[],
+    connections: CanvasConnection[],
+) {
+    return connections.reduce((y, connection) => {
+        if (connection.fromNodeId !== director.id) return y;
+        const output = nodes.find((node) => node.id === connection.toNodeId);
+        return output?.type === CanvasNodeType.Image || output?.type === CanvasNodeType.Video
+            ? Math.max(y, output.position.y + output.height + 36)
+            : y;
+    }, director.position.y);
+}
+
 function audioMetadata(audio: UploadedFile): CanvasNodeMetadata {
     return { content: audio.url, storageKey: audio.storageKey, status: "success", bytes: audio.bytes, mimeType: audio.mimeType || "audio/mpeg", durationMs: audio.durationMs };
 }
@@ -4401,6 +4454,9 @@ function buildAudioGenerationMetadata(config: AiConfig, sourceMetadata?: CanvasN
         audioFormat: config.audioFormat,
         audioSpeed: config.audioSpeed,
         audioInstructions: config.audioInstructions,
+        glmTtsVoice: config.glmTtsVoice,
+        glmTtsFormat: config.glmTtsFormat,
+        glmTtsSpeed: config.glmTtsSpeed,
         mimoTtsVoice: config.mimoTtsVoice,
         mimoTtsFormat: config.mimoTtsFormat,
         mimoVoiceDesignPrompt: config.mimoVoiceDesignPrompt,
@@ -4426,10 +4482,12 @@ function referenceUrl(image: ReferenceImage) {
 
 function withCanvasVideoAdvancedConfig(config: AiConfig, context: Pick<NodeGenerationContext, "videoMultiPrompt" | "videoElementList">): AiConfig {
     const kieKlingV3 = isKIEKlingV3Config(config, config.model || config.videoModel);
+    const kieKlingOmni = kieKlingOmniVariant(config, config.model || config.videoModel);
     return {
         ...config,
         videoNegativePrompt: kieKlingV3 ? "" : config.videoNegativePrompt,
-        videoShotType: kieKlingV3 ? "intelligence" : config.videoShotType,
+        videoMultiShot: kieKlingOmni === "transformation" ? "false" : config.videoMultiShot,
+        videoShotType: kieKlingV3 && !kieKlingOmni ? "intelligence" : config.videoShotType,
         videoMultiPrompt: context.videoMultiPrompt.length ? context.videoMultiPrompt : config.videoMultiPrompt,
         videoElementList: context.videoElementList.length ? context.videoElementList : config.videoElementList,
     };
@@ -4810,6 +4868,7 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
 
 function canvasAgentVideoDurationHint(modelName: string) {
     const key = modelKey(modelName);
+    if (isCogVideoX3Model(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
     if (key.includes("seedance")) return { values: [-1, 4, 5, 6, 8, 10, 12, 15], range: "智能或 4-15 秒" };
     if (isCanvasAgentKlingV3(key)) return { values: [3, 15], range: "3-15 秒" };
     if (isCanvasAgentKlingV26(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
@@ -4819,6 +4878,7 @@ function canvasAgentVideoDurationHint(modelName: string) {
 function validateCanvasAgentVideoSeconds(modelName: string, seconds: number) {
     if (!Number.isFinite(seconds)) return "视频时长无效，请先向用户确认单镜头时长";
     const key = modelKey(modelName);
+    if (isCogVideoX3Model(key) && seconds !== 5 && seconds !== 10) return "当前 CogVideoX-3 模型仅支持 5 或 10 秒";
     if (key.includes("seedance") && seconds !== -1 && (seconds < 4 || seconds > 15)) return "当前 Seedance 模型仅支持智能时长或 4-15 秒";
     if (isCanvasAgentKlingV3(key) && (seconds < 3 || seconds > 15)) return "当前 Kling 3 模型仅支持 3-15 秒";
     if (isCanvasAgentKlingV26(key) && seconds !== 5 && seconds !== 10) return "当前 Kling 2.6 模型仅支持 5 或 10 秒";
@@ -4865,6 +4925,9 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
         audioFormat: node?.metadata?.audioFormat || config.audioFormat || defaultConfig.audioFormat,
         audioSpeed: node?.metadata?.audioSpeed || config.audioSpeed || defaultConfig.audioSpeed,
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
+        glmTtsVoice: node?.metadata?.glmTtsVoice || config.glmTtsVoice || defaultConfig.glmTtsVoice,
+        glmTtsFormat: node?.metadata?.glmTtsFormat || config.glmTtsFormat || defaultConfig.glmTtsFormat,
+        glmTtsSpeed: node?.metadata?.glmTtsSpeed || config.glmTtsSpeed || defaultConfig.glmTtsSpeed,
         mimoTtsVoice: node?.metadata?.mimoTtsVoice || config.mimoTtsVoice || defaultConfig.mimoTtsVoice,
         mimoTtsFormat: node?.metadata?.mimoTtsFormat || config.mimoTtsFormat || defaultConfig.mimoTtsFormat,
         mimoVoiceDesignPrompt: node?.metadata?.mimoVoiceDesignPrompt || config.mimoVoiceDesignPrompt || defaultConfig.mimoVoiceDesignPrompt,

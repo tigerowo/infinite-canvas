@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { CanvasDirectorCapture, CanvasDirectorPanorama } from "../types";
+import type { CanvasDirectorCapture, CanvasDirectorPanorama, CanvasDirectorVideo } from "../types";
 
 type PanoramaRemoval = Pick<CanvasDirectorPanorama, "edgeId" | "sourceNodeId">;
 type DirectorCapturePayload = { dataUrl?: unknown; fileName?: unknown } | null | undefined;
@@ -16,6 +16,7 @@ export function CanvasDirector({
     onProjectChange,
     onPanoramaRemoved,
     onCapturesSent,
+    onVideoSent,
 }: {
     nodeId: string;
     project: unknown;
@@ -25,6 +26,7 @@ export function CanvasDirector({
     onProjectChange: (project: unknown) => void;
     onPanoramaRemoved: (payload: PanoramaRemoval) => void;
     onCapturesSent: (nodeId: string, captures: CanvasDirectorCapture[]) => void;
+    onVideoSent: (nodeId: string, video: CanvasDirectorVideo) => void;
 }) {
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const projectRef = useRef(project);
@@ -81,11 +83,30 @@ export function CanvasDirector({
                 if (captures.length) void onCapturesSent(nodeId, captures);
                 return;
             }
+
+            if (type === "storyai:director-video-sent") {
+                const blob = event.data?.payload?.blob;
+                if (!(blob instanceof Blob) || !blob.size || !blob.type.startsWith("video/mp4")) return;
+                const fileName = typeof event.data?.payload?.fileName === "string" && event.data.payload.fileName.trim()
+                    ? event.data.payload.fileName.trim()
+                    : "导演台视频.mp4";
+                const width = Number(event.data?.payload?.width);
+                const height = Number(event.data?.payload?.height);
+                const durationSeconds = Number(event.data?.payload?.durationSeconds);
+                void onVideoSent(nodeId, {
+                    blob,
+                    fileName,
+                    width: Number.isFinite(width) && width > 0 ? width : 1280,
+                    height: Number.isFinite(height) && height > 0 ? height : 720,
+                    durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : 0,
+                });
+                return;
+            }
         }
 
         window.addEventListener("message", handleMessage);
         return () => window.removeEventListener("message", handleMessage);
-    }, [nodeId, onCapturesSent, onClose, onPanoramaRemoved, onProjectChange]);
+    }, [nodeId, onCapturesSent, onClose, onPanoramaRemoved, onProjectChange, onVideoSent]);
 
     useEffect(() => {
         if (!ready || sessionSentRef.current) return;

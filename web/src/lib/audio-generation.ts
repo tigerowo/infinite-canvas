@@ -23,6 +23,44 @@ export const audioFormatOptions = [
     { value: "pcm", label: "PCM" },
 ];
 
+export const glmTtsVoiceOptions = [
+    { value: "tongtong", label: "彤彤" },
+    { value: "chuichui", label: "锤锤" },
+    { value: "xiaochen", label: "小陈" },
+    { value: "jam", label: "Jam" },
+    { value: "kazi", label: "Kazi" },
+    { value: "douji", label: "Douji" },
+    { value: "luodo", label: "Luodo" },
+];
+
+export const glmTtsFormatOptions = [
+    { value: "wav", label: "WAV" },
+    { value: "pcm", label: "PCM" },
+];
+
+export function isGlmTtsModel(model: string) {
+    return model.trim().toLowerCase() === "glm-tts";
+}
+
+export function normalizeGlmTtsVoice(value: string) {
+    return glmTtsVoiceOptions.some((item) => item.value === value) ? value : "tongtong";
+}
+
+export function normalizeGlmTtsFormat(value: string) {
+    return glmTtsFormatOptions.some((item) => item.value === value) ? value : "wav";
+}
+
+export function normalizeGlmTtsSpeed(value: string) {
+    const speed = Number(value);
+    if (!Number.isFinite(speed)) return "1";
+    return String(Math.max(0.5, Math.min(2, Number(speed.toFixed(2)))));
+}
+
+export function glmTtsVoiceLabel(value: string) {
+    const voice = normalizeGlmTtsVoice(value);
+    return glmTtsVoiceOptions.find((item) => item.value === voice)?.label || voice;
+}
+
 export function normalizeAudioVoiceValue(value: string) {
     return audioVoiceOptions.some((item) => item.value === value) ? value : "alloy";
 }

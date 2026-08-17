@@ -34,6 +34,9 @@ export type AiConfig = {
     audioFormat: string;
     audioSpeed: string;
     audioInstructions: string;
+    glmTtsVoice: string;
+    glmTtsFormat: string;
+    glmTtsSpeed: string;
     mimoTtsVoice: string;
     mimoTtsFormat: string;
     mimoVoiceDesignPrompt: string;
@@ -99,6 +102,9 @@ export const defaultConfig: AiConfig = {
     audioFormat: "mp3",
     audioSpeed: "1",
     audioInstructions: "",
+    glmTtsVoice: "tongtong",
+    glmTtsFormat: "wav",
+    glmTtsSpeed: "1",
     mimoTtsVoice: "冰糖",
     mimoTtsFormat: "wav",
     mimoVoiceDesignPrompt: "",
@@ -258,6 +264,7 @@ function isImageModelName(model: string) {
         value.includes("nano-banana") ||
         value.includes("seedream") ||
         value.includes("gpt-image") ||
+        value.includes("cogview") ||
         value.includes("dall-e") ||
         value.includes("dalle") ||
         value.includes("imagen") ||
@@ -379,6 +386,9 @@ export const useConfigStore = create<ConfigStore>()(
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
+                        glmTtsVoice: config.glmTtsVoice || defaultConfig.glmTtsVoice,
+                        glmTtsFormat: config.glmTtsFormat || defaultConfig.glmTtsFormat,
+                        glmTtsSpeed: config.glmTtsSpeed || defaultConfig.glmTtsSpeed,
                         systemPrompts: config.systemPrompts?.image ? config.systemPrompts : defaultConfig.systemPrompts,
                         audioInstructions: config.audioInstructions || "",
                         videoSeconds: config.videoSeconds || "6",

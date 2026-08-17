@@ -1,3 +1,4 @@
+import { isGlmTtsModel } from "@/lib/audio-generation";
 import { supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import type { AiConfig } from "@/stores/use-config-store";
 import { CanvasNodeType, type CanvasAgentState, type CanvasConnection, type CanvasNodeData } from "../types";
@@ -118,8 +119,8 @@ export function buildCanvasAgentContext(input: BuildCanvasAgentContextInput): Ca
             videoSeconds: input.config.videoSeconds,
             videoGenerateAudio: input.config.videoGenerateAudio,
             videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
-            audioVoice: input.config.audioVoice,
-            audioFormat: input.config.audioFormat,
+            audioVoice: isGlmTtsModel(input.config.audioModel) ? input.config.glmTtsVoice : input.config.audioVoice,
+            audioFormat: isGlmTtsModel(input.config.audioModel) ? input.config.glmTtsFormat : input.config.audioFormat,
         },
         tasks: orderedNodes.flatMap((node) => {
             const taskId = mediaTaskId(node);

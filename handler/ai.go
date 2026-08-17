@@ -145,7 +145,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 			Fail(w, err.Error())
 			return
 		}
-	} else if isKIEChannel(channel, modelName) && upstreamPath == "/jobs/createTask" {
+	} else if isKIEChannel(channel, modelName) && isKIECreateTaskPath(upstreamPath) {
 		body, contentType, err = normalizeKIEVideoBody(body, contentType, modelName, channel)
 		if err != nil {
 			log.Printf("AI proxy normalize KIE request failed: model=%s err=%v", modelName, err)
@@ -537,7 +537,22 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 	if service.IsMiMoTTSModelName(modelName) && path == "/audio/speech" {
 		return "/chat/completions"
 	}
+	if isCogVideoX3Model(modelName) {
+		if path == "/videos" {
+			return "/videos/generations"
+		}
+		if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+			taskID := strings.TrimSpace(strings.TrimPrefix(path, "/videos/"))
+			if taskID != "" && !strings.Contains(taskID, "/") {
+				return "/async-result/" + url.PathEscape(taskID)
+			}
+		}
+		return path
+	}
 	if isKIEChannel(channel, modelName) {
+		if path == "/images/generations" && strings.EqualFold(strings.TrimSpace(modelName), "grok-imagine-image-2-0/text-to-image") {
+			return "/client/tasks"
+		}
 		if path == "/videos" || path == "/images/generations" || path == "/images/edits" {
 			return "/jobs/createTask"
 		}
@@ -580,6 +595,10 @@ func resolveAIProxyPath(channel model.ModelChannel, modelName string, path strin
 		}
 	}
 	return path
+}
+
+func isCogVideoX3Model(modelName string) bool {
+	return strings.EqualFold(strings.TrimSpace(modelName), "cogvideox-3")
 }
 
 func isArkSeedanceVideo(baseURL string, modelName string) bool {

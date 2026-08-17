@@ -3,14 +3,14 @@
 import { type ReactNode } from "react";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
-import { audioFormatOptions, audioSpeedLabel, audioVoiceOptions, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
+import { audioFormatOptions, audioSpeedLabel, audioVoiceOptions, glmTtsFormatOptions, glmTtsVoiceOptions, isGlmTtsModel, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice } from "@/lib/audio-generation";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
 
 const speedOptions = ["0.75", "1", "1.25", "1.5"];
 
-export type AudioSettingKey = "audioVoice" | "audioFormat" | "audioSpeed" | "audioInstructions" | "mimoTtsVoice" | "mimoTtsFormat" | "mimoVoiceDesignPrompt";
+export type AudioSettingKey = "audioVoice" | "audioFormat" | "audioSpeed" | "audioInstructions" | "glmTtsVoice" | "glmTtsFormat" | "glmTtsSpeed" | "mimoTtsVoice" | "mimoTtsFormat" | "mimoVoiceDesignPrompt";
 
 type AudioSettingsPanelProps = {
     config: AiConfig;
@@ -27,7 +27,7 @@ export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">音频设置</div> : null}
-                {isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <OpenAIAudioSettings config={config} onConfigChange={onConfigChange} theme={theme} />}
+                {isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <AudioSpeechSettings config={config} glm={isGlmTtsModel(model)} onConfigChange={onConfigChange} theme={theme} />}
             </div>
         </ImageSettingsTheme>
     );
@@ -86,17 +86,22 @@ function MiMoAudioSettings({ config, model, onConfigChange, theme }: { config: A
     );
 }
 
-function OpenAIAudioSettings({ config, onConfigChange, theme }: { config: AiConfig; onConfigChange: AudioSettingsPanelProps["onConfigChange"]; theme: CanvasTheme }) {
-    const voice = normalizeAudioVoiceValue(config.audioVoice);
-    const format = normalizeAudioFormatValue(config.audioFormat);
-    const speed = normalizeAudioSpeedValue(config.audioSpeed);
+function AudioSpeechSettings({ config, glm, onConfigChange, theme }: { config: AiConfig; glm: boolean; onConfigChange: AudioSettingsPanelProps["onConfigChange"]; theme: CanvasTheme }) {
+    const voice = glm ? normalizeGlmTtsVoice(config.glmTtsVoice) : normalizeAudioVoiceValue(config.audioVoice);
+    const format = glm ? normalizeGlmTtsFormat(config.glmTtsFormat) : normalizeAudioFormatValue(config.audioFormat);
+    const speed = glm ? normalizeGlmTtsSpeed(config.glmTtsSpeed) : normalizeAudioSpeedValue(config.audioSpeed);
+    const voiceOptions = glm ? glmTtsVoiceOptions : audioVoiceOptions;
+    const formatOptions = glm ? glmTtsFormatOptions : audioFormatOptions;
+    const voiceKey = glm ? "glmTtsVoice" : "audioVoice";
+    const formatKey = glm ? "glmTtsFormat" : "audioFormat";
+    const speedKey = glm ? "glmTtsSpeed" : "audioSpeed";
 
     return (
         <>
             <SettingGroup title="声音" color={theme.node.muted}>
                 <div className="grid grid-cols-3 gap-2.5">
-                    {audioVoiceOptions.map((item) => (
-                        <OptionPill key={item.value} selected={voice === item.value} theme={theme} onClick={() => onConfigChange("audioVoice", item.value)}>
+                    {voiceOptions.map((item) => (
+                        <OptionPill key={item.value} selected={voice === item.value} theme={theme} onClick={() => onConfigChange(voiceKey, item.value)}>
                             {item.label}
                         </OptionPill>
                     ))}
@@ -104,8 +109,8 @@ function OpenAIAudioSettings({ config, onConfigChange, theme }: { config: AiConf
             </SettingGroup>
             <SettingGroup title="格式" color={theme.node.muted}>
                 <div className="grid grid-cols-3 gap-2.5">
-                    {audioFormatOptions.map((item) => (
-                        <OptionPill key={item.value} selected={format === item.value} theme={theme} onClick={() => onConfigChange("audioFormat", item.value)}>
+                    {formatOptions.map((item) => (
+                        <OptionPill key={item.value} selected={format === item.value} theme={theme} onClick={() => onConfigChange(formatKey, item.value)}>
                             {item.label}
                         </OptionPill>
                     ))}
@@ -114,34 +119,36 @@ function OpenAIAudioSettings({ config, onConfigChange, theme }: { config: AiConf
             <SettingGroup title="语速" color={theme.node.muted}>
                 <div className="grid grid-cols-4 gap-2.5">
                     {speedOptions.map((value) => (
-                        <OptionPill key={value} selected={speed === value} theme={theme} onClick={() => onConfigChange("audioSpeed", value)}>
+                        <OptionPill key={value} selected={speed === value} theme={theme} onClick={() => onConfigChange(speedKey, value)}>
                             {audioSpeedLabel(value)}
                         </OptionPill>
                     ))}
                 </div>
                 <input
                     type="number"
-                    min={0.25}
-                    max={4}
+                    min={glm ? 0.5 : 0.25}
+                    max={glm ? 2 : 4}
                     step={0.05}
                     className="h-9 w-full rounded-full border bg-transparent px-3 text-center text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                     style={{ borderColor: theme.node.stroke, color: theme.node.text, WebkitTextFillColor: theme.node.text }}
-                    value={config.audioSpeed || "1"}
-                    onChange={(event) => onConfigChange("audioSpeed", event.target.value)}
-                    onBlur={(event) => onConfigChange("audioSpeed", normalizeAudioSpeedValue(event.target.value))}
+                    value={(glm ? config.glmTtsSpeed : config.audioSpeed) || "1"}
+                    onChange={(event) => onConfigChange(speedKey, event.target.value)}
+                    onBlur={(event) => onConfigChange(speedKey, glm ? normalizeGlmTtsSpeed(event.target.value) : normalizeAudioSpeedValue(event.target.value))}
                     onMouseDown={(event) => event.stopPropagation()}
                 />
             </SettingGroup>
-            <SettingGroup title="声音指令" color={theme.node.muted}>
-                <textarea
-                    value={config.audioInstructions || ""}
-                    placeholder="例如：自然、温暖、适合旁白。"
-                    className="thin-scrollbar h-20 w-full resize-none rounded-xl border bg-transparent px-3 py-2 text-sm leading-5 outline-none"
-                    style={{ borderColor: theme.node.stroke, color: theme.node.text }}
-                    onChange={(event) => onConfigChange("audioInstructions", event.target.value)}
-                    onMouseDown={(event) => event.stopPropagation()}
-                />
-            </SettingGroup>
+            {!glm ? (
+                <SettingGroup title="声音指令" color={theme.node.muted}>
+                    <textarea
+                        value={config.audioInstructions || ""}
+                        placeholder="例如：自然、温暖、适合旁白。"
+                        className="thin-scrollbar h-20 w-full resize-none rounded-xl border bg-transparent px-3 py-2 text-sm leading-5 outline-none"
+                        style={{ borderColor: theme.node.stroke, color: theme.node.text }}
+                        onChange={(event) => onConfigChange("audioInstructions", event.target.value)}
+                        onMouseDown={(event) => event.stopPropagation()}
+                    />
+                </SettingGroup>
+            ) : null}
         </>
     );
 }

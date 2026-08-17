@@ -2,9 +2,21 @@ export function modelKey(modelName: string) {
     return modelName.trim().toLowerCase().replace(/[._/]+/g, "-");
 }
 
+export function isCogVideoX3Model(modelName: string) {
+    return modelKey(modelName) === "cogvideox-3";
+}
+
+export const COGVIDEOX3_DURATIONS = ["5", "10"] as const;
+
+export function normalizeCogVideoX3Duration(value: string) {
+    const seconds = Number(value) || 5;
+    return Math.abs(seconds - 5) <= Math.abs(seconds - 10) ? COGVIDEOX3_DURATIONS[0] : COGVIDEOX3_DURATIONS[1];
+}
+
 export function supportsVideoFrameReferences(modelName: string) {
     const model = modelKey(modelName);
     return (
+        isCogVideoX3Model(model) ||
         model === "bytedance-seedance-2" ||
         model === "bytedance-seedance-2-fast" ||
         model === "bytedance-seedance-2-mini" ||
@@ -35,6 +47,7 @@ export function supportsVideoAudioGeneration(modelName: string) {
     const model = modelKey(modelName);
     if (model.includes("motion-control")) return false;
     return (
+        isCogVideoX3Model(model) ||
         model === "kling-2-6-text-to-video" ||
         model === "kling-2-6-image-to-video" ||
         model === "kling-text-to-video" ||

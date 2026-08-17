@@ -59,10 +59,10 @@ export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpe
             </div>
             <Modal title="快捷键" open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>
                 <div className="space-y-3 border-t pt-4 text-sm" style={{ borderColor: theme.node.stroke }}>
-                    <Shortcut label="Ctrl / Space + 拖动" value="临时反转选择/移动工具" />
+                    <Shortcut label="Space + 拖动" value="临时反转选择/移动工具" />
                     <Shortcut label="滚轮" value="缩放画布" />
                     <Shortcut label="拖动" value="使用当前工具操作画布" />
-                    <Shortcut label="Shift / Cmd + 点击" value="追加选择节点" />
+                    <Shortcut label="Shift / Ctrl / Cmd + 点击" value="追加选择节点" />
                     <Shortcut label="Ctrl / Cmd + G" value="创建组" />
                     <Shortcut label="Ctrl / Cmd + C / V" value="复制 / 粘贴节点" />
                     <Shortcut label="Delete / Backspace" value="删除选中" />

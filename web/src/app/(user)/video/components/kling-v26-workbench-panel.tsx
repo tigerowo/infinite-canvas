@@ -41,6 +41,7 @@ const TEXT = {
     shotCustom: "自定义",
     shotSmart: "智能分镜",
     shotPrompt: "分镜提示词",
+    shotPlaceholder: "描述当前分镜的镜头内容",
     addShot: "新增分镜提示词",
     deleteShot: "删除",
     taskCount: "任务数量",
@@ -65,6 +66,9 @@ const TEXT = {
 export function KlingV26WorkbenchPanel({
     isKlingV3,
     klingProvider = "apimart",
+    klingOmniVariant = "",
+    referenceVideoCount = 0,
+    referenceVideoSection,
     currentLayout,
     prompt,
     negativePrompt,
@@ -98,6 +102,9 @@ export function KlingV26WorkbenchPanel({
 }: {
     isKlingV3: boolean;
     klingProvider?: "apimart" | "kie";
+    klingOmniVariant?: string;
+    referenceVideoCount?: number;
+    referenceVideoSection?: ReactNode;
     currentLayout: WorkbenchLayout;
     prompt: string;
     negativePrompt: string;
@@ -134,9 +141,14 @@ export function KlingV26WorkbenchPanel({
     const seconds = isKlingV3 ? String(config.videoSeconds ?? "") : config.videoSeconds === "10" ? "10" : "5";
     const ratio = klingRatioValue(config.size);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
-    const audioDisabled = !isKlingV3 && (mode !== "pro" || references.length > 1);
-    const multiShot = isKlingV3 && boolConfig(config.videoMultiShot, false);
     const isKIEKlingV3 = isKlingV3 && klingProvider === "kie";
+    const supportsMultiShot = klingOmniVariant !== "transformation";
+    const supportsSmartShots = !isKIEKlingV3 || klingOmniVariant === "text-to-video" || klingOmniVariant === "image-to-video";
+    const showsReferenceImages = klingOmniVariant !== "text-to-video";
+    const showsElements = klingOmniVariant !== "transformation";
+    const usesFrameImages = !klingOmniVariant || klingOmniVariant === "image-to-video";
+    const audioDisabled = (!isKlingV3 && (mode !== "pro" || references.length > 1)) || (klingOmniVariant === "reference-to-video" && referenceVideoCount > 0);
+    const multiShot = isKlingV3 && supportsMultiShot && boolConfig(config.videoMultiShot, false);
     const shotType = config.videoShotType === "customize" ? "customize" : "intelligence";
     const multiPrompts = normalizeMultiPrompts(config.videoMultiPrompt);
     const elementList = normalizeElementList(config.videoElementList);
@@ -160,7 +172,7 @@ export function KlingV26WorkbenchPanel({
 
     const setMultiShot = (checked: boolean) => {
         updateConfig("videoMultiShot", String(checked));
-        if (checked && !isKIEKlingV3 && !config.videoShotType) updateConfig("videoShotType", "intelligence");
+        if (checked && supportsSmartShots && !config.videoShotType) updateConfig("videoShotType", "intelligence");
         if (checked && !config.videoMultiPrompt?.length) updateConfig("videoMultiPrompt", defaultMultiPrompts());
     };
 
@@ -229,7 +241,7 @@ export function KlingV26WorkbenchPanel({
                 <KlingHeader currentLayout={currentLayout} onLayoutChange={onLayoutChange} />
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
-                {isKlingV3 ? (
+                {isKlingV3 && supportsMultiShot ? (
                     <KlingSection title={TEXT.multiShotTitle}>
                         <div className="grid gap-2 rounded-xl border border-stone-200 p-2.5 dark:border-stone-800">
                             <div className="flex h-8 items-center justify-between gap-3">
@@ -259,17 +271,18 @@ export function KlingV26WorkbenchPanel({
                         <Input.TextArea value={negativePrompt} onChange={(event) => onNegativePromptChange(event.target.value)} rows={4} placeholder={TEXT.negativePlaceholder} />
                     </div>
                 </KlingSection> : null}
-                <KlingSection title={TEXT.referenceImage} count={references.length}>
+                {showsReferenceImages ? <KlingSection title={usesFrameImages ? TEXT.referenceImage : "参考图"} count={references.length}>
                     <div className="space-y-2">
                         <div className="flex flex-wrap gap-1">
                             <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={onPasteReferences}>{TEXT.clipboard}</Button>
                             <Button size="small" icon={<Upload className="size-3.5" />} onClick={onUploadReferences}>{TEXT.upload}</Button>
                             <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => onOpenAssetPicker("image")}>{TEXT.chooseAsset}</Button>
                         </div>
-                        <KlingReferenceImageStrip references={references} onRemoveReference={onRemoveReference} onMoveReference={onMoveReference} />
+                        <KlingReferenceImageStrip references={references} emptyText={usesFrameImages ? TEXT.emptyImages : "暂无参考图"} onRemoveReference={onRemoveReference} onMoveReference={onMoveReference} />
                     </div>
-                </KlingSection>
-                {isKlingV3 ? (
+                </KlingSection> : null}
+                {referenceVideoSection ? <KlingSection title="参考视频" count={referenceVideoCount}>{referenceVideoSection}</KlingSection> : null}
+                {isKlingV3 && showsElements ? (
                     <KlingElementListSection
                         items={elementList}
                         onAddElement={addElement}
@@ -282,12 +295,12 @@ export function KlingV26WorkbenchPanel({
                         onMoveElementReference={onMoveElementReference}
                     />
                 ) : null}
-                {multiShot && !isKIEKlingV3 ? (
+                {multiShot && supportsSmartShots ? (
                     <KlingSection title={TEXT.shotType}>
                         <OptionGrid columns={2} options={[{ value: "customize", label: TEXT.shotCustom }, { value: "intelligence", label: TEXT.shotSmart }]} value={shotType} onChange={(value) => updateConfig("videoShotType", value)} />
                     </KlingSection>
                 ) : null}
-                {multiShot && (isKIEKlingV3 || shotType === "customize") ? multiPrompts.map((item, index) => (
+                {multiShot && (!supportsSmartShots || shotType === "customize") ? multiPrompts.map((item, index) => (
                     <KlingSection key={index} title={TEXT.shotPrompt + (index + 1)} extra={
                         <div className="flex items-center gap-1">
                             <Button size="small" type="text" title={TEXT.addShot} className="!h-6 !w-6 !p-0" icon={<Plus className="size-3.5" />} onClick={addMultiPrompt} />
@@ -302,7 +315,7 @@ export function KlingV26WorkbenchPanel({
                                 </div>
                                 <KlingNumberInput value={item.duration || "1"} min={1} max={15} onChange={(value) => updateMultiPrompt(index, { duration: value })} />
                             </div>
-                            <Input.TextArea value={item.prompt} onChange={(event) => updateMultiPrompt(index, { prompt: event.target.value })} rows={4} placeholder={TEXT.negativePlaceholder} />
+                            <Input.TextArea value={item.prompt} onChange={(event) => updateMultiPrompt(index, { prompt: event.target.value })} rows={4} placeholder={TEXT.shotPlaceholder} />
                         </div>
                     </KlingSection>
                 )) : null}
@@ -453,7 +466,7 @@ function KlingElementReferenceStrip({ references, onRemoveReference, onMoveRefer
     );
 }
 
-function KlingReferenceImageStrip({ references, onRemoveReference, onMoveReference }: { references: ReferenceImage[]; onRemoveReference: (id: string) => void; onMoveReference: (index: number, offset: number) => void }) {
+function KlingReferenceImageStrip({ references, emptyText = TEXT.emptyImages, onRemoveReference, onMoveReference }: { references: ReferenceImage[]; emptyText?: string; onRemoveReference: (id: string) => void; onMoveReference: (index: number, offset: number) => void }) {
     return (
         <div className="hover-scrollbar hover-scrollbar-hint flex w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden min-h-24 rounded-lg border border-dashed border-stone-300 p-2 pb-3 overscroll-x-contain dark:border-stone-700">
             {references.map((item, index) => (
@@ -466,7 +479,7 @@ function KlingReferenceImageStrip({ references, onRemoveReference, onMoveReferen
                     </button>
                 </div>
             ))}
-            {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{TEXT.emptyImages}</div> : null}
+            {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{emptyText}</div> : null}
         </div>
     );
 }

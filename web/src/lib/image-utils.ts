@@ -50,6 +50,24 @@ export function readImageMeta(dataUrl: string) {
     });
 }
 
+function detectImageFileType(bytes: Uint8Array) {
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+        return { mimeType: "image/jpeg", extension: ".jpg" };
+    }
+    if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+        return { mimeType: "image/png", extension: ".png" };
+    }
+    if (bytes.length >= 12 && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+        return { mimeType: "image/webp", extension: ".webp" };
+    }
+    return null;
+}
+
+function imageFilename(name: string | undefined, extension: string) {
+    const filename = name?.trim() || "reference";
+    return `${filename.replace(/\.[^./\\]+$/, "") || "reference"}${extension}`;
+}
+
 export function dataUrlToFile(image: ReferenceImage) {
     const [header, content] = image.dataUrl.split(",", 2);
     const mimeType = header.match(/data:(.*?);base64/)?.[1] || image.type || "image/png";
@@ -58,5 +76,6 @@ export function dataUrlToFile(image: ReferenceImage) {
     for (let index = 0; index < binary.length; index += 1) {
         bytes[index] = binary.charCodeAt(index);
     }
-    return new File([bytes], image.name || "reference.png", { type: mimeType });
+    const detected = detectImageFileType(bytes);
+    return new File([bytes], detected ? imageFilename(image.name, detected.extension) : image.name || "reference.png", { type: detected?.mimeType || mimeType });
 }

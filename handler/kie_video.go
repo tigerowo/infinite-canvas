@@ -357,6 +357,7 @@ func normalizeKIEInputFields(input map[string]any, modelName string) {
 
 	normalizeKIEKlingV3VideoInput(input, modelName)
 	applyKIEVideoGenerateAudioInput(input, modelName)
+	normalizeKIEKlingOmniVideoInput(input, modelName)
 	if value, ok := input["output_format"]; ok {
 		if config.hasOutputFormat {
 			input["output_format"] = normalizeKIEOutputFormat(toStringSafe(value))
@@ -627,6 +628,148 @@ func normalizeKIEKlingV3VideoInput(input map[string]any, modelName string) {
 	}
 }
 
+func normalizeKIEKlingOmniVideoInput(input map[string]any, modelName string) {
+	variant := kieKlingOmniVariant(modelName)
+	if variant == "" {
+		return
+	}
+
+	delete(input, "negative_prompt")
+	if value, ok := input["resolution"]; ok && !isEmptyValue(value) {
+		input["resolution"] = normalizeKIEKlingOmniResolution(value)
+	}
+	if value, ok := input["mode"]; ok && !isEmptyValue(value) {
+		input["resolution"] = normalizeKIEKlingOmniResolution(value)
+	}
+	delete(input, "mode")
+
+	if value, ok := input["element_list"]; ok {
+		if elements := normalizeKIEKlingV3Elements(value); len(elements) > 0 {
+			input["elements"] = elements
+		} else {
+			delete(input, "elements")
+		}
+		delete(input, "element_list")
+	} else if value, ok := input["elements"]; ok {
+		if elements := normalizeKIEKlingV3Elements(value); len(elements) > 0 {
+			input["elements"] = elements
+		} else {
+			delete(input, "elements")
+		}
+	}
+	delete(input, "kling_elements")
+
+	multiShot, hasMultiShot := input["multi_shot"]
+	if !hasMultiShot {
+		multiShot, hasMultiShot = input["multi_shots"]
+	}
+	delete(input, "multi_shot")
+	delete(input, "multi_shots")
+	shotType := strings.ToLower(strings.TrimSpace(toStringSafe(input["shot_type"])))
+	delete(input, "shot_type")
+
+	switch variant {
+	case "text-to-video", "image-to-video":
+		customShots := boolLike(input["customize_multi_shots"])
+		smartShots := boolLike(input["prefer_multi_shots"])
+		if hasMultiShot {
+			customShots = boolLike(multiShot) && shotType == "customize"
+			smartShots = boolLike(multiShot) && !customShots
+		}
+		if customShots {
+			smartShots = false
+		}
+		input["customize_multi_shots"] = customShots
+		input["prefer_multi_shots"] = smartShots
+		if !customShots {
+			delete(input, "multi_prompt")
+		}
+	case "reference-to-video":
+		customShots := boolLike(input["customize_multi_shots"])
+		if hasMultiShot {
+			customShots = boolLike(multiShot)
+		}
+		input["customize_multi_shots"] = customShots
+		delete(input, "prefer_multi_shots")
+		if !customShots {
+			delete(input, "multi_prompt")
+		}
+	case "transformation":
+		delete(input, "customize_multi_shots")
+		delete(input, "prefer_multi_shots")
+		delete(input, "multi_prompt")
+		delete(input, "elements")
+	}
+
+	if value, ok := input["multi_prompt"]; ok {
+		if prompts := normalizeKIEKlingMultiPrompt(value, 15); len(prompts) > 0 {
+			if len(prompts) > 6 {
+				prompts = prompts[:6]
+			}
+			input["multi_prompt"] = prompts
+		} else {
+			delete(input, "multi_prompt")
+		}
+	}
+
+	imageCount := len(readStringSlice(input["image_urls"]))
+	hasVideo := len(readStringSlice(input["video_urls"])) > 0
+	switch variant {
+	case "text-to-video":
+		for _, key := range append(kieImageReferenceAliasKeys(), kieVideoReferenceAliasKeys()...) {
+			delete(input, key)
+		}
+	case "image-to-video":
+		if imageCount > 1 {
+			input["aspect_ratio"] = "auto"
+		}
+		for _, key := range kieVideoReferenceAliasKeys() {
+			delete(input, key)
+		}
+	case "reference-to-video":
+		if hasVideo {
+			input["aspect_ratio"] = "auto"
+			input["audio"] = false
+			if imageCount == 0 && isEmptyValue(input["elements"]) {
+				delete(input, "duration")
+				input["customize_multi_shots"] = false
+				delete(input, "multi_prompt")
+			}
+		}
+	case "transformation":
+		if hasVideo && imageCount == 0 {
+			input["aspect_ratio"] = "auto"
+			delete(input, "duration")
+		}
+	}
+}
+
+func kieKlingOmniVariant(modelName string) string {
+	const prefix = "kling-3.0-omni/"
+	modelName = strings.ToLower(strings.TrimSpace(modelName))
+	if !strings.HasPrefix(modelName, prefix) {
+		return ""
+	}
+	variant := strings.TrimPrefix(modelName, prefix)
+	switch variant {
+	case "text-to-video", "image-to-video", "reference-to-video", "transformation":
+		return variant
+	default:
+		return ""
+	}
+}
+
+func normalizeKIEKlingOmniResolution(value any) string {
+	switch strings.ToLower(strings.TrimSpace(toStringSafe(value))) {
+	case "4k":
+		return "4k"
+	case "pro", "1080", "1080p":
+		return "1080p"
+	default:
+		return "720p"
+	}
+}
+
 func normalizeKIEKlingV3Mode(value any) string {
 	switch strings.ToLower(strings.TrimSpace(toStringSafe(value))) {
 	case "4k":
@@ -639,6 +782,10 @@ func normalizeKIEKlingV3Mode(value any) string {
 }
 
 func normalizeKIEKlingV3MultiPrompt(value any) []map[string]any {
+	return normalizeKIEKlingMultiPrompt(value, 12)
+}
+
+func normalizeKIEKlingMultiPrompt(value any, maxDuration int) []map[string]any {
 	items, ok := value.([]any)
 	if !ok {
 		return nil
@@ -651,19 +798,19 @@ func normalizeKIEKlingV3MultiPrompt(value any) []map[string]any {
 		}
 		result = append(result, map[string]any{
 			"prompt":   strings.TrimSpace(toStringSafe(record["prompt"])),
-			"duration": normalizeKIEKlingV3MultiPromptDuration(record["duration"]),
+			"duration": normalizeKIEKlingMultiPromptDuration(record["duration"], maxDuration),
 		})
 	}
 	return result
 }
 
-func normalizeKIEKlingV3MultiPromptDuration(value any) int {
+func normalizeKIEKlingMultiPromptDuration(value any, maxDuration int) int {
 	duration, err := strconv.Atoi(normalizeKIEDurationString(toStringSafe(value)))
 	if err != nil || duration < 1 {
 		duration = 1
 	}
-	if duration > 12 {
-		duration = 12
+	if duration > maxDuration {
+		duration = maxDuration
 	}
 	return duration
 }
@@ -771,6 +918,8 @@ func applyKIEVideoGenerateAudioInput(input map[string]any, modelName string) {
 		input["sound"] = enabled
 	case "kling-3.0/video":
 		input["sound"] = enabled
+	case "kling-3.0-omni/text-to-video", "kling-3.0-omni/image-to-video", "kling-3.0-omni/reference-to-video", "kling-3.0-omni/transformation":
+		input["audio"] = enabled
 	case "bytedance/seedance-2", "bytedance/seedance-2-fast", "bytedance/seedance-2-mini", "bytedance/seedance-1.5-pro", "bytedance/seedance-1-5-pro", "bytedance/seedance-2-5":
     	input["generate_audio"] = enabled
 	case "wan/2-6-flash-image-to-video", "wan/2-6-flash-video-to-video":
@@ -781,6 +930,14 @@ func applyKIEVideoGenerateAudioInput(input map[string]any, modelName string) {
 func validateKIERequiredInputs(input map[string]any, modelName string) error {
 	model := strings.ToLower(strings.TrimSpace(modelName))
 	switch model {
+	case "kling-3.0-omni/text-to-video":
+		return requireKIEAnyInput(input, "prompt")
+	case "kling-3.0-omni/image-to-video":
+		return requireKIEAnyInput(input, "image_urls")
+	case "kling-3.0-omni/reference-to-video":
+		return requireKIEAnyInput(input, "image_urls", "video_urls", "elements")
+	case "kling-3.0-omni/transformation":
+		return requireKIEAnyInput(input, "video_urls")
 	case "kling/v3-turbo-text-to-video", "bytedance/seedance-2-mini", "happyhorse-1-1/text-to-video":
 		return requireKIEAnyInput(input, "prompt")
 	case "kling/v3-turbo-image-to-video", "happyhorse-1-1/image-to-video":
@@ -928,6 +1085,10 @@ func kieModelInputConfig(modelName string) kieInputConfig {
 		"kling-2.6/motion-control":            {durationKind: "string", imageRefField: "input_urls", imageRefKind: "array", videoRefField: "video_urls", videoRefKind: "array"},
 		"kling-3.0/motion-control":            {durationKind: "string", imageRefField: "input_urls", imageRefKind: "array", videoRefField: "video_urls", videoRefKind: "array"},
 		"kling-3.0/video":                     {aspectField: "aspect_ratio", durationKind: "string", presetField: "mode", imageRefField: "image_urls", imageRefKind: "array"},
+		"kling-3.0-omni/text-to-video":        {aspectField: "aspect_ratio", durationKind: "number", durationMin: 3, durationMax: 15, hasResolution: true},
+		"kling-3.0-omni/image-to-video":       {aspectField: "aspect_ratio", durationKind: "number", durationMin: 3, durationMax: 15, hasResolution: true, imageRefField: "image_urls", imageRefKind: "array"},
+		"kling-3.0-omni/reference-to-video":   {aspectField: "aspect_ratio", durationKind: "number", durationMin: 3, durationMax: 15, hasResolution: true, imageRefField: "image_urls", imageRefKind: "array", videoRefField: "video_urls", videoRefKind: "array"},
+		"kling-3.0-omni/transformation":       {aspectField: "aspect_ratio", durationKind: "number", durationMin: 3, durationMax: 15, hasResolution: true, imageRefField: "image_urls", imageRefKind: "array", videoRefField: "video_urls", videoRefKind: "array"},
 		"kling/v3-turbo-text-to-video":        {aspectField: "aspect_ratio", durationKind: "string", hasResolution: true},
 		"kling/v3-turbo-image-to-video":       {durationKind: "string", hasResolution: true, imageRefField: "image_urls", imageRefKind: "array"},
 		"kling/ai-avatar-standard":            {imageRefField: "image_url", imageRefKind: "single", audioRefField: "audio_url", audioRefKind: "single"},
@@ -978,6 +1139,7 @@ func kieModelInputConfig(modelName string) kieInputConfig {
 		"google/nano-banana-edit":        {aspectField: "aspect_ratio", hasOutputFormat: true, imageRefField: "image_urls", imageRefKind: "array"},
 		"gpt-image/1.5-image-to-image":   {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "input_urls", imageRefKind: "array"},
 		"gpt-image/1.5-text-to-image":    {aspectField: "aspect_ratio", hasQuality: true},
+		"grok-imagine-image-2-0/text-to-image": {aspectField: "aspect_ratio"},
 		"grok-imagine/text-to-image":     {aspectField: "aspect_ratio"},
 		"grok-imagine/image-to-image":    {imageRefField: "image_urls", imageRefKind: "array"},
 		"grok-imagine/extend":            {imageRefField: "image_url", imageRefKind: "single"},
@@ -1239,7 +1401,7 @@ func copyKIEVideoResponse(w http.ResponseWriter, response *http.Response, reques
 		return false
 	}
 
-	if strings.Contains(request.URL.Path, "/jobs/createTask") {
+	if isKIECreateTaskPath(request.URL.Path) {
 		payload, _ := io.ReadAll(response.Body)
 		responseBody := string(payload)
 
@@ -1296,6 +1458,10 @@ func copyKIEVideoResponse(w http.ResponseWriter, response *http.Response, reques
 	}
 
 	return false
+}
+
+func isKIECreateTaskPath(path string) bool {
+	return strings.HasSuffix(path, "/jobs/createTask") || strings.HasSuffix(path, "/client/tasks")
 }
 
 func readKIECreateTaskErrorMessage(payload []byte) string {
