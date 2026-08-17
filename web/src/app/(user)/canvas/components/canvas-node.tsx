@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
+import { motion } from "motion/react";
 import { ChevronRight, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -367,11 +368,12 @@ export const CanvasNode = React.memo(function CanvasNode({
                     setIsEditingContent(true);
                 }}
             >
+                {!isGroup && data.metadata?.status === "loading" ? <LoadingCardOverlay theme={theme} /> : null}
                 <div
                     className={`relative flex h-full w-full items-center justify-center rounded-[inherit] ${isBatchRoot ? "overflow-visible" : "overflow-hidden"}`}
                     style={
                         {
-                            background: isGroup ? "transparent" : hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
+                            background: isGroup ? "transparent" : data.metadata?.status === "loading" ? "transparent" : hasImageContent || hasVideoContent ? "transparent" : theme.node.fill,
                             "--batch-from-x": `${batchMotion?.x || 0}px`,
                             "--batch-from-y": `${batchMotion?.y || 0}px`,
                             "--batch-from-rotate": `${6 + (batchMotion?.index || 0) * 4}deg`,
@@ -449,6 +451,37 @@ const nodeContentRenderers = {
     [CanvasNodeType.Director]: EmptyImageContent,
 } satisfies Partial<Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>>;
 
+function LoadingCardOverlay({ theme }: { theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
+    return (
+        <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-[inherit]">
+            {/* 底层:深空蓝黑底,让霓虹更通透 */}
+            <div className="absolute inset-0" style={{ background: "linear-gradient(160deg, #05060f, #0b1026, #101a3a)" }} />
+            {/* 主层:电光青→蓝→紫冷色渐变沿对角线流动 */}
+            <motion.div
+                className="absolute inset-0"
+                style={{
+                    backgroundImage: "linear-gradient(115deg, rgba(34,211,238,.9), rgba(59,130,246,.85), rgba(139,92,246,.8), rgba(34,211,238,.9))",
+                    backgroundSize: "300% 300%",
+                }}
+                animate={{ backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"] }}
+                transition={{ duration: 3.2, repeat: Infinity, ease: "linear" }}
+            />
+            {/* 辉光层:旋转的青色光晕增加流动感 */}
+            <motion.div
+                className="absolute -inset-[30%]"
+                style={{
+                    background: "conic-gradient(from 0deg, rgba(34,211,238,.4), transparent 25%, rgba(59,130,246,.35), transparent 55%, rgba(139,92,246,.35), transparent 85%)",
+                    filter: "blur(24px)",
+                }}
+                animate={{ rotate: 360 }}
+                transition={{ duration: 5, repeat: Infinity, ease: "linear" }}
+            />
+            {/* 中心柔化,保证文字可读 */}
+            <div className="absolute inset-0" style={{ background: "radial-gradient(circle at 50% 50%, rgba(0,0,0,.28), transparent 65%)" }} />
+        </div>
+    );
+}
+
 function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "node" | "theme" | "now">) {
     const startTimeRef = useRef(Date.now());
     const [localNow, setLocalNow] = useState(Date.now());
@@ -461,26 +494,30 @@ function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "no
     const startedAt = typeof node.metadata?.startedAt === "number" ? node.metadata.startedAt : startTimeRef.current;
     const elapsedMs = Math.max(0, currentNow - startedAt);
     const progress = Math.max(0, Math.min(100, Math.round(node.metadata?.progress || 0)));
+    const textColor = "#fff";
+    const textShadow = `0 1px 8px rgba(0,0,0,.45)`;
 
     if (node.type === CanvasNodeType.Video) {
         return (
-            <div className="flex h-full w-full flex-col justify-between overflow-hidden p-4" style={{ color: theme.node.text }}>
+            <div className="flex h-full w-full flex-col justify-between overflow-hidden p-4" style={{ color: textColor }}>
                 <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3">
-                    <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: selectionBlue }} />
-                    <div className="text-sm font-semibold" style={{ color: selectionBlue }}>
+                    <div className="font-mono text-sm font-semibold" style={{ color: textColor, textShadow }}>
                         正在创作 {progress}%
+                        <span className="ml-1 inline-block animate-pulse">▍</span>
                     </div>
-                    <span className="rounded-full px-2 py-1 text-xs" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
+                    <span className="rounded-full px-2 py-1 font-mono text-[11px] tracking-widest" style={{ background: "rgba(0,0,0,.35)", color: "#fff", textShadow }}>
                         {formatDuration(elapsedMs)}
                     </span>
                 </div>
                 <div className="space-y-1">
-                    <div className="flex items-center justify-between text-[11px]" style={{ color: theme.node.muted }}>
+                    <div className="flex items-center justify-between font-mono text-[11px]" style={{ color: textColor, textShadow }}>
                         <span>当前创作进度</span>
                         <span>{progress}%</span>
                     </div>
-                    <div className="h-1.5 overflow-hidden rounded-full" style={{ background: theme.node.stroke }}>
-                        <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: selectionBlue }} />
+                    <div className="h-1.5 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,.35)" }}>
+                        <div className="relative h-full rounded-full transition-all" style={{ width: `${progress}%`, background: `linear-gradient(90deg, ${selectionBlue}, #22d3ee)`, boxShadow: `0 0 10px ${selectionBlue}cc` }}>
+                            <div className="absolute right-0 top-1/2 size-1.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-white/95" style={{ boxShadow: "0 0 6px 2px rgba(255,255,255,.9)" }} />
+                        </div>
                     </div>
                 </div>
             </div>
@@ -488,15 +525,19 @@ function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "no
     }
 
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
-            <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-            <span className="text-[10px] tracking-[0.2em]">{progress > 0 ? `生成中 ${progress}%` : "生成中"}</span>
-            <span className="rounded-full border px-2 py-1 text-xs tracking-normal" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+        <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: textColor }}>
+            <span className="font-mono text-[11px] tracking-[0.3em]" style={{ color: textColor, textShadow }}>
+                {progress > 0 ? `生成中 ${progress}%` : "生成中"}
+                <span className="ml-1 inline-block animate-pulse">▍</span>
+            </span>
+            <span className="rounded-full px-2 py-1 font-mono text-[10px] tracking-widest" style={{ background: "rgba(0,0,0,.35)", color: "#fff", textShadow }}>
                 {formatDuration(elapsedMs)}
             </span>
             {progress > 0 ? (
-                <div className="h-1.5 w-28 overflow-hidden rounded-full" style={{ background: theme.node.stroke }}>
-                    <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: theme.node.activeStroke }} />
+                <div className="relative h-1 w-28 overflow-hidden rounded-full" style={{ background: "rgba(0,0,0,.35)" }}>
+                    <div className="relative h-full rounded-full transition-all" style={{ width: `${progress}%`, background: `linear-gradient(90deg, ${selectionBlue}, #22d3ee)`, boxShadow: `0 0 10px ${selectionBlue}cc` }}>
+                        <div className="absolute right-0 top-1/2 size-1.5 -translate-y-1/2 translate-x-1/2 rounded-full bg-white/95" style={{ boxShadow: "0 0 6px 2px rgba(255,255,255,.9)" }} />
+                    </div>
                 </div>
             ) : null}
         </div>
