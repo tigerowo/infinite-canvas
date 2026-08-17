@@ -487,9 +487,16 @@ export default function ImagePage() {
                     throw new Error("接口没有返回图片");
                 }
 
+                // 将生成结果持久化到本地存储，刷新后历史记录仍可恢复（base64 不会直接写入日志）
+                const stored = await uploadImage(image.dataUrl);
                 const durableImage = {
                     ...image,
-                    storageKey: "",
+                    dataUrl: stored.url,
+                    storageKey: stored.storageKey,
+                    width: stored.width || image.width,
+                    height: stored.height || image.height,
+                    bytes: stored.bytes || image.bytes,
+                    mimeType: stored.mimeType || image.mimeType,
                 };
                 
                 // 更新结果状态
@@ -738,6 +745,7 @@ export default function ImagePage() {
     };
 
     const saveLog = async (log: GenerationLog) => {
+        const persistedLog = await persistLogImages(log);
         const prevChain = saveLogChainRef.current;
         const nextChain = (async () => {
             try {
@@ -748,14 +756,31 @@ export default function ImagePage() {
             const storedLogs = await readStoredLogs();
             const keys = new Set(imageLogIdentityKeys(log));
             const duplicateLogs = storedLogs.filter((item) => item.id !== log.id && imageLogIdentityKeys(item).some((key) => keys.has(key)));
-            const nextLogs = dedupeGenerationLogs([log, ...storedLogs.filter((item) => item.id !== log.id)]);
+            const nextLogs = dedupeGenerationLogs([persistedLog, ...storedLogs.filter((item) => item.id !== log.id)]);
             setLogs(nextLogs);
             await Promise.all(duplicateLogs.map((item) => logStore.removeItem(item.id)));
-            await logStore.setItem(log.id, serializeLog(log));
+            await logStore.setItem(log.id, serializeLog(persistedLog));
             await persistImageHistory(nextLogs, categories);
         })();
         saveLogChainRef.current = nextChain;
         await nextChain;
+    };
+
+    const persistLogImages = async (log: GenerationLog): Promise<GenerationLog> => {
+        const images = log.images || [];
+        if (!images.some((image) => !image.storageKey && image.dataUrl?.startsWith("data:image/"))) return log;
+        const persistedImages = await Promise.all(
+            images.map(async (image) => {
+                if (image.storageKey || !image.dataUrl?.startsWith("data:image/")) return image;
+                try {
+                    const stored = await uploadImage(image.dataUrl);
+                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width || image.width, height: stored.height || image.height, bytes: stored.bytes || image.bytes, mimeType: stored.mimeType || image.mimeType };
+                } catch {
+                    return image;
+                }
+            }),
+        );
+        return { ...log, images: persistedImages };
     };
 
     const refreshLogs = async () => {
