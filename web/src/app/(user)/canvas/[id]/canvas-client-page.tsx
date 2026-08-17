@@ -145,6 +145,24 @@ function createCanvasNode(type: CanvasNodeType, position: Position, metadata?: C
     };
 }
 
+const INHERITED_GENERATION_KEYS: Partial<Record<CanvasNodeType, ReadonlyArray<keyof CanvasNodeMetadata>>> = {
+    [CanvasNodeType.Image]: ["model", "channelId", "size", "quality", "count"],
+    [CanvasNodeType.Panorama]: ["model", "channelId", "size", "quality", "count"],
+    [CanvasNodeType.Video]: ["model", "channelId", "seconds", "vquality", "mode", "negativePrompt"],
+    [CanvasNodeType.Audio]: ["model", "channelId", "audioVoice", "audioFormat", "audioSpeed", "audioInstructions"],
+};
+
+function inheritedGenerationMetadata(type: CanvasNodeType, sourceNode: CanvasNodeData | undefined): CanvasNodeMetadata | undefined {
+    const keys = INHERITED_GENERATION_KEYS[type];
+    if (!keys || !sourceNode?.metadata) return undefined;
+    const inherited: CanvasNodeMetadata = {};
+    keys.forEach((key) => {
+        const value = sourceNode.metadata?.[key];
+        if (value !== undefined && value !== null && value !== "") inherited[key] = value;
+    });
+    return Object.keys(inherited).length ? inherited : undefined;
+}
+
 export default function CanvasPage() {
     const params = useParams<{ id: string }>();
     const [mounted, setMounted] = useState(false);
@@ -722,7 +740,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
+            const sourceNode = nodesRef.current.find((node) => node.id === pending.connection.nodeId);
+            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : inheritedGenerationMetadata(type, sourceNode);
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
