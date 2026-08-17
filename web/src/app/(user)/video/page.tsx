@@ -1,7 +1,7 @@
 "use client";
 import axios from "axios";
 
-import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ChevronUp, ClipboardPaste, CloudUpload, Copy, Download, FolderPlus, History, LoaderCircle, Music2, PanelBottom, PanelLeft, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ChevronUp, ClipboardPaste, CloudUpload, Copy, Download, FolderPlus, History, Music2, PanelBottom, PanelLeft, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { App, Button, Checkbox, Empty, Input, Modal, Switch, Tag, Typography } from "antd";
 import localforage from "localforage";
@@ -10,6 +10,7 @@ import { saveAs } from "file-saver";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
+import { NeonLoadingBackdrop } from "@/components/neon-loading-backdrop";
 import { KlingV26WorkbenchPanel } from "@/app/(user)/video/components/kling-v26-workbench-panel";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, isKIEKlingV3Config, kieKlingOmniVariant, normalizeVideoResolutionValue, videoResolutionOptions, videoSizeForResolution, videoSizeOptions } from "@/components/video-settings-panel";
@@ -1877,22 +1878,21 @@ function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationRes
     const progress = typeof result.progress === "number" ? Math.max(0, Math.min(100, Math.floor(result.progress))) : null;
     const durationMs = Math.max(0, now - result.createdAt);
     return (
-        <div className="overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
+        <div className="overflow-hidden rounded-lg border border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="relative aspect-video">
-                <div className="absolute inset-0 opacity-60" style={{ backgroundImage: "radial-gradient(circle, rgba(120,113,108,0.35) 1.4px, transparent 1.6px)", backgroundSize: "16px 16px" }} />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
-                    <LoaderCircle className="size-6 animate-spin" />
-                    {progress !== null ? <span className="animate-pulse font-semibold text-sky-500">正在创作 {progress}%</span> : <span>生成中</span>}
-                    <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(durationMs)}</span>
+                <NeonLoadingBackdrop />
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-white" style={{ textShadow: "0 1px 8px rgba(0,0,0,.45)" }}>
+                    {progress !== null ? <span className="animate-pulse font-mono text-[12px] font-semibold tracking-[0.2em]">正在创作 {progress}%<span className="ml-1 inline-block animate-pulse">▍</span></span> : <span className="font-mono text-[11px] tracking-[0.3em]">生成中<span className="ml-1 inline-block animate-pulse">▍</span></span>}
+                    <span className="rounded-full bg-black/35 px-2 py-1 font-mono text-xs text-white" style={{ textShadow: "0 1px 8px rgba(0,0,0,.45)" }}>{formatDuration(durationMs)}</span>
                 </div>
                 {progress !== null ? (
                     <div className="absolute inset-x-4 bottom-4 z-10 flex flex-col gap-1">
-                        <div className="flex items-center justify-between text-[10px] font-medium text-stone-500 dark:text-stone-400">
+                        <div className="flex items-center justify-between text-[10px] font-medium text-white/90" style={{ textShadow: "0 1px 6px rgba(0,0,0,.5)" }}>
                             <span>当前创作进度</span>
                             <span>{progress}%</span>
                         </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800">
-                            <div className="h-full rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.5)] transition-all duration-300" style={{ width: `${progress}%` }} />
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/30">
+                            <div className="h-full rounded-full bg-gradient-to-r from-sky-400 to-cyan-300 shadow-[0_0_10px_rgba(34,211,238,0.8)] transition-all duration-300" style={{ width: `${progress}%` }} />
                         </div>
                     </div>
                 ) : null}

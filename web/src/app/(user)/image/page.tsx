@@ -44,6 +44,7 @@ import {
 import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
+import { NeonLoadingBackdrop } from "@/components/neon-loading-backdrop";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
 import { deleteImageGenerationLogs, fetchImageGenerationLogs, saveImageGenerationLogs } from "@/services/api/generation-logs";
@@ -1892,19 +1893,15 @@ function ResultImageCard({
 
 function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
     return (
-        <div className="overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
+        <div className="overflow-hidden rounded-lg border border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
             <div className="relative aspect-[4/3]">
-                <div
-                    className="absolute inset-0 opacity-60"
-                    style={{
-                        backgroundImage: "radial-gradient(circle, rgba(120,113,108,0.35) 1.4px, transparent 1.6px)",
-                        backgroundSize: "16px 16px",
-                    }}
-                />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
-                    <LoaderCircle className="size-6 animate-spin" />
-                    <span>生成中</span>
-                    <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(Math.max(0, now - result.createdAt))}</span>
+                <NeonLoadingBackdrop />
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-white" style={{ textShadow: "0 1px 8px rgba(0,0,0,.45)" }}>
+                    <span className="font-mono text-[11px] tracking-[0.3em]">
+                        生成中
+                        <span className="ml-1 inline-block animate-pulse">▍</span>
+                    </span>
+                    <span className="rounded-full bg-black/35 px-2 py-1 font-mono text-xs text-white" style={{ textShadow: "0 1px 8px rgba(0,0,0,.45)" }}>{formatDuration(Math.max(0, now - result.createdAt))}</span>
                 </div>
             </div>
             <TaskInfo result={{ ...result, durationMs: Math.max(0, now - result.createdAt) }} onCopyPrompt={onCopyPrompt} />
@@ -2060,6 +2057,16 @@ function HistoryLogCard({
                 </div>
                 {firstImage ? (
                     <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                ) : log.status === "生成中" ? (
+                    <div className="absolute inset-0">
+                        <NeonLoadingBackdrop />
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-5 text-center text-sm text-white" style={{ textShadow: "0 1px 8px rgba(0,0,0,.45)" }}>
+                            <span className="font-mono text-[11px] tracking-[0.3em]">
+                                生成中
+                                <span className="ml-1 inline-block animate-pulse">▍</span>
+                            </span>
+                        </div>
+                    </div>
                 ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
                         <AlertCircle className="size-7" />
