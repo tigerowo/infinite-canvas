@@ -170,11 +170,14 @@ export function AppConfigModal() {
         }
         setLoadingModels(true);
         try {
-            const nextChannels = await Promise.all(channels.map(async (channel) => ({ ...channel, models: await fetchImageModels(configForLocalChannel(config, channel)) })));
-            updateLocalChannels(nextChannels);
-            message.success("模型列表已更新");
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取模型失败");
+            const results = await Promise.allSettled(channels.map(async (channel) => fetchImageModels(configForLocalChannel(config, channel))));
+            updateLocalChannels(channels.map((channel, index) => {
+                const result = results[index];
+                return result.status === "fulfilled" ? { ...channel, models: result.value } : channel;
+            }));
+            const failedCount = results.filter((result) => result.status === "rejected").length;
+            if (failedCount) message.warning(`${failedCount} 个渠道拉取失败，已保留原有模型，可手动输入模型名称`);
+            else message.success("模型列表已更新");
         } finally {
             setLoadingModels(false);
         }
@@ -231,7 +234,8 @@ export function AppConfigModal() {
             patchLocalChannel(channel.id, { models: await fetchImageModels(configForLocalChannel(config, channel)) });
             message.success("模型列表已更新");
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取模型失败");
+            const reason = error instanceof Error ? error.message : "读取模型失败";
+            message.error(`${reason}。若上游不支持拉取模型列表，可手动输入模型名称`);
         } finally {
             setLoadingModels(false);
         }
@@ -352,7 +356,15 @@ export function AppConfigModal() {
                                                 ) : null}
                                             </div>
                                         </div>
-                                        <div className="text-xs text-stone-500">已保存 {channel.models.length} 个模型</div>
+                                        <Select
+                                            className="w-full"
+                                            mode="tags"
+                                            value={channel.models}
+                                            tokenSeparators={[",", "\n"]}
+                                            placeholder="拉取失败？输入模型名后回车即可手动添加"
+                                            onChange={(models: string[]) => patchLocalChannel(channel.id, { models: uniqueModels(models) })}
+                                        />
+                                        <div className="text-xs text-stone-500">已保存 {channel.models.length} 个模型，可点击“拉取”获取或直接手动输入</div>
                                     </div>
                                 ))}
                             </div>
