@@ -7,6 +7,9 @@
         "dev": "next dev --webpack -H 0.0.0.0 -p 3000",
         "build": "next build",
         "start": "next start",
+        "lint": "eslint .",
+        "typecheck": "tsc --noEmit",
+        "test": "vitest run",
         "format": "prettier --write .",
         "format:check": "prettier --check ."
     },
@@ -48,7 +51,11 @@
         "@types/node": "^20",
         "@types/react": "19.1.12",
         "@types/react-dom": "19.1.9",
+        "eslint": "^9.0.0",
+        "eslint-config-next": "16.2.9",
+        "eslint-config-prettier": "^10.0.0",
         "prettier": "^3.8.3",
-        "typescript": "^5"
+        "typescript": "^5",
+        "vitest": "^3.2.4"
     }
 }

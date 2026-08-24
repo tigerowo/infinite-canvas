@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,13 @@ import (
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
+)
+
+const (
+	videoTaskPollCountLimit    = 360
+	videoTaskResponseByteLimit = int64(32 * 1024 * 1024)
+	videoTaskDeadline          = 30 * time.Minute
+	videoTaskResponseLimit     = int64(1024 * 1024)
 )
 
 func StartVideoTaskPoller() {
@@ -66,6 +74,11 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	releaseSlot, ok := reserveGenerationTaskSlot(w, r, user.ID)
+	if !ok {
+		return
+	}
+	defer releaseSlot()
 	channel, userChannelID, err := selectAIRequestChannel(user, modelName, r.Header.Get("X-Model-Channel-ID"), r.Header.Get(userModelChannelHeader))
 	if err != nil {
 		log.Printf("AI video select channel failed: model=%s err=%v", modelName, err)
@@ -89,7 +102,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI video build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, upstreamPath), err)
 		Fail(w, "AI 接口请求失败")
@@ -161,7 +174,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		ChannelName:     channel.Name,
 		Source:          readVideoTaskSource(r),
 		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:     readClientVideoTaskID(r),
+		ClientTaskID:    readClientVideoTaskID(r),
 		UpstreamTaskID:  parsed.UpstreamTaskID,
 		UpstreamVideoID: parsed.UpstreamVideoID,
 		Status:          parsed.Status,
@@ -244,7 +257,7 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 		Fail(w, "Gemini Veo 任务完成但没有返回视频地址")
 		return true
 	}
-	request, err := http.NewRequest(http.MethodGet, task.VideoURL, nil)
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, task.VideoURL, nil)
 	if err != nil {
 		Fail(w, "视频内容下载失败")
 		return true
@@ -260,15 +273,25 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 		Fail(w, readUpstreamAIErrorMessage(nil, response.StatusCode))
 		return true
 	}
+	if response.ContentLength > generatedMediaResponseLimit {
+		Fail(w, "视频内容超过 512 MiB 限制")
+		return true
+	}
 	if contentType := response.Header.Get("Content-Type"); contentType != "" {
 		w.Header().Set("Content-Type", contentType)
 	}
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	_, exceeded, _ := copyLimitedUpstreamResponse(w, response.Body, generatedMediaResponseLimit)
+	if exceeded {
+		log.Printf("Gemini video content exceeded 512 MiB limit: task=%s", task.ID)
+	}
 	return true
 }
 
 func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdate, error) {
+	if message := videoTaskPollBudgetError(task, time.Now()); message != "" {
+		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message}, nil
+	}
 	var channel model.ModelChannel
 	var err error
 	if strings.TrimSpace(task.UserChannelID) != "" {
@@ -288,7 +311,10 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	}
 	endpoint := "/videos/" + pollID
 	upstreamPath := resolveAIProxyPath(channel, task.Model, endpoint)
-	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, task.Model, upstreamPath), nil)
+	createdAt, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(task.CreatedAt))
+	pollContext, cancel := context.WithDeadline(context.Background(), createdAt.Add(videoTaskDeadline))
+	defer cancel()
+	request, err := http.NewRequestWithContext(pollContext, http.MethodGet, resolveAIProxyURL(channel, task.Model, upstreamPath), nil)
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}
@@ -304,18 +330,27 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		UserDisplayName: task.UserDisplayName,
 		RequestBody:     fmt.Sprintf(`{"taskId":%q}`, pollID),
 	}
-	payload, status, err := doAIRequest(request, channel)
+	remainingBytes := videoTaskResponseByteLimit - task.ResponseBytes
+	perResponseLimit := min(videoTaskResponseLimit, remainingBytes)
+	payload, status, err := doAIRequestWithLimit(request, channel, perResponseLimit)
 	if err != nil {
-		saveAIProxyLog(logContext, 0, "", err.Error())
-		return service.VideoTaskPollUpdate{}, err
+		saveAIProxyLog(logContext, status, "", err.Error())
+		if len(payload) > 0 {
+			message := "视频任务上游响应读取失败"
+			if task.ResponseBytes+int64(len(payload)) > videoTaskResponseByteLimit {
+				message = "视频任务上游累计响应超过 32 MiB 限制"
+			}
+			return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: err.Error(), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
+		}
+		return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: err.Error(), PollRequests: 1}, nil
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
 		saveAIProxyLog(logContext, status, string(payload), strings.TrimSpace(string(payload)))
 		if status == http.StatusTooManyRequests {
-			return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: message, ResponseBody: string(payload)}, nil
+			return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: message, ResponseBody: string(payload), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
 		}
-		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: string(payload)}, nil
+		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: string(payload), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
 	}
 	transformed := transformVideoStatusPayload(payload, request, channel, task.Model)
 	parsed := parseVideoTaskPayload(transformed, task.Model)
@@ -333,15 +368,34 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	}
 	saveAIProxyLog(logContext, status, string(transformed), firstNonEmpty(parsed.Error, ""))
 	return service.VideoTaskPollUpdate{
-		Status:       parsed.Status,
-		Progress:     parsed.Progress,
-		Seconds:      parsed.Seconds,
-		Size:         parsed.Size,
-		VideoURL:     parsed.VideoURL,
-		Error:        parsed.Error,
-		ErrorDetail:  parsed.ErrorDetail,
-		ResponseBody: string(transformed),
+		Status:        parsed.Status,
+		Progress:      parsed.Progress,
+		Seconds:       parsed.Seconds,
+		Size:          parsed.Size,
+		VideoURL:      parsed.VideoURL,
+		Error:         parsed.Error,
+		ErrorDetail:   parsed.ErrorDetail,
+		ResponseBody:  string(transformed),
+		ResponseBytes: int64(len(payload)),
+		PollRequests:  1,
 	}, nil
+}
+
+func videoTaskPollBudgetError(task model.VideoTask, current time.Time) string {
+	if task.PollCount >= videoTaskPollCountLimit {
+		return "视频任务轮询超过 360 次限制"
+	}
+	if task.ResponseBytes >= videoTaskResponseByteLimit {
+		return "视频任务上游累计响应超过 32 MiB 限制"
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(task.CreatedAt))
+	if err != nil {
+		return "视频任务创建时间无效，已停止轮询"
+	}
+	if current.Sub(createdAt) >= videoTaskDeadline {
+		return "视频任务轮询超过 30 分钟总体 deadline"
+	}
+	return ""
 }
 
 func normalizeVideoCreateBody(body []byte, contentType string, modelName string, channel model.ModelChannel, upstreamPath string) ([]byte, string, error) {
@@ -359,12 +413,25 @@ func normalizeVideoCreateBody(body []byte, contentType string, modelName string,
 }
 
 func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int, error) {
+	return doAIRequestWithLimit(request, channel, videoTaskResponseLimit)
+}
+
+func doAIRequestWithLimit(request *http.Request, channel model.ModelChannel, limit int64) ([]byte, int, error) {
+	if limit <= 0 {
+		return nil, 0, errors.New("AI 上游响应读取预算已耗尽")
+	}
 	response, err := service.HTTPClientForChannel(channel).Do(request)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer response.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
+	payload, readErr := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if readErr != nil {
+		return payload, response.StatusCode, readErr
+	}
+	if int64(len(payload)) > limit {
+		return payload, response.StatusCode, fmt.Errorf("AI 上游单次响应超过 %s 限制", formatByteLimit(limit))
+	}
 	return payload, response.StatusCode, nil
 }
 

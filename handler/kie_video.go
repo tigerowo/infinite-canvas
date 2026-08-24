@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -921,7 +920,7 @@ func applyKIEVideoGenerateAudioInput(input map[string]any, modelName string) {
 	case "kling-3.0-omni/text-to-video", "kling-3.0-omni/image-to-video", "kling-3.0-omni/reference-to-video", "kling-3.0-omni/transformation":
 		input["audio"] = enabled
 	case "bytedance/seedance-2", "bytedance/seedance-2-fast", "bytedance/seedance-2-mini", "bytedance/seedance-1.5-pro", "bytedance/seedance-1-5-pro", "bytedance/seedance-2-5":
-    	input["generate_audio"] = enabled
+		input["generate_audio"] = enabled
 	case "wan/2-6-flash-image-to-video", "wan/2-6-flash-video-to-video":
 		input["audio"] = enabled
 	}
@@ -1132,41 +1131,41 @@ func kieModelInputConfig(modelName string) kieInputConfig {
 		"wan/2-7-image":                       {aspectField: "aspect_ratio", hasResolution: true, resolutionKind: "image", countField: "n", imageRefField: "input_urls", imageRefKind: "array"},
 		"wan/2-7-image-pro":                   {aspectField: "aspect_ratio", hasResolution: true, resolutionKind: "image", countField: "n", imageRefField: "input_urls", imageRefKind: "array"},
 
-		"google/imagen4":                 {aspectField: "aspect_ratio"},
-		"google/imagen4-fast":            {aspectField: "aspect_ratio"},
-		"google/imagen4-ultra":           {aspectField: "aspect_ratio"},
-		"google/nano-banana":             {aspectField: "aspect_ratio", hasOutputFormat: true},
-		"google/nano-banana-edit":        {aspectField: "aspect_ratio", hasOutputFormat: true, imageRefField: "image_urls", imageRefKind: "array"},
-		"gpt-image/1.5-image-to-image":   {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "input_urls", imageRefKind: "array"},
-		"gpt-image/1.5-text-to-image":    {aspectField: "aspect_ratio", hasQuality: true},
+		"google/imagen4":                       {aspectField: "aspect_ratio"},
+		"google/imagen4-fast":                  {aspectField: "aspect_ratio"},
+		"google/imagen4-ultra":                 {aspectField: "aspect_ratio"},
+		"google/nano-banana":                   {aspectField: "aspect_ratio", hasOutputFormat: true},
+		"google/nano-banana-edit":              {aspectField: "aspect_ratio", hasOutputFormat: true, imageRefField: "image_urls", imageRefKind: "array"},
+		"gpt-image/1.5-image-to-image":         {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "input_urls", imageRefKind: "array"},
+		"gpt-image/1.5-text-to-image":          {aspectField: "aspect_ratio", hasQuality: true},
 		"grok-imagine-image-2-0/text-to-image": {aspectField: "aspect_ratio"},
-		"grok-imagine/text-to-image":     {aspectField: "aspect_ratio"},
-		"grok-imagine/image-to-image":    {imageRefField: "image_urls", imageRefKind: "array"},
-		"grok-imagine/extend":            {imageRefField: "image_url", imageRefKind: "single"},
-		"ideogram/character":             {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", imageRefField: "reference_image_urls", imageRefKind: "array"},
-		"ideogram/character-edit":        {countField: "num_images", countKind: "string", imageRefField: "image_url", imageRefKind: "single"},
-		"ideogram/character-remix":       {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", imageRefField: "reference_image_urls", imageRefKind: "array"},
-		"ideogram/v3-edit":               {imageRefField: "image_url", imageRefKind: "single"},
-		"ideogram/v3-remix":              {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", imageRefField: "image_url", imageRefKind: "single"},
-		"ideogram/v3-text-to-image":      {aspectField: "image_size", aspectKind: "image_size_named"},
-		"qwen/text-to-image":             {aspectField: "image_size", aspectKind: "image_size_named", hasOutputFormat: true},
-		"qwen/image-edit":                {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", hasOutputFormat: true, imageRefField: "image_url", imageRefKind: "single"},
-		"qwen/image-to-image":            {hasOutputFormat: true, imageRefField: "image_url", imageRefKind: "single"},
-		"qwen2/image-edit":               {aspectField: "image_size", hasOutputFormat: true, imageRefField: "image_url", imageRefKind: "single"},
-		"qwen2/text-to-image":            {aspectField: "image_size", hasOutputFormat: true},
-		"recraft/crisp-upscale":          {imageRefField: "image", imageRefKind: "single"},
-		"recraft/remove-background":      {imageRefField: "image", imageRefKind: "single"},
-		"seedream/4.5-edit":              {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "image_urls", imageRefKind: "array"},
-		"seedream/4.5-text-to-image":     {aspectField: "aspect_ratio", hasQuality: true},
-		"seedream/5-lite-image-to-image": {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "image_urls", imageRefKind: "array"},
-		"seedream/5-lite-text-to-image":  {aspectField: "aspect_ratio", hasQuality: true},
-		"seedream/5-pro-text-to-image":        {aspectField: "aspect_ratio", hasQuality: true},
-		"seedream/5-pro-image-to-image":       {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "image_urls", imageRefKind: "array"},
-		"seedream/5-pro-layer-decomposition": {imageRefField: "image_url", imageRefKind: "single"},
-		"topaz/image-upscale":                 {imageRefField: "image_url", imageRefKind: "single"},
-		"topaz/video-upscale":            {videoRefField: "video_url", videoRefKind: "single"},
-		"infinitalk/from-audio":          {hasResolution: true, imageRefField: "image_url", imageRefKind: "single", audioRefField: "audio_url", audioRefKind: "single"},
-		"z-image":                        {aspectField: "aspect_ratio"},
+		"grok-imagine/text-to-image":           {aspectField: "aspect_ratio"},
+		"grok-imagine/image-to-image":          {imageRefField: "image_urls", imageRefKind: "array"},
+		"grok-imagine/extend":                  {imageRefField: "image_url", imageRefKind: "single"},
+		"ideogram/character":                   {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", imageRefField: "reference_image_urls", imageRefKind: "array"},
+		"ideogram/character-edit":              {countField: "num_images", countKind: "string", imageRefField: "image_url", imageRefKind: "single"},
+		"ideogram/character-remix":             {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", imageRefField: "reference_image_urls", imageRefKind: "array"},
+		"ideogram/v3-edit":                     {imageRefField: "image_url", imageRefKind: "single"},
+		"ideogram/v3-remix":                    {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", imageRefField: "image_url", imageRefKind: "single"},
+		"ideogram/v3-text-to-image":            {aspectField: "image_size", aspectKind: "image_size_named"},
+		"qwen/text-to-image":                   {aspectField: "image_size", aspectKind: "image_size_named", hasOutputFormat: true},
+		"qwen/image-edit":                      {aspectField: "image_size", aspectKind: "image_size_named", countField: "num_images", countKind: "string", hasOutputFormat: true, imageRefField: "image_url", imageRefKind: "single"},
+		"qwen/image-to-image":                  {hasOutputFormat: true, imageRefField: "image_url", imageRefKind: "single"},
+		"qwen2/image-edit":                     {aspectField: "image_size", hasOutputFormat: true, imageRefField: "image_url", imageRefKind: "single"},
+		"qwen2/text-to-image":                  {aspectField: "image_size", hasOutputFormat: true},
+		"recraft/crisp-upscale":                {imageRefField: "image", imageRefKind: "single"},
+		"recraft/remove-background":            {imageRefField: "image", imageRefKind: "single"},
+		"seedream/4.5-edit":                    {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "image_urls", imageRefKind: "array"},
+		"seedream/4.5-text-to-image":           {aspectField: "aspect_ratio", hasQuality: true},
+		"seedream/5-lite-image-to-image":       {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "image_urls", imageRefKind: "array"},
+		"seedream/5-lite-text-to-image":        {aspectField: "aspect_ratio", hasQuality: true},
+		"seedream/5-pro-text-to-image":         {aspectField: "aspect_ratio", hasQuality: true},
+		"seedream/5-pro-image-to-image":        {aspectField: "aspect_ratio", hasQuality: true, imageRefField: "image_urls", imageRefKind: "array"},
+		"seedream/5-pro-layer-decomposition":   {imageRefField: "image_url", imageRefKind: "single"},
+		"topaz/image-upscale":                  {imageRefField: "image_url", imageRefKind: "single"},
+		"topaz/video-upscale":                  {videoRefField: "video_url", videoRefKind: "single"},
+		"infinitalk/from-audio":                {hasResolution: true, imageRefField: "image_url", imageRefKind: "single", audioRefField: "audio_url", audioRefKind: "single"},
+		"z-image":                              {aspectField: "aspect_ratio"},
 	}
 
 	if config, ok := configs[modelName]; ok {
@@ -1402,7 +1401,15 @@ func copyKIEVideoResponse(w http.ResponseWriter, response *http.Response, reques
 	}
 
 	if isKIECreateTaskPath(request.URL.Path) {
-		payload, _ := io.ReadAll(response.Body)
+		payload, err := readLimitedUpstreamResponse(response.Body, "KIE 生成任务", structuredAdapterResponseLimit)
+		if err != nil {
+			if onFailure != nil {
+				onFailure()
+			}
+			saveAIProxyLog(logContext, response.StatusCode, "", err.Error())
+			Fail(w, "KIE 响应读取失败")
+			return true
+		}
 		responseBody := string(payload)
 
 		if isKIEImageEndpoint(logContext.Endpoint) {
@@ -1436,7 +1443,15 @@ func copyKIEVideoResponse(w http.ResponseWriter, response *http.Response, reques
 	}
 
 	if strings.Contains(request.URL.Path, "/jobs/recordInfo") {
-		payload, _ := io.ReadAll(response.Body)
+		payload, err := readLimitedUpstreamResponse(response.Body, "KIE 任务状态", structuredAdapterResponseLimit)
+		if err != nil {
+			if onFailure != nil {
+				onFailure()
+			}
+			saveAIProxyLog(logContext, response.StatusCode, "", err.Error())
+			Fail(w, "KIE 响应读取失败")
+			return true
+		}
 		responseBody := string(payload)
 
 		if transformed, ok := transformKIETaskResponse(payload, logContext.Model); ok {

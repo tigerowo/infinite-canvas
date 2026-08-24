@@ -57,13 +57,21 @@ func MeasureUserStorageProvider(w http.ResponseWriter, r *http.Request) {
 
 // UploadFile 上传文件到对象存储。
 func UploadFile(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, storageUploadRequestMaxBytes)
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		Fail(w, "上传文件超过 256 MiB 限制或格式不正确")
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		Fail(w, "请选择要上传的文件")
 		return
 	}
 	defer file.Close()
-	data, err := io.ReadAll(file)
+	data, err := readLimitedRequestBody(file, "上传文件", storageUploadMaxBytes)
 	if err != nil {
 		FailError(w, err)
 		return
@@ -173,7 +181,7 @@ func AdminMeasureStorageProvider(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "配置内容格式错误")
 		return
 	}
-	result, err := service.MeasureAdminStorageProvider(request.Index, request.Provider)
+	result, err := service.MeasureAdminStorageProvider(r.Context(), request.Index, request.Provider)
 	if err != nil {
 		FailError(w, err)
 		return
@@ -183,6 +191,7 @@ func AdminMeasureStorageProvider(w http.ResponseWriter, r *http.Request) {
 
 // ProxyImage 代理图片请求（解决跨域和机器人检测问题）。
 func ProxyImage(w http.ResponseWriter, r *http.Request) {
+	const maxProxyImageBytes = 25 * 1024 * 1024
 	targetURL := r.URL.Query().Get("url")
 	if targetURL == "" {
 		Fail(w, "url 参数不能为空")
@@ -214,26 +223,28 @@ func ProxyImage(w http.ResponseWriter, r *http.Request) {
 		FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败: "+resp.Status)
 		return
 	}
-	contentType := resp.Header.Get("Content-Type")
-	isImage := strings.HasPrefix(contentType, "image/")
-	var data []byte
-	if isImage {
-		data, err = io.ReadAll(resp.Body)
-		if err != nil {
-			FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败")
-			return
-		}
-	}
-	if contentType != "" {
-		w.Header().Set("Content-Type", contentType)
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	w.WriteHeader(resp.StatusCode)
-	if isImage {
-		_, _ = w.Write(data)
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]))
+	if !strings.HasPrefix(contentType, "image/") || contentType == "image/svg+xml" {
+		FailWithStatus(w, http.StatusBadGateway, "代理地址没有返回安全图片")
 		return
 	}
-	_, _ = io.Copy(w, resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxProxyImageBytes+1))
+	if err != nil {
+		FailWithStatus(w, http.StatusBadGateway, "代理图片请求失败")
+		return
+	}
+	if len(data) > maxProxyImageBytes {
+		FailWithStatus(w, http.StatusBadGateway, "代理图片超过 25 MiB 限制")
+		return
+	}
+	detected := strings.ToLower(http.DetectContentType(data))
+	if strings.HasPrefix(detected, "text/html") || strings.Contains(detected, "xml") {
+		FailWithStatus(w, http.StatusBadGateway, "代理地址没有返回安全图片")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(data)
 }

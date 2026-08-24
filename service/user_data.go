@@ -64,6 +64,11 @@ func SelectUserLocalModelChannelForModel(userID string, modelName string, channe
 	if channelID == "" {
 		return model.ModelChannel{}, errors.New("缺少模型渠道")
 	}
+	if channel, found, err := SelectUserProviderForModel(userID, modelName, channelID); err != nil {
+		return model.ModelChannel{}, err
+	} else if found {
+		return channel, nil
+	}
 	config, ok, err := repository.GetUserConfig(userID)
 	if err != nil {
 		return model.ModelChannel{}, err
@@ -93,15 +98,16 @@ func SelectUserLocalModelChannelForModel(userID string, modelName string, channe
 			protocol = "openai"
 		}
 		return model.ModelChannel{
-			ID:       channelID,
-			Protocol: protocol,
-			Name:     firstVideoTaskValue(strings.TrimSpace(channel.Name), "本地直连"),
-			BaseURL:  baseURL,
-			APIKey:   apiKey,
-			Models:   models,
-			Weight:   1,
-			Timeout:  600,
-			Enabled:  true,
+			ID:         channelID,
+			Protocol:   protocol,
+			Name:       firstVideoTaskValue(strings.TrimSpace(channel.Name), "本地直连"),
+			BaseURL:    baseURL,
+			APIKey:     apiKey,
+			Models:     models,
+			Weight:     1,
+			Timeout:    600,
+			Enabled:    true,
+			Restricted: true,
 		}, nil
 	}
 	return model.ModelChannel{}, errors.New("本地渠道不存在")

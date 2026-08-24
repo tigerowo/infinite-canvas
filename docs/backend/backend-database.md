@@ -32,6 +32,7 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `providers`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -76,6 +77,37 @@ description: 当前后端主要数据表与字段说明
 | `updated_at` | string | 更新时间 |
 
 `storage_provider.s3` 保存 Endpoint、Region、Bucket、Access Key、Secret、公开域名和路径前缀；`storage_provider.webdav` 保存 WebDAV 地址、远程目录、用户名和密码/应用密码。自动同步开关不重复写入 Provider；后端下载和删除旧媒体时仍会读取已保存但已停用的 Provider。
+
+### providers
+
+连接中心的用户 API/CLI Provider 表。每条记录按 `owner_user_id` 隔离；API Key 和自定义请求头序列化后使用由本地 `JWT_SECRET` 派生的 AES-GCM 密钥加密，接口只返回密钥是否存在和固定掩码。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | Provider 主键 |
+| `owner_user_id` | string | 所属用户 ID，索引的一部分 |
+| `kind` | string | `api` 或 `cli` |
+| `protocol` | string | API 协议或 CLI 类型 |
+| `name` | string | 连接名称 |
+| `base_url` | string | API Base URL；CLI 记录可为空 |
+| `credentials_ciphertext` | text | AES-GCM 密文，包含 API Key 与自定义请求头；不通过 JSON 返回 |
+| `capabilities` | json | `text`、`image`、`video`、`audio` 能力列表 |
+| `models` | json | 模型列表 |
+| `default_model` | string | 默认模型 |
+| `timeout` | number | 请求超时秒数，范围 1–600 |
+| `enabled` | boolean | 是否启用 |
+| `is_default` | boolean | 是否为同类型默认连接 |
+| `sort_order` | number | 同类型排序值 |
+| `connection_status` | string | `untested`、`connected`、`failed`、`timeout`、`disabled`、`unavailable` |
+| `status_message` | text | 最近状态说明，不保存响应正文或密钥 |
+| `last_checked_at` | string | 最近检测时间 |
+| `executable` | string | CLI 可执行程序元数据；当前版本不执行 |
+| `working_directory` | string | CLI 默认工作目录元数据 |
+| `version` | string | CLI 版本元数据 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+索引：`idx_providers_owner_kind_sort (owner_user_id, kind, sort_order)`。删除前会检查视频任务、画布图片/音频任务和 AI 调用日志中的渠道引用；存在引用时应禁用而不是删除。更换 `JWT_SECRET` 会导致既有 Provider 密文无法解密，轮换前必须先设计密钥重加密流程。
 
 ### storage_objects
 
@@ -160,6 +192,8 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `request_body` | text | 创建任务时的请求摘要 |
 | `response_body` | text | 创建任务时的响应摘要 |
 | `last_response` | text | 最近一次状态响应摘要 |
+| `poll_count` | number | 后端已发起的累计轮询次数，达到 360 次后停止 |
+| `response_bytes` | number | 后端轮询成功响应体的累计读取字节数，达到 32 MiB 后停止 |
 | `credits` | number | 创建任务时预扣算力点 |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
@@ -167,7 +201,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `completed_at` | string | 完成时间 |
 | `last_polled_at` | string | 最近轮询时间 |
 
-后台轮询器按 `status + created_at` 查询未完成任务；旧数据库中如果残留废弃列，不再参与代码查询。
+后台轮询器按 `status + created_at` 查询未完成任务；每个任务还受 360 次请求、32 MiB 累计响应体和自创建起 30 分钟总体 deadline 限制。旧数据库由 AutoMigrate 增加计数字段；如果残留废弃列，不再参与代码查询。
 
 ### video_generation_logs
 

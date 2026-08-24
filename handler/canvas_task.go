@@ -32,6 +32,11 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	releaseSlot, ok := reserveGenerationTaskSlot(w, r, user.ID)
+	if !ok {
+		return
+	}
+	defer releaseSlot()
 	body, contentType, endpoint, source, nodeID, sourceID, clientTaskID, prompt, channelID, err := readCanvasTaskAIRequest(r, "/images/generations")
 	if err != nil {
 		Fail(w, err.Error())
@@ -185,6 +190,11 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	releaseSlot, ok := reserveGenerationTaskSlot(w, r, user.ID)
+	if !ok {
+		return
+	}
+	defer releaseSlot()
 	body, contentType, endpoint, _, nodeID, sourceID, clientTaskID, prompt, channelID, err := readCanvasTaskAIRequest(r, "/audio/speech")
 	if err != nil {
 		Fail(w, err.Error())
@@ -355,7 +365,10 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 	proxyAIRequest(recorder, request, endpoint)
 	response := recorder.Result()
 	defer response.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+	payload, readErr := readLimitedUpstreamResponse(response.Body, "画布生成任务", 32*1024*1024)
+	if readErr != nil {
+		return nil, response.StatusCode, response.Header.Get("Content-Type"), readErr
+	}
 	return payload, response.StatusCode, response.Header.Get("Content-Type"), nil
 }
 
@@ -377,7 +390,7 @@ func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detai
 
 func readCanvasTaskAIRequest(r *http.Request, fallbackEndpoint string) ([]byte, string, string, string, string, string, string, string, string, error) {
 	contentType := r.Header.Get("Content-Type")
-	raw, err := io.ReadAll(r.Body)
+	raw, err := readLimitedRequestBody(r.Body, "画布任务请求", canvasTaskRequestMaxBytes)
 	if err != nil {
 		return nil, "", "", "", "", "", "", "", "", err
 	}
@@ -420,7 +433,7 @@ func stripCanvasTaskMultipartFields(raw []byte, contentType string, normalizeIma
 	if err != nil {
 		return nil, "", nil, err
 	}
-	form, err := multipart.NewReader(bytes.NewReader(raw), params["boundary"]).ReadForm(256 << 20)
+	form, err := multipart.NewReader(bytes.NewReader(raw), params["boundary"]).ReadForm(canvasTaskRequestMaxBytes)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -701,7 +714,10 @@ func imageCandidateBytes(value string) ([]byte, string, error) {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return nil, "", errors.New(response.Status)
 		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+		if response.ContentLength > 32*1024*1024 {
+			return nil, "", errors.New("图片响应超过 32 MiB 限制")
+		}
+		data, err := readLimitedUpstreamResponse(response.Body, "画布图片下载", 32*1024*1024)
 		if err != nil {
 			return nil, "", err
 		}

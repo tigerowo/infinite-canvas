@@ -10,11 +10,13 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo";
+    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
     name: string;
     baseUrl: string;
     apiKey: string;
     models: string[];
+    managed?: boolean;
+    hasApiKey?: boolean;
 };
 
 export type VideoMultiPromptItem = { prompt: string; duration: string };
@@ -349,7 +351,7 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = localChannelForActiveModel({ ...config, model });
-    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(channel?.baseUrl.trim() && channel?.apiKey.trim()));
+    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey)));
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -497,6 +499,8 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+        managed: channel.managed === true,
+        hasApiKey: channel.hasApiKey === true,
     }));
     if (!normalized.length) {
         normalized.push({ id: "local-default", protocol: "openai", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,16 +16,22 @@ import (
 )
 
 const (
-	gptImage2RawBase             = "https://raw.githubusercontent.com/tigerowo/awesome-gpt-image-2-prompts/main"
-	awesomeGptImageRawBase       = "https://raw.githubusercontent.com/ZeroLu/awesome-gpt-image/main"
-	awesomeGpt4oImagePromptsBase = "https://raw.githubusercontent.com/ImgEdify/Awesome-GPT4o-Image-Prompts/main"
-	youMindGptImage2RawBase      = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main"
-	youMindNanoBananaProRawBase  = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main"
+	gptImage2RawBase              = "https://raw.githubusercontent.com/tigerowo/awesome-gpt-image-2-prompts/main"
+	awesomeGptImageRawBase        = "https://raw.githubusercontent.com/ZeroLu/awesome-gpt-image/main"
+	awesomeGpt4oImagePromptsBase  = "https://raw.githubusercontent.com/ImgEdify/Awesome-GPT4o-Image-Prompts/main"
+	youMindGptImage2RawBase       = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-gpt-image-2/main"
+	youMindNanoBananaProRawBase   = "https://raw.githubusercontent.com/YouMind-OpenLab/awesome-nano-banana-pro-prompts/main"
 	xianyuAwesomeGptImage2RawBase = "https://raw.githubusercontent.com/xianyu110/awesome-gptimage2/main"
-	davidWuGptImage2RawBase      = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main"
+	davidWuGptImage2RawBase       = "https://raw.githubusercontent.com/davidwuw0811-boop/awesome-gpt-image2-prompts/main"
 )
 
 var gptImage2CaseFiles = []string{"README.md", "cases/ad-creative.md", "cases/character.md", "cases/comparison.md", "cases/ecommerce.md", "cases/portrait.md", "cases/poster.md", "cases/ui.md"}
+
+var promptSyncReadLimits = upstreamReadLimits{
+	MaxRequests: 32,
+	MaxBytes:    32 * 1024 * 1024,
+	Deadline:    2 * time.Minute,
+}
 
 type gptImage2Data struct {
 	Records []struct {
@@ -68,13 +75,25 @@ type davidWuGptImage2Prompt struct {
 	Image      string `json:"image"`
 }
 
-func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
+func SyncPromptCategory(ctx context.Context, category string) ([]model.PromptCategory, error) {
+	budget := newUpstreamReadBudget(ctx, "提示词同步", promptSyncReadLimits)
+	defer budget.Close()
+	return syncPromptCategoryWithBudget(category, budget)
+}
+
+func syncPromptCategoryWithBudget(category string, budget *upstreamReadBudget) ([]model.PromptCategory, error) {
 	for _, item := range repository.PromptCategories() {
 		if item.Category != category {
 			continue
 		}
-		items, err := buildPromptCategory(item.Category)
+		if err := budget.Check(); err != nil {
+			return nil, err
+		}
+		items, err := buildPromptCategory(item.Category, budget)
 		if err != nil {
+			return nil, err
+		}
+		if err := budget.Check(); err != nil {
 			return nil, err
 		}
 		if err := repository.ReplacePromptCategory(item, items); err != nil {
@@ -85,39 +104,42 @@ func SyncPromptCategory(category string) ([]model.PromptCategory, error) {
 	return nil, errors.New("未知提示词分类")
 }
 
-func buildPromptCategory(category string) ([]model.Prompt, error) {
+func buildPromptCategory(category string, budget *upstreamReadBudget) ([]model.Prompt, error) {
 	switch category {
 	case "gpt-image-2-prompts":
-		return buildGptImage2Prompts()
+		return buildGptImage2Prompts(budget)
 	case "awesome-gpt-image":
-		return buildAwesomeGptImagePrompts()
+		return buildAwesomeGptImagePrompts(budget)
 	case "awesome-gpt4o-image-prompts":
-		return buildAwesomeGpt4oImagePrompts()
+		return buildAwesomeGpt4oImagePrompts(budget)
 	case "xianyu-awesome-gptimage2":
-		return buildXianyuAwesomeGptImage2Prompts()
+		return buildXianyuAwesomeGptImage2Prompts(budget)
 	case "youmind-gpt-image-2":
-		return buildYouMindGptImage2Prompts()
+		return buildYouMindGptImage2Prompts(budget)
 	case "youmind-nano-banana-pro":
-		return buildYouMindNanoBananaProPrompts()
+		return buildYouMindNanoBananaProPrompts(budget)
 	case "davidwu-gpt-image2-prompts":
-		return buildDavidWuGptImage2Prompts()
+		return buildDavidWuGptImage2Prompts(budget)
 	}
 	return nil, errors.New("未知提示词分类")
 }
 
-func fetchText(baseURL, file string) (string, error) {
-	request, _ := http.NewRequest(http.MethodGet, baseURL+"/"+file, nil)
-	client := http.Client{Timeout: 30 * time.Second}
-	response, err := client.Do(request)
+func fetchText(budget *upstreamReadBudget, baseURL, file string) (string, error) {
+	request, err := http.NewRequestWithContext(budget.Context(), http.MethodGet, baseURL+"/"+file, nil)
 	if err != nil {
 		return "", err
+	}
+	client := budget.HTTPClient(SafeProxyHTTPClientWithTimeout(30 * time.Second))
+	response, err := client.Do(request)
+	if err != nil {
+		return "", normalizeUpstreamBudgetError(err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return "", errors.New(file + " 拉取失败")
 	}
 	data, err := io.ReadAll(response.Body)
-	return string(data), err
+	return string(data), normalizeUpstreamBudgetError(err)
 }
 
 type gptImage2Case struct {
@@ -125,9 +147,9 @@ type gptImage2Case struct {
 	image  string
 }
 
-func buildGptImage2Prompts() ([]model.Prompt, error) {
+func buildGptImage2Prompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
 	cases := map[string]gptImage2Case{}
-	raw, err := fetchText(gptImage2RawBase, "data/ingested_tweets.json")
+	raw, err := fetchText(budget, gptImage2RawBase, "data/ingested_tweets.json")
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +158,7 @@ func buildGptImage2Prompts() ([]model.Prompt, error) {
 		return nil, err
 	}
 	for _, file := range gptImage2CaseFiles {
-		markdown, err := fetchText(gptImage2RawBase, file)
+		markdown, err := fetchText(budget, gptImage2RawBase, file)
 		if err != nil {
 			return nil, err
 		}
@@ -180,8 +202,8 @@ func collectGptImage2Cases(cases map[string]gptImage2Case, markdown string) {
 	}
 }
 
-func buildAwesomeGptImagePrompts() ([]model.Prompt, error) {
-	markdown, err := fetchText(awesomeGptImageRawBase, "README.md")
+func buildAwesomeGptImagePrompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
+	markdown, err := fetchText(budget, awesomeGptImageRawBase, "README.md")
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +227,8 @@ func buildAwesomeGptImagePrompts() ([]model.Prompt, error) {
 	return items, nil
 }
 
-func buildAwesomeGpt4oImagePrompts() ([]model.Prompt, error) {
-	markdown, err := fetchText(awesomeGpt4oImagePromptsBase, "README.zh-CN.md")
+func buildAwesomeGpt4oImagePrompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
+	markdown, err := fetchText(budget, awesomeGpt4oImagePromptsBase, "README.zh-CN.md")
 	if err != nil {
 		return nil, err
 	}
@@ -227,13 +249,13 @@ func buildAwesomeGpt4oImagePrompts() ([]model.Prompt, error) {
 	return items, nil
 }
 
-func buildXianyuAwesomeGptImage2Prompts() ([]model.Prompt, error) {
-	markdown, err := fetchText(xianyuAwesomeGptImage2RawBase, "README.md")
+func buildXianyuAwesomeGptImage2Prompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
+	markdown, err := fetchText(budget, xianyuAwesomeGptImage2RawBase, "README.md")
 	if err != nil {
 		return nil, err
 	}
 	items := parseXianyuPromptCollection(markdown)
-	latest, err := buildXianyuLatestXPrompts(len(items))
+	latest, err := buildXianyuLatestXPrompts(budget, len(items))
 	if err != nil {
 		return nil, err
 	}
@@ -375,8 +397,8 @@ func xianyuPromptTags(category string) []string {
 	return tags
 }
 
-func buildXianyuLatestXPrompts(offset int) ([]model.Prompt, error) {
-	raw, err := fetchText(xianyuAwesomeGptImage2RawBase, "data/latest-prompts.json")
+func buildXianyuLatestXPrompts(budget *upstreamReadBudget, offset int) ([]model.Prompt, error) {
+	raw, err := fetchText(budget, xianyuAwesomeGptImage2RawBase, "data/latest-prompts.json")
 	if err != nil {
 		return nil, err
 	}
@@ -461,16 +483,16 @@ func firstString(values []string) string {
 	return ""
 }
 
-func buildYouMindGptImage2Prompts() ([]model.Prompt, error) {
-	return buildYouMindPrompts(youMindGptImage2RawBase, "youmind-gpt-image-2", "gpt-image-2")
+func buildYouMindGptImage2Prompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
+	return buildYouMindPrompts(budget, youMindGptImage2RawBase, "youmind-gpt-image-2", "gpt-image-2")
 }
 
-func buildYouMindNanoBananaProPrompts() ([]model.Prompt, error) {
-	return buildYouMindPrompts(youMindNanoBananaProRawBase, "youmind-nano-banana-pro", "nano-banana-pro")
+func buildYouMindNanoBananaProPrompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
+	return buildYouMindPrompts(budget, youMindNanoBananaProRawBase, "youmind-nano-banana-pro", "nano-banana-pro")
 }
 
-func buildDavidWuGptImage2Prompts() ([]model.Prompt, error) {
-	raw, err := fetchText(davidWuGptImage2RawBase, "prompts.json")
+func buildDavidWuGptImage2Prompts(budget *upstreamReadBudget) ([]model.Prompt, error) {
+	raw, err := fetchText(budget, davidWuGptImage2RawBase, "prompts.json")
 	if err != nil {
 		return nil, err
 	}
@@ -494,8 +516,8 @@ func buildDavidWuGptImage2Prompts() ([]model.Prompt, error) {
 	return items, nil
 }
 
-func buildYouMindPrompts(baseURL, idPrefix, modelTag string) ([]model.Prompt, error) {
-	markdown, err := fetchText(baseURL, "README_zh.md")
+func buildYouMindPrompts(budget *upstreamReadBudget, baseURL, idPrefix, modelTag string) ([]model.Prompt, error) {
+	markdown, err := fetchText(budget, baseURL, "README_zh.md")
 	if err != nil {
 		return nil, err
 	}

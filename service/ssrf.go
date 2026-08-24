@@ -15,6 +15,15 @@ var safeProxyHTTPClient = newSafeProxyHTTPClient()
 func SafeProxyHTTPClient() *http.Client {
 	return safeProxyHTTPClient
 }
+
+func SafeProxyHTTPClientWithTimeout(timeout time.Duration) *http.Client {
+	client := *safeProxyHTTPClient
+	if timeout > 0 {
+		client.Timeout = timeout
+	}
+	return &client
+}
+
 func newSafeProxyHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil

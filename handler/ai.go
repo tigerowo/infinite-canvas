@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,11 @@ import (
 )
 
 const userModelChannelHeader = "X-User-Model-Channel-ID"
+
+const (
+	maxAIRequestBytes  = 128 * 1024 * 1024
+	maxAIResponseBytes = 512 * 1024 * 1024
+)
 
 func selectAIRequestChannel(user model.AuthUser, modelName string, channelID string, userChannelID string) (model.ModelChannel, string, error) {
 	userChannelID = strings.TrimSpace(userChannelID)
@@ -35,7 +41,7 @@ func selectAIRequestChannel(user model.AuthUser, modelName string, channelID str
 func failAIChannelSelect(w http.ResponseWriter, err error, fallback string) {
 	message := strings.TrimSpace(err.Error())
 	switch message {
-	case "当前账号未开放云端渠道", "请先登录", "缺少模型名称", "缺少模型渠道", "本地渠道不存在", "本地渠道配置不完整", "本地渠道不支持该模型", "指定模型渠道不可用":
+	case "当前账号未开放云端渠道", "请先登录", "缺少模型名称", "缺少模型渠道", "本地渠道不存在", "本地渠道配置不完整", "本地渠道不支持该模型", "指定模型渠道不可用", "指定渠道不可用", "渠道 API Key 未配置":
 		Fail(w, message)
 	default:
 		Fail(w, fallback)
@@ -267,6 +273,22 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 		Fail(w, readUpstreamAIErrorMessage(payload, response.StatusCode))
 		return
 	}
+	if unsafeAIResponseContentType(response.Header.Get("Content-Type")) {
+		if onFailure != nil {
+			onFailure()
+		}
+		saveAIProxyLog(logContext, response.StatusCode, "", "上游返回了不安全的内容类型")
+		Fail(w, "AI 接口返回了不安全的内容类型")
+		return
+	}
+	if response.ContentLength > maxAIResponseBytes {
+		if onFailure != nil {
+			onFailure()
+		}
+		saveAIProxyLog(logContext, response.StatusCode, "", "上游响应超过 512 MiB 限制")
+		Fail(w, "AI 接口响应过大")
+		return
+	}
 
 	if copyMiMoTTSResponse(w, response, logContext, onFailure) {
 		return
@@ -278,45 +300,75 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 		if copyAPIMartImageResponse(w, response, request, channel, logContext, onFailure) {
 			return
 		}
-		if copyAPIMartVideoResponse(w, response, request, channel, logContext) {
+		if copyAPIMartVideoResponse(w, response, request, channel, logContext, onFailure) {
 			return
 		}
 	}
 
 	for key, values := range response.Header {
-		if strings.EqualFold(key, "Content-Length") {
+		if strings.EqualFold(key, "Content-Length") || strings.EqualFold(key, "Set-Cookie") || strings.EqualFold(key, "Location") {
 			continue
 		}
 		for _, value := range values {
 			w.Header().Add(key, value)
 		}
 	}
+	if strings.TrimSpace(w.Header().Get("Content-Type")) == "" {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(response.StatusCode)
-	responseBody := copyAIResponseBody(w, response.Body)
+	responseBody, exceeded := copyAIResponseBody(w, response.Body)
+	if exceeded {
+		saveAIProxyLog(logContext, response.StatusCode, responseBody, "上游响应超过 512 MiB 限制")
+		return
+	}
 	saveAIProxyLog(logContext, response.StatusCode, responseBody, "")
 }
 
-func copyAIResponseBody(w http.ResponseWriter, body io.Reader) string {
+func copyAIResponseBody(w http.ResponseWriter, body io.Reader) (string, bool) {
 	flusher, canFlush := w.(http.Flusher)
 	buffer := make([]byte, 32*1024)
 	var logBuffer strings.Builder
+	var total int64
 	for {
-		n, err := body.Read(buffer)
+		remaining := int64(maxAIResponseBytes) - total
+		readBuffer := buffer
+		if remaining < int64(len(buffer)) {
+			readBuffer = buffer[:remaining+1]
+		}
+		n, err := body.Read(readBuffer)
 		if n > 0 {
-			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
-				return logBuffer.String()
+			writeBytes := n
+			exceeded := int64(n) > remaining
+			if exceeded {
+				writeBytes = int(remaining)
 			}
-			if logBuffer.Len() < 64*1024 {
-				_, _ = logBuffer.Write(buffer[:min(n, 64*1024-logBuffer.Len())])
+			if writeBytes > 0 {
+				if _, writeErr := w.Write(buffer[:writeBytes]); writeErr != nil {
+					return logBuffer.String(), false
+				}
+				total += int64(writeBytes)
 			}
-			if canFlush {
+			if logBuffer.Len() < 64*1024 && writeBytes > 0 {
+				_, _ = logBuffer.Write(buffer[:min(writeBytes, 64*1024-logBuffer.Len())])
+			}
+			if canFlush && writeBytes > 0 {
 				flusher.Flush()
+			}
+			if exceeded {
+				return logBuffer.String(), true
 			}
 		}
 		if err != nil {
-			return logBuffer.String()
+			return logBuffer.String(), false
 		}
 	}
+}
+
+func unsafeAIResponseContentType(contentType string) bool {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return contentType == "text/html" || contentType == "application/xhtml+xml" || contentType == "image/svg+xml" || contentType == "text/xml" || contentType == "application/xml"
 }
 
 func saveAIProxyLog(context aiLogContext, status int, responseBody string, errorMessage string) {
@@ -455,9 +507,12 @@ func looksLikeBase64(value string) bool {
 
 func readAIRequest(r *http.Request) ([]byte, string, string, error) {
 	contentType := r.Header.Get("Content-Type")
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxAIRequestBytes+1))
 	if err != nil {
 		return nil, "", "", err
+	}
+	if len(body) > maxAIRequestBytes {
+		return nil, "", "", errors.New("AI 请求超过 128 MiB 限制")
 	}
 	modelName := ""
 	if strings.HasPrefix(contentType, "multipart/form-data") {

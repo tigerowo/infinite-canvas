@@ -116,25 +116,15 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
         if (aspectRatio === null) return "自由比例";
         if (image && Math.abs(aspectRatio - image.width / image.height) < 0.01) return "原始比例";
         if (Math.abs(aspectRatio - 1) < 0.01) return "1:1 比例";
-        if (Math.abs(aspectRatio - 4/3) < 0.01) return "4:3 比例";
-        if (Math.abs(aspectRatio - 16/9) < 0.01) return "16:9 比例";
-        if (Math.abs(aspectRatio - 3/4) < 0.01) return "3:4 比例";
-        if (Math.abs(aspectRatio - 9/16) < 0.01) return "9:16 比例";
+        if (Math.abs(aspectRatio - 4 / 3) < 0.01) return "4:3 比例";
+        if (Math.abs(aspectRatio - 16 / 9) < 0.01) return "16:9 比例";
+        if (Math.abs(aspectRatio - 3 / 4) < 0.01) return "3:4 比例";
+        if (Math.abs(aspectRatio - 9 / 16) < 0.01) return "9:16 比例";
         return "比例锁定";
     };
 
     return (
-        <Modal 
-            title="裁剪图片" 
-            open={open && Boolean(dataUrl)} 
-            onCancel={loading ? undefined : onClose} 
-            footer={null} 
-            width={780} 
-            centered 
-            destroyOnHidden
-            closable={!loading}
-            mask={{ closable: !loading }}
-        >
+        <Modal title="裁剪图片" open={open && Boolean(dataUrl)} onCancel={loading ? undefined : onClose} footer={null} width={780} centered destroyOnHidden closable={!loading} mask={{ closable: !loading }}>
             <div className="space-y-4">
                 <div className="flex justify-center">
                     <div ref={boxRef} className="relative inline-block max-w-full overflow-hidden rounded-lg bg-black select-none">
@@ -170,7 +160,9 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
                 </div>
 
                 <div className="flex items-center justify-end gap-2">
-                    <Button disabled={loading} onClick={() => setCrop(defaultCrop)}>重置</Button>
+                    <Button disabled={loading} onClick={() => setCrop(defaultCrop)}>
+                        重置
+                    </Button>
                     <Button disabled={loading} icon={<X className="size-4" />} onClick={onClose}>
                         取消
                     </Button>
@@ -199,7 +191,7 @@ function moveCrop(crop: CanvasImageCropRect, dx: number, dy: number): CanvasImag
 }
 
 function resizeCrop(crop: CanvasImageCropRect, dx: number, dy: number, handle: ResizeHandle, aspectRatio: number | null, box: DOMRect): CanvasImageCropRect {
-    let next = { ...crop };
+    const next = { ...crop };
     if (handle.includes("e")) next.width = crop.width + dx;
     if (handle.includes("s")) next.height = crop.height + dy;
     if (handle.includes("w")) {
@@ -230,7 +222,7 @@ function resizeCrop(crop: CanvasImageCropRect, dx: number, dy: number, handle: R
     next.height = clamp(next.height, minSize, 1);
 
     if (aspectRatio !== null) {
-        if (Math.abs(next.width * box.width / (next.height * box.height) - aspectRatio) > 0.01) {
+        if (Math.abs((next.width * box.width) / (next.height * box.height) - aspectRatio) > 0.01) {
             next.height = (next.width * box.width) / (aspectRatio * box.height);
         }
     }

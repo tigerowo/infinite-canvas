@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"mime/multipart"
@@ -49,7 +48,10 @@ func mergeKIEFormFiles(payload map[string]any, files map[string][]*multipart.Fil
 }
 
 func uploadKIEReferenceFile(channel model.ModelChannel, header *multipart.FileHeader) (string, error) {
-	data, contentType := readKIEFormFileBytes(header)
+	data, contentType, err := readKIEFormFileBytes(header)
+	if err != nil {
+		return "", err
+	}
 	if len(data) == 0 || strings.TrimSpace(channel.APIKey) == "" {
 		return "", errors.New("KIE file upload failed: empty file or missing API key")
 	}
@@ -94,7 +96,10 @@ func uploadKIEReferenceFile(channel model.ModelChannel, header *multipart.FileHe
 	}
 	defer response.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 512*1024))
+	body, readErr := readLimitedUpstreamResponse(response.Body, "KIE 文件上传", pollResponseLimit)
+	if readErr != nil {
+		return "", fmt.Errorf("KIE file upload failed: %w", readErr)
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		log.Printf("KIE file upload error: filename=%s status=%d body=%s", header.Filename, response.StatusCode, strings.TrimSpace(string(body)))
 		return "", fmt.Errorf("KIE file upload failed: %s", readUpstreamAIErrorMessage(body, response.StatusCode))
@@ -159,16 +164,19 @@ func escapeKIEFormFilename(filename string) string {
 	return strings.ReplaceAll(filename, `"`, `\"`)
 }
 
-func readKIEFormFileBytes(header *multipart.FileHeader) ([]byte, string) {
+func readKIEFormFileBytes(header *multipart.FileHeader) ([]byte, string, error) {
 	file, err := header.Open()
 	if err != nil {
-		return nil, ""
+		return nil, "", err
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(io.LimitReader(file, 32<<20))
-	if err != nil || len(data) == 0 {
-		return nil, ""
+	data, err := readLimitedRequestBody(file, "KIE 参考文件", adapterReferenceMaxBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) == 0 {
+		return nil, "", errors.New("KIE file upload failed: empty file")
 	}
 
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
@@ -182,7 +190,7 @@ func readKIEFormFileBytes(header *multipart.FileHeader) ([]byte, string) {
 		contentType = "image/png"
 	}
 
-	return data, contentType
+	return data, contentType, nil
 }
 
 func detectKIEReferenceContentType(filename string) string {
@@ -1045,17 +1053,22 @@ func copyKIECreateImageResponse(w http.ResponseWriter, request *http.Request, pa
 }
 
 func pollKIEImageTask(request *http.Request, channel model.ModelChannel, taskID string) ([]string, string, string) {
+	budget := newUpstreamResponseBudget(request.Context(), "KIE 图片任务轮询", pollRequestLimit, pollResponseTotalLimit, pollDeadline)
+	defer budget.Close()
 	pollURL := service.BuildModelChannelURL(channel, "/jobs/recordInfo?taskId="+url.QueryEscape(taskID))
 	for attempt := 0; attempt < 300; attempt++ {
 		if attempt > 0 {
 			select {
-			case <-request.Context().Done():
-				return nil, request.Context().Err().Error(), ""
+			case <-budget.Context().Done():
+				return nil, "KIE 图片任务轮询超过总体 deadline", ""
 			case <-time.After(2 * time.Second):
 			}
 		}
+		if err := budget.NextRequest(); err != nil {
+			return nil, err.Error(), ""
+		}
 
-		pollRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, pollURL, nil)
+		pollRequest, err := http.NewRequestWithContext(budget.Context(), http.MethodGet, pollURL, nil)
 		if err != nil {
 			return nil, err.Error(), ""
 		}
@@ -1065,8 +1078,11 @@ func pollKIEImageTask(request *http.Request, channel model.ModelChannel, taskID 
 		if err != nil {
 			return nil, err.Error(), ""
 		}
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512*1024))
+		body, readErr := budget.ReadAll(response.Body, pollResponseLimit)
 		_ = response.Body.Close()
+		if readErr != nil {
+			return nil, readErr.Error(), ""
+		}
 		if response.StatusCode >= http.StatusBadRequest {
 			return nil, readUpstreamAIErrorMessage(body, response.StatusCode), string(body)
 		}

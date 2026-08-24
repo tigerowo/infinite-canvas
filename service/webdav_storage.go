@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"path"
 	"strings"
@@ -11,6 +13,12 @@ import (
 	"github.com/studio-b12/gowebdav"
 	"github.com/tigerowo/infinite-canvas/model"
 )
+
+var storageMeasureReadLimits = upstreamReadLimits{
+	MaxRequests: 256,
+	MaxBytes:    64 * 1024 * 1024,
+	Deadline:    2 * time.Minute,
+}
 
 func newWebDAVClient(provider model.StorageProvider) (*gowebdav.Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(provider.Endpoint))
@@ -108,39 +116,65 @@ func deleteWebDAVObject(provider model.StorageProvider, objectKey string) error 
 	return nil
 }
 
-func measureWebDAVProvider(provider model.StorageProvider) (int64, error) {
+func measureWebDAVProvider(ctx context.Context, provider model.StorageProvider) (int64, error) {
+	budget := newUpstreamReadBudget(ctx, "WebDAV 容量统计", storageMeasureReadLimits)
+	defer budget.Close()
 	client, err := newWebDAVClient(provider)
 	if err != nil {
 		return 0, err
 	}
+	client.SetTransport(budget.Transport(SafeProxyHTTPClient().Transport))
 	root, err := cleanStoragePath(provider.PathPrefix)
 	if err != nil {
 		return 0, err
 	}
-	bytes, err := measureWebDAVDirectory(client, root)
+	bytes, err := measureWebDAVDirectory(budget, client, root)
 	if gowebdav.IsErrNotFound(err) {
 		return 0, nil
 	}
-	return bytes, err
+	return bytes, normalizeUpstreamBudgetError(err)
 }
 
-func measureWebDAVDirectory(client *gowebdav.Client, directory string) (int64, error) {
-	items, err := client.ReadDir(directory)
-	if err != nil {
-		return 0, err
-	}
+func measureWebDAVDirectory(budget *upstreamReadBudget, client *gowebdav.Client, root string) (int64, error) {
+	pending := []string{root}
+	seen := map[string]bool{root: true}
 	var total int64
-	for _, item := range items {
-		child := path.Join(directory, item.Name())
-		if item.IsDir() {
-			bytes, err := measureWebDAVDirectory(client, child)
-			if err != nil {
-				return 0, err
-			}
-			total += bytes
-			continue
+	for len(pending) > 0 {
+		if err := budget.Check(); err != nil {
+			return 0, err
 		}
-		total += item.Size()
+		directory := pending[0]
+		pending = pending[1:]
+		items, err := client.ReadDir(directory)
+		if err != nil {
+			return 0, err
+		}
+		if err := budget.Check(); err != nil {
+			return 0, err
+		}
+		for _, item := range items {
+			name := strings.TrimSpace(item.Name())
+			if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
+				return 0, errors.New("WebDAV 返回了无效对象路径")
+			}
+			child := path.Join(directory, name)
+			if item.IsDir() {
+				if !seen[child] {
+					seen[child] = true
+					pending = append(pending, child)
+				}
+				continue
+			}
+			if item.Size() < 0 || total > math.MaxInt64-item.Size() {
+				return 0, errors.New("WebDAV 返回了无效容量")
+			}
+			if item.Size() > 0 {
+				total += item.Size()
+			}
+		}
+	}
+	if err := budget.Check(); err != nil {
+		return 0, err
 	}
 	return total, nil
 }

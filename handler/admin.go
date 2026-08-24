@@ -22,7 +22,10 @@ func AdminPromptCategories(w http.ResponseWriter, r *http.Request) {
 }
 
 func AdminSyncAllPromptCategories(w http.ResponseWriter, r *http.Request) {
-	service.SyncRemotePromptCategories()
+	if err := service.SyncRemotePromptCategories(r.Context()); err != nil {
+		FailError(w, err)
+		return
+	}
 	OK(w, service.ListPromptCategories())
 }
 
@@ -68,7 +71,7 @@ func AdminSyncPromptCategories(w http.ResponseWriter, r *http.Request) {
 	var request adminSyncRequest
 	_ = json.NewDecoder(r.Body).Decode(&request)
 	log.Printf("sync prompt category start category=%s", request.Category)
-	categories, err := service.SyncPromptCategory(request.Category)
+	categories, err := service.SyncPromptCategory(r.Context(), request.Category)
 	if err != nil {
 		log.Printf("sync prompt category failed category=%s err=%v", request.Category, err)
 		FailError(w, err)

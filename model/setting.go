@@ -24,6 +24,9 @@ type ModelChannel struct {
 	Timeout  int      `json:"timeout"`
 	Enabled  bool     `json:"enabled"`
 	Remark   string   `json:"remark"`
+	// Restricted 表示 Base URL 来自普通用户输入，出站请求必须使用 SSRF 安全客户端。
+	Restricted bool              `json:"-" gorm:"-"`
+	Headers    map[string]string `json:"-" gorm:"-"`
 }
 
 // ModelCost 模型算力点配置。

@@ -34,6 +34,9 @@ func BuildGeminiChannelURL(channel model.ModelChannel, path string) string {
 }
 
 func SetModelChannelAuthHeader(request *http.Request, channel model.ModelChannel) {
+	for name, value := range channel.Headers {
+		request.Header.Set(name, value)
+	}
 	if IsGeminiChannel(channel) {
 		request.Header.Set("x-goog-api-key", channel.APIKey)
 		return

@@ -17,6 +17,12 @@
 - [本地开发](backend/local-development.md)
 - [接口响应约定](backend/api-response.md)
 - [系统配置数据结构](backend/system-settings.md)
+- [连接中心](backend/provider-center.md)
+- [连接中心第二阶段验收](provider-phase2-report.md)
+- [连接中心设计状态](design/provider-center-design-status.md)
+- [上游读取预算](backend/upstream-read-budgets.md)
+- [入站请求读取预算](backend/inbound-request-budgets.md)
+- [请求速率与并发预算](backend/request-rate-budgets.md)
 - [后端数据库说明](backend/backend-database.md)
 - [画布数据结构](backend/canvas-data-structure.md)
 

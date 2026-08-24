@@ -33,6 +33,10 @@ export async function register(payload: AuthPayload) {
     return apiPost<AuthSession>("/api/auth/register", payload);
 }
 
+export async function exchangeLoginCode(code: string) {
+    return apiPost<AuthSession>("/api/auth/exchange", { code });
+}
+
 export async function fetchCurrentUser(token?: string) {
     return apiGet<AuthUser>("/api/auth/me", undefined, token);
 }

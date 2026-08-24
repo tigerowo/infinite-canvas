@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,12 @@ import (
 )
 
 var adminModelHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+var modelDiscoveryReadLimits = upstreamReadLimits{
+	MaxRequests: 32,
+	MaxBytes:    32 * 1024 * 1024,
+	Deadline:    time.Minute,
+}
 
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
@@ -317,6 +324,9 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 	if timeout <= 0 {
 		timeout = 600
 	}
+	if channel.Restricted {
+		return SafeProxyHTTPClientWithTimeout(time.Duration(timeout) * time.Second)
+	}
 	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
 }
 
@@ -491,9 +501,19 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 	return resolved, nil
 }
 
+func FetchModelChannelModels(channel model.ModelChannel) ([]string, error) {
+	return fetchAdminChannelModels(channel)
+}
+
 func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+	budget := newUpstreamReadBudget(context.Background(), "模型列表读取", modelDiscoveryReadLimits)
+	defer budget.Close()
+	return fetchAdminChannelModelsWithBudget(channel, budget)
+}
+
+func fetchAdminChannelModelsWithBudget(channel model.ModelChannel, budget *upstreamReadBudget) ([]string, error) {
 	if IsGeminiChannel(channel) {
-		return fetchGeminiAdminChannelModels(channel)
+		return fetchGeminiAdminChannelModels(channel, budget)
 	}
 	if IsMiniMaxChannel(channel) {
 		return MiniMaxModels(), nil
@@ -512,13 +532,26 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	request = request.WithContext(budget.Context())
 	SetModelChannelAuthHeader(request, channel)
-	response, err := adminModelHTTPClient.Do(request)
+	client := adminModelHTTPClient
+	if channel.Restricted {
+		client = HTTPClientForChannel(channel)
+	}
+	client = budget.HTTPClient(client)
+	response, err := client.Do(request)
 	if err != nil {
+		err = normalizeUpstreamBudgetError(err)
+		if isUpstreamBudgetError(err) {
+			return nil, err
+		}
 		return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
+	body, err := readLimitedProviderResponse(response.Body)
+	if err != nil {
+		return nil, normalizeUpstreamBudgetError(err)
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		if response.StatusCode == http.StatusNotFound && isArkAgentPlanChannel(channel) {
 			return nil, safeMessageError{message: "火山方舟 Agent Plan 未提供 OpenAI /models 模型列表接口，请手动填写模型名称，例如 doubao-seedance-2.0。"}
@@ -700,7 +733,10 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -718,10 +754,14 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	return "ok", nil
 }
 
-func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+func fetchGeminiAdminChannelModels(channel model.ModelChannel, budget *upstreamReadBudget) ([]string, error) {
 	result := []string{}
 	pageToken := ""
+	seenPageTokens := map[string]bool{}
 	for {
+		if err := budget.Check(); err != nil {
+			return nil, err
+		}
 		path := "/v1beta/models"
 		if pageToken != "" {
 			path += "?pageToken=" + url.QueryEscape(pageToken)
@@ -730,13 +770,26 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		if err != nil {
 			return nil, err
 		}
+		request = request.WithContext(budget.Context())
 		SetModelChannelAuthHeader(request, channel)
-		response, err := adminModelHTTPClient.Do(request)
+		client := adminModelHTTPClient
+		if channel.Restricted {
+			client = HTTPClientForChannel(channel)
+		}
+		client = budget.HTTPClient(client)
+		response, err := client.Do(request)
 		if err != nil {
+			err = normalizeUpstreamBudgetError(err)
+			if isUpstreamBudgetError(err) {
+				return nil, err
+			}
 			return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
 		}
-		body, _ := io.ReadAll(response.Body)
+		body, readErr := readLimitedProviderResponse(response.Body)
 		response.Body.Close()
+		if readErr != nil {
+			return nil, normalizeUpstreamBudgetError(readErr)
+		}
 		if response.StatusCode >= http.StatusBadRequest {
 			return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
 		}
@@ -761,6 +814,10 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		if pageToken == "" {
 			break
 		}
+		if seenPageTokens[pageToken] {
+			return nil, safeMessageError{message: "读取模型失败：上游分页标记重复"}
+		}
+		seenPageTokens[pageToken] = true
 	}
 	seen := map[string]bool{}
 	unique := result[:0]
@@ -776,6 +833,30 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		return nil, safeMessageError{message: "Gemini 模型列表为空"}
 	}
 	return result, nil
+}
+
+func readLimitedProviderResponse(reader io.Reader) ([]byte, error) {
+	const limit = 8 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > limit {
+		return nil, safeMessageError{message: "读取模型失败：上游响应超过 8 MiB 限制"}
+	}
+	return body, nil
+}
+
+func readLimitedModelTestResponse(reader io.Reader) ([]byte, error) {
+	const limit = 16 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > limit {
+		return nil, safeMessageError{message: "测试失败：上游响应超过 16 MiB 限制"}
+	}
+	return body, nil
 }
 
 func testGeminiChannelModel(channel model.ModelChannel, modelName string) (string, error) {
@@ -796,7 +877,10 @@ func testGeminiChannelModel(channel model.ModelChannel, modelName string) (strin
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -825,7 +909,10 @@ func testGLMTTSChannelModel(channel model.ModelChannel, modelName string) (strin
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -858,7 +945,10 @@ func testMiMoTTSChannelModel(channel model.ModelChannel, modelName string) (stri
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}

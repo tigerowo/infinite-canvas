@@ -13,6 +13,12 @@ import (
 	"github.com/tigerowo/infinite-canvas/repository"
 )
 
+var workflowAgentReadLimits = upstreamReadLimits{
+	MaxRequests: 1,
+	MaxBytes:    8 * 1024 * 1024,
+	Deadline:    2 * time.Minute,
+}
+
 func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftRequest) (WorkflowAgentDraftResponse, error) {
 	startedAt := time.Now()
 	user, ok := UserFromContext(ctx)
@@ -66,7 +72,10 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 		requestLogBody = "[redacted Gemini workflow request]"
 	}
 
-	httpRequest, err := http.NewRequest(
+	budget := newUpstreamReadBudget(ctx, "工作流 Agent", workflowAgentReadLimits)
+	defer budget.Close()
+	httpRequest, err := http.NewRequestWithContext(
+		budget.Context(),
 		http.MethodPost,
 		BuildModelChannelURL(channel, upstreamPath),
 		bytes.NewReader(body),
@@ -78,9 +87,10 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	SetModelChannelAuthHeader(httpRequest, channel)
 	httpRequest.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: time.Duration(maxInt(channel.Timeout, 600)) * time.Second}
+	client := budget.HTTPClient(HTTPClientForChannel(channel))
 	response, err := client.Do(httpRequest)
 	if err != nil {
+		err = normalizeUpstreamBudgetError(err)
 		refundCredits()
 		SaveAICallLog(AICallLogInput{
 			UserID:          user.ID,
@@ -100,7 +110,19 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	}
 	defer response.Body.Close()
 
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := io.ReadAll(response.Body)
+	if readErr != nil {
+		readErr = normalizeUpstreamBudgetError(readErr)
+		refundCredits()
+		SaveAICallLog(AICallLogInput{
+			UserID: user.ID, UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
+			Endpoint: "/workflows/agent-draft", Method: http.MethodPost, Model: modelName,
+			ChannelID: channel.ID, ChannelName: channel.Name, Status: response.StatusCode,
+			DurationMs: time.Since(startedAt).Milliseconds(), Credits: credits,
+			RequestBody: requestLogBody, Error: readErr.Error(),
+		})
+		return WorkflowAgentDraftResponse{}, readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		refundCredits()
 		SaveAICallLog(AICallLogInput{
@@ -332,12 +354,3 @@ func readChannelError(body string, fallback string) safeMessageError {
 	}
 	return safeMessageError{message: fallback}
 }
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-

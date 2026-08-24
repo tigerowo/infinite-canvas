@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"path"
@@ -348,7 +349,7 @@ func DeleteDirectStorageObjectRecord(ctx context.Context, id string) error {
 // MeasureUserStorageProvider 统计用户存储提供商的已用容量。
 func MeasureUserStorageProvider(ctx context.Context, providerInput StorageObjectProviderInput) (StorageCapacityResult, error) {
 	provider := normalizeUserStorageProvider(providerInput, ctx)
-	bytes, err := measureStorageProvider(provider)
+	bytes, err := measureStorageProvider(ctx, provider)
 	if err != nil {
 		return StorageCapacityResult{}, err
 	}
@@ -357,7 +358,7 @@ func MeasureUserStorageProvider(ctx context.Context, providerInput StorageObject
 }
 
 // MeasureAdminStorageProvider 管理员统计存储容量。
-func MeasureAdminStorageProvider(index int, providerInput *model.StorageProvider) (StorageCapacityResult, error) {
+func MeasureAdminStorageProvider(ctx context.Context, index int, providerInput *model.StorageProvider) (StorageCapacityResult, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return StorageCapacityResult{}, err
@@ -379,7 +380,7 @@ func MeasureAdminStorageProvider(index int, providerInput *model.StorageProvider
 			provider.Password = providerInput.Password
 		}
 	}
-	bytes, err := measureStorageProvider(provider)
+	bytes, err := measureStorageProvider(ctx, provider)
 	if err != nil {
 		return StorageCapacityResult{}, err
 	}
@@ -416,7 +417,7 @@ func MeasureAllEnabledStorageProviders() {
 		if !provider.Enabled {
 			continue
 		}
-		bytes, err := measureStorageProvider(provider)
+		bytes, err := measureStorageProvider(context.Background(), provider)
 		if err != nil {
 			log.Printf("storage capacity measure failed provider=%s err=%v", provider.Name, err)
 			continue
@@ -639,12 +640,12 @@ func deleteStorageObjectData(provider model.StorageProvider, objectKey string) e
 	}
 }
 
-func measureStorageProvider(provider model.StorageProvider) (int64, error) {
+func measureStorageProvider(ctx context.Context, provider model.StorageProvider) (int64, error) {
 	switch provider.Type {
 	case model.StorageProviderTypeS3:
-		return measureS3Provider(provider)
+		return measureS3Provider(ctx, provider)
 	case model.StorageProviderTypeWebDAV:
-		return measureWebDAVProvider(provider)
+		return measureWebDAVProvider(ctx, provider)
 	default:
 		return 0, errors.New("存储类型不支持")
 	}
@@ -708,13 +709,20 @@ func deleteS3Object(provider model.StorageProvider, objectKey string) error {
 }
 
 // measureS3Provider 统计 S3 存储桶的总容量。
-func measureS3Provider(provider model.StorageProvider) (int64, error) {
+func measureS3Provider(ctx context.Context, provider model.StorageProvider) (int64, error) {
 	if provider.Endpoint == "" || provider.Bucket == "" || provider.AccessKeyID == "" || provider.SecretAccessKey == "" {
 		return 0, errors.New("对象存储配置不完整")
 	}
+	budget := newUpstreamReadBudget(ctx, "S3 容量统计", storageMeasureReadLimits)
+	defer budget.Close()
+	client := budget.HTTPClient(SafeProxyHTTPClient())
 	var total int64
 	var token string
+	seenTokens := map[string]bool{}
 	for {
+		if err := budget.Check(); err != nil {
+			return 0, err
+		}
 		query := url.Values{}
 		query.Set("list-type", "2")
 		if token != "" {
@@ -724,29 +732,42 @@ func measureS3Provider(provider model.StorageProvider) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		response, err := SafeProxyHTTPClient().Do(request)
+		request = request.WithContext(budget.Context())
+		response, err := client.Do(request)
 		if err != nil {
-			return 0, err
-		}
-		body, readErr := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
-		_ = response.Body.Close()
-		if readErr != nil {
-			return 0, readErr
+			return 0, normalizeUpstreamBudgetError(err)
 		}
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+			_ = response.Body.Close()
 			return 0, fmt.Errorf("对象存储容量统计失败: %s %s", response.Status, string(body))
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		if readErr != nil {
+			return 0, normalizeUpstreamBudgetError(readErr)
 		}
 		var result listBucketResult
 		if err := xml.Unmarshal(body, &result); err != nil {
 			return 0, err
 		}
+		if err := budget.Check(); err != nil {
+			return 0, err
+		}
 		for _, item := range result.Contents {
+			if item.Size < 0 || total > math.MaxInt64-item.Size {
+				return 0, errors.New("对象存储返回了无效容量")
+			}
 			total += item.Size
 		}
 		if !result.IsTruncated || strings.TrimSpace(result.NextContinuationToken) == "" {
 			return total, nil
 		}
-		token = result.NextContinuationToken
+		token = strings.TrimSpace(result.NextContinuationToken)
+		if seenTokens[token] {
+			return 0, errors.New("对象存储分页标记重复")
+		}
+		seenTokens[token] = true
 	}
 }
 

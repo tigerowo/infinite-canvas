@@ -6,9 +6,11 @@ import { usePathname } from "next/navigation";
 import { App } from "antd";
 
 import { fetchUserConfig } from "@/services/api/user-config";
+import { managedProviderProtocols } from "@/lib/provider";
 import { defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider } from "@/services/image-storage";
 import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { useProviderStore } from "@/stores/use-provider-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -41,14 +43,36 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!token || !user?.id) return;
-        void fetchUserConfig(token)
-            .then((payload) => {
+        void Promise.all([fetchUserConfig(token), useProviderStore.getState().load(token).catch(() => [])])
+            .then(([payload, providers]) => {
                 const syncS3 = payload.modelConfig?.syncStorageConfig === true;
                 const syncWebDAV = payload.modelConfig?.syncWebDAVStorageConfig === true;
                 if (payload.modelConfig) {
                     Object.entries(payload.modelConfig)
                         .forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
                 }
+                const currentChannels = payload.modelConfig?.localChannels || useConfigStore.getState().config.localChannels;
+                const managedChannels = providers
+                    .filter((provider) => provider.kind === "api" && managedProviderProtocols.has(provider.protocol))
+                    .map((provider) => ({
+                        id: provider.id,
+                        protocol: provider.protocol as "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine",
+                        name: provider.name,
+                        baseUrl: provider.baseUrl,
+                        apiKey: "",
+                        models: provider.models,
+                        managed: true,
+                        hasApiKey: provider.hasApiKey,
+                    }));
+                if (managedChannels.length) {
+                    const managedIDs = new Set(managedChannels.map((channel) => channel.id));
+                    updateConfig("localChannels", [...currentChannels.filter((channel) => !managedIDs.has(channel.id)), ...managedChannels]);
+                }
+                const preferredProvider = providers.find((provider) => provider.kind === "api" && provider.enabled && provider.isDefault && managedProviderProtocols.has(provider.protocol));
+                if (preferredProvider?.capabilities.includes("image")) updateConfig("imageChannelId", preferredProvider.id);
+                if (preferredProvider?.capabilities.includes("video")) updateConfig("videoChannelId", preferredProvider.id);
+                if (preferredProvider?.capabilities.includes("text")) updateConfig("textChannelId", preferredProvider.id);
+                if (preferredProvider?.capabilities.includes("audio")) updateConfig("audioChannelId", preferredProvider.id);
                 updateConfig("syncStorageConfig", syncS3);
                 updateConfig("syncWebDAVStorageConfig", syncWebDAV);
                 if (syncS3 && payload.storageProvider?.s3) {

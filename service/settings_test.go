@@ -1,11 +1,15 @@
 package service
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
@@ -50,6 +54,49 @@ func TestFetchAdminChannelModelsReportsArkPlanModelsUnsupported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Agent Plan 未提供 OpenAI /models") {
 		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestFetchGeminiAdminChannelModelsStopsAtTotalRequestBudget(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"models":[{"name":"models/gemini-%d","supportedGenerationMethods":["generateContent"]}],"nextPageToken":"page-%d"}`, call, call)
+	}))
+	defer server.Close()
+
+	budget := newUpstreamReadBudget(context.Background(), "模型列表读取", upstreamReadLimits{MaxRequests: 2, MaxBytes: 4096, Deadline: time.Second})
+	defer budget.Close()
+	_, err := fetchAdminChannelModelsWithBudget(model.ModelChannel{
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+		Protocol: ModelChannelProtocolGemini,
+	}, budget)
+	if !isUpstreamBudgetError(err) || !strings.Contains(err.Error(), "总请求数") {
+		t.Fatalf("error = %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("calls = %d, want 2", calls.Load())
+	}
+}
+
+func TestFetchGeminiAdminChannelModelsRejectsRepeatedPageToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-test","supportedGenerationMethods":["generateContent"]}],"nextPageToken":"same-page"}`))
+	}))
+	defer server.Close()
+
+	budget := newUpstreamReadBudget(context.Background(), "模型列表读取", upstreamReadLimits{MaxRequests: 3, MaxBytes: 4096, Deadline: time.Second})
+	defer budget.Close()
+	_, err := fetchAdminChannelModelsWithBudget(model.ModelChannel{
+		BaseURL:  server.URL,
+		APIKey:   "test-key",
+		Protocol: ModelChannelProtocolGemini,
+	}, budget)
+	if err == nil || !strings.Contains(err.Error(), "分页标记重复") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

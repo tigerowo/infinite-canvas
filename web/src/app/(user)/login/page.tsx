@@ -3,9 +3,10 @@
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { App, Button, Form, Input, Segmented, Space } from "antd";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 
-import { fetchCurrentUser } from "@/services/api/auth";
+import { exchangeLoginCode } from "@/services/api/auth";
+import { safeInternalRedirect } from "@/lib/auth-redirect";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -14,16 +15,6 @@ type LoginFormValues = {
     password: string;
     confirmPassword?: string;
 };
-
-// 仅放行站内相对路径，拦截开放重定向。浏览器会忽略 URL 中的 Tab/换行/回车，并把
-// //host 或 /\host 解析为协议相对的跨站地址，因此先剥离控制字符，再拒绝 // 与 /\ 前缀。
-function safeRedirect(value: string | null): string {
-    const cleaned = (value ?? "").replace(/[\t\n\r]/g, "");
-    if (!cleaned.startsWith("/") || cleaned.startsWith("//") || cleaned.startsWith("/\\")) {
-        return "/";
-    }
-    return cleaned;
-}
 
 export default function LoginPage() {
     return (
@@ -44,19 +35,23 @@ function LoginContent() {
     const linuxDoEnabled = useConfigStore((state) => state.publicSettings?.auth?.linuxDo?.enabled === true);
     const allowRegister = useConfigStore((state) => state.publicSettings?.auth?.allowRegister !== false);
     const [mode, setMode] = useState<"login" | "register">("login");
-    const redirect = safeRedirect(searchParams.get("redirect"));
+    const handledExchangeCode = useRef("");
+    const redirect = safeInternalRedirect(searchParams.get("redirect"));
 
     useEffect(() => {
-        const token = searchParams.get("token");
+        const code = searchParams.get("code");
         const error = searchParams.get("error");
         if (error) message.error(error);
-        if (!token) return;
-        void fetchCurrentUser(token).then((user) => {
-            setSession(token, user);
-            message.success("登录成功");
-            router.replace(redirect);
-            router.refresh();
-        });
+        if (!code || handledExchangeCode.current === code) return;
+        handledExchangeCode.current = code;
+        void exchangeLoginCode(code)
+            .then((session) => {
+                setSession(session.token, session.user);
+                message.success("登录成功");
+                router.replace(redirect);
+                router.refresh();
+            })
+            .catch((exchangeError) => message.error(exchangeError instanceof Error ? exchangeError.message : "登录失败"));
     }, [message, redirect, router, searchParams, setSession]);
 
     useEffect(() => {
@@ -74,11 +69,10 @@ function LoginContent() {
                 return;
             }
             const action = mode === "register" ? register : login;
-            const user = await action({ username: values.username, password: values.password });
+            await action({ username: values.username, password: values.password });
             message.success(mode === "register" ? "注册成功" : "登录成功");
             router.replace(redirect);
             router.refresh();
-            if (user.role !== "admin") router.replace("/");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "登录失败");
         }
@@ -106,7 +100,14 @@ function LoginContent() {
                             block
                             value={mode}
                             onChange={(value) => setMode(value as "login" | "register")}
-                            options={allowRegister ? [{ label: "登录", value: "login" }, { label: "注册", value: "register" }] : [{ label: "登录", value: "login" }]}
+                            options={
+                                allowRegister
+                                    ? [
+                                          { label: "登录", value: "login" },
+                                          { label: "注册", value: "register" },
+                                      ]
+                                    : [{ label: "登录", value: "login" }]
+                            }
                         />
                     </Form.Item>
                     <Form.Item name="username" label={<span className="font-medium text-stone-800 dark:text-stone-200">用户名</span>} rules={[{ required: true, message: "请输入用户名" }]}>

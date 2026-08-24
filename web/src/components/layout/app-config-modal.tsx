@@ -120,7 +120,7 @@ export function AppConfigModal() {
     }, [isConfigOpen]);
 
     const finishConfig = async () => {
-        const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim());
+        const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || (!channel.apiKey.trim() && !channel.hasApiKey));
         const modelIncomplete = !modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim();
         if (userStorage.enabled && userWebDAVStorage.enabled) {
             message.error("S3/R2 与 WebDAV 不能同时启用");
@@ -164,7 +164,7 @@ export function AppConfigModal() {
     const refreshModels = async () => {
         if (effectiveMode === "remote") return;
         const channels = normalizeLocalChannels(config);
-        if (channels.some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim())) {
+        if (channels.some((channel) => !channel.baseUrl.trim() || (!channel.apiKey.trim() && !channel.hasApiKey))) {
             message.error("请先填写所有本地渠道的 Base URL 和 API Key");
             return;
         }
@@ -320,7 +320,7 @@ export function AppConfigModal() {
                                 {normalizeLocalChannels(config).map((channel, index) => (
                                     <div key={channel.id} className="space-y-2 rounded-md bg-stone-50 p-2 dark:bg-stone-900">
                                         <div className="grid gap-2 md:grid-cols-[130px_150px_minmax(0,1fr)_minmax(0,1fr)_auto]">
-                                            <Input value={channel.name} placeholder="渠道名称" onChange={(event) => patchLocalChannel(channel.id, { name: event.target.value })} />
+                                            <Input value={channel.name} disabled={channel.managed} placeholder="渠道名称" onChange={(event) => patchLocalChannel(channel.id, { name: event.target.value })} />
                                             <Select
                                                 value={channel.protocol}
                                                 options={[
@@ -332,15 +332,16 @@ export function AppConfigModal() {
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },
                                                 ]}
+                                                disabled={channel.managed}
                                                 onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />
-                                            <Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
-                                            <Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
+                                            <Input value={channel.baseUrl} disabled={channel.managed} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
+                                            <Input.Password value={channel.apiKey} disabled={channel.managed} placeholder={channel.hasApiKey ? "密钥已由连接中心安全保存" : "API Key"} onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
                                             <div className="relative flex flex-wrap gap-2 md:flex-nowrap">
-                                                <Button size="small" loading={loadingModels} onClick={() => void refreshLocalChannelModels(channel)}>
+                                                <Button size="small" disabled={channel.managed} loading={loadingModels} onClick={() => void refreshLocalChannelModels(channel)}>
                                                     拉取
                                                 </Button>
-                                                <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
+                                                <Button size="small" danger disabled={channel.managed || index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
                                                 </Button>
                                                 {modelChannelApiKeyUrls[channel.protocol] ? (

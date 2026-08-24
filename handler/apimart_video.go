@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"mime"
 	"mime/multipart"
@@ -128,7 +127,10 @@ func mergeAPIMartFormFiles(payload map[string]any, files map[string][]*multipart
 		}
 		values := make([]any, 0, len(headers))
 		for _, header := range headers {
-			data, contentType := readAPIMartFormFileBytes(header)
+			data, contentType, err := readAPIMartFormFileBytes(header)
+			if err != nil {
+				return err
+			}
 			if len(data) == 0 {
 				return fmt.Errorf("APIMart file upload failed: empty file %s", header.Filename)
 			}
@@ -1554,7 +1556,10 @@ func uploadAPIMartImageBytes(channel model.ModelChannel, data []byte, filename s
 	}
 	defer response.Body.Close()
 
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 512*1024))
+	body, readErr := readLimitedUpstreamResponse(response.Body, "APIMart 图片上传", pollResponseLimit)
+	if readErr != nil {
+		return "", fmt.Errorf("APIMart image upload failed: %w", readErr)
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		log.Printf("APIMart image upload error: filename=%s status=%d body=%s", filename, response.StatusCode, strings.TrimSpace(string(body)))
 		return "", fmt.Errorf("APIMart image upload failed: %s", readUpstreamAIErrorMessage(body, response.StatusCode))
@@ -1569,15 +1574,18 @@ func uploadAPIMartImageBytes(channel model.ModelChannel, data []byte, filename s
 	return strings.TrimSpace(result.URL), nil
 }
 
-func readAPIMartFormFileBytes(header *multipart.FileHeader) ([]byte, string) {
+func readAPIMartFormFileBytes(header *multipart.FileHeader) ([]byte, string, error) {
 	file, err := header.Open()
 	if err != nil {
-		return nil, ""
+		return nil, "", err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 32<<20))
-	if err != nil || len(data) == 0 {
-		return nil, ""
+	data, err := readLimitedRequestBody(file, "APIMart 参考文件", adapterReferenceMaxBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	if len(data) == 0 {
+		return nil, "", errors.New("APIMart file upload failed: empty file")
 	}
 	contentType := strings.TrimSpace(header.Header.Get("Content-Type"))
 	if contentType == "" || contentType == "application/octet-stream" {
@@ -1589,7 +1597,7 @@ func readAPIMartFormFileBytes(header *multipart.FileHeader) ([]byte, string) {
 	if contentType == "" || contentType == "application/octet-stream" {
 		contentType = "image/png"
 	}
-	return data, contentType
+	return data, contentType, nil
 }
 
 func normalizeAPIMartReferenceFilename(filename string, contentType string) string {
@@ -1863,9 +1871,17 @@ func normalizeAPIMartInt(value any) int {
 	}
 }
 
-func copyAPIMartVideoResponse(w http.ResponseWriter, response *http.Response, request *http.Request, channel model.ModelChannel, logContext aiLogContext) bool {
+func copyAPIMartVideoResponse(w http.ResponseWriter, response *http.Response, request *http.Request, channel model.ModelChannel, logContext aiLogContext, onFailure func()) bool {
 	if strings.Contains(request.URL.Path, "/videos/generations") {
-		payload, _ := io.ReadAll(response.Body)
+		payload, err := readLimitedUpstreamResponse(response.Body, "APIMart 视频生成", structuredAdapterResponseLimit)
+		if err != nil {
+			if onFailure != nil {
+				onFailure()
+			}
+			saveAIProxyLog(logContext, response.StatusCode, "", err.Error())
+			Fail(w, "APIMart 响应读取失败")
+			return true
+		}
 		responseBody := string(payload)
 		if transformed, ok := transformAPIMartCreateVideoResponse(payload, logContext.Model); ok {
 			w.Header().Set("Content-Type", "application/json")
@@ -1881,7 +1897,15 @@ func copyAPIMartVideoResponse(w http.ResponseWriter, response *http.Response, re
 	}
 
 	if strings.Contains(request.URL.Path, "/tasks/") {
-		payload, _ := io.ReadAll(response.Body)
+		payload, err := readLimitedUpstreamResponse(response.Body, "APIMart 任务状态", structuredAdapterResponseLimit)
+		if err != nil {
+			if onFailure != nil {
+				onFailure()
+			}
+			saveAIProxyLog(logContext, response.StatusCode, "", err.Error())
+			Fail(w, "APIMart 响应读取失败")
+			return true
+		}
 		responseBody := string(payload)
 		if transformed, ok := transformAPIMartTaskResponse(payload, logContext.Model); ok {
 			w.Header().Set("Content-Type", "application/json")
