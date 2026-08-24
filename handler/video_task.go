@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -161,7 +162,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		ChannelName:     channel.Name,
 		Source:          readVideoTaskSource(r),
 		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:     readClientVideoTaskID(r),
+		ClientTaskID:    readClientVideoTaskID(r),
 		UpstreamTaskID:  parsed.UpstreamTaskID,
 		UpstreamVideoID: parsed.UpstreamVideoID,
 		Status:          parsed.Status,
@@ -369,46 +370,82 @@ func doAIRequest(request *http.Request, channel model.ModelChannel) ([]byte, int
 }
 
 func transformVideoCreatePayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
+	transformed := normalizeRelativeVideoURL(payload, request.URL)
 	if service.IsGeminiChannel(channel) {
-		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
-			return transformed
+		if result, ok := transformGeminiVideoTaskResponse(transformed); ok {
+			transformed = result
 		}
 	}
 	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/createTask") {
-		if transformed, ok := transformKIECreateVideoResponse(payload, modelName); ok {
-			return transformed
+		if result, ok := transformKIECreateVideoResponse(transformed, modelName); ok {
+			transformed = result
 		}
 	}
 	if isAPIMartChannel(channel, modelName) && strings.Contains(request.URL.Path, "/videos/generations") {
-		if transformed, ok := transformAPIMartCreateVideoResponse(payload, modelName); ok {
-			return transformed
+		if result, ok := transformAPIMartCreateVideoResponse(transformed, modelName); ok {
+			transformed = result
 		}
 	}
-	return payload
+	return normalizeRelativeVideoURL(transformed, request.URL)
 }
 
 func transformVideoStatusPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string) []byte {
+	transformed := normalizeRelativeVideoURL(payload, request.URL)
 	if service.IsGeminiChannel(channel) {
-		if transformed, ok := transformGeminiVideoTaskResponse(payload); ok {
-			return transformed
+		if result, ok := transformGeminiVideoTaskResponse(transformed); ok {
+			transformed = result
 		}
 	}
 	if isMiniMaxH3Channel(channel, modelName) && strings.Contains(request.URL.Path, "/v2/query/video_generation/") {
-		if transformed, ok := transformMiniMaxVideoTaskResponse(payload); ok {
-			return transformed
+		if result, ok := transformMiniMaxVideoTaskResponse(transformed); ok {
+			transformed = result
 		}
 	}
 	if isKIEChannel(channel, modelName) && strings.Contains(request.URL.Path, "/jobs/recordInfo") {
-		if transformed, ok := transformKIETaskResponse(payload, modelName); ok {
-			return transformed
+		if result, ok := transformKIETaskResponse(transformed, modelName); ok {
+			transformed = result
 		}
 	}
 	if isAPIMartChannel(channel, modelName) && strings.Contains(request.URL.Path, "/tasks/") {
-		if transformed, ok := transformAPIMartTaskResponse(payload, modelName); ok {
-			return transformed
+		if result, ok := transformAPIMartTaskResponse(transformed, modelName); ok {
+			transformed = result
 		}
 	}
-	return payload
+	return normalizeRelativeVideoURL(transformed, request.URL)
+}
+
+func normalizeRelativeVideoURL(payload []byte, requestURL *url.URL) []byte {
+	if len(payload) == 0 || requestURL == nil {
+		return payload
+	}
+	var root any
+	if json.Unmarshal(payload, &root) != nil {
+		return payload
+	}
+	data := normalizeVideoPayloadMap(root)
+	videoURL := firstNonEmpty(
+		readStringPath(data, "video_url"),
+		readStringPath(data, "videoUrl"),
+		readStringPath(data, "video.url"),
+		readStringPath(data, "output_url"),
+		readStringPath(data, "outputUrl"),
+		readStringPath(data, "download_url"),
+		readStringPath(data, "downloadUrl"),
+		readStringPath(data, "url"),
+	)
+	if !strings.HasPrefix(videoURL, "/") {
+		return payload
+	}
+	reference, err := url.Parse(videoURL)
+	if err != nil || reference.IsAbs() || reference.Host != "" {
+		return payload
+	}
+	data["video_url"] = requestURL.ResolveReference(reference).String()
+	transformed, err := json.Marshal(root)
+	if err != nil {
+		return payload
+	}
+	return transformed
 }
 
 func transformGeminiVideoTaskResponse(payload []byte) ([]byte, bool) {
