@@ -196,7 +196,11 @@ export default function ProvidersPage() {
                 await test(token, editing.id, refreshModels);
                 message.success(refreshModels && editing.protocol !== "runninghub" ? "连接成功，模型列表已刷新" : "连接成功");
             }
-            setEditing(useProviderStore.getState().items.find((item) => item.id === editing.id) || editing);
+            const testedItem = useProviderStore.getState().items.find((item) => item.id === editing.id) || editing;
+            setEditing(testedItem);
+            if (refreshModels && testedItem.kind === "api" && testedItem.protocol !== "runninghub") {
+                form.setFieldsValue({ models: testedItem.models, defaultModel: testedItem.defaultModel });
+            }
         } catch (testError) {
             message.error(testError instanceof Error ? testError.message : "连接测试失败");
         } finally {
