@@ -28,6 +28,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
+import { useGenerationConfirm } from "@/hooks/use-generation-confirm";
 
 const cogVideoX3DurationOptions = COGVIDEOX3_DURATIONS.map((value) => ({ value, label: `${value}s` }));
 
@@ -118,6 +119,7 @@ export default function VideoPage() {
     }, [updateConfig]);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const confirmGeneration = useGenerationConfirm();
     const addAsset = useAssetStore((state) => state.addAsset);
     const token = useUserStore((state) => state.token);
     const isUserReady = useUserStore((state) => state.isReady);
@@ -563,6 +565,7 @@ export default function VideoPage() {
     const generate = async () => {
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.config, snapshot.model, "视频生成"))) return;
         setPrompt("");
         await submitGenerationSnapshot(snapshot);
     };
@@ -679,12 +682,13 @@ export default function VideoPage() {
         }
     };
 
-    const retryResult = (result: GenerationResult) => {
+    const retryResult = async (result: GenerationResult) => {
         const retryChannelId = videoTaskChannelId(result.task);
         const snapshot = buildRequestSnapshot({ promptText: result.prompt, negativePromptText: result.config.videoNegativePrompt || "", referenceItems: result.references, firstFrameItem: result.firstFrame, lastFrameItem: result.lastFrame, videoReferenceItems: result.videoReferences, audioReferenceItems: result.audioReferences, taskCountValue: 1, configValue: { ...videoConfig, ...result.config, ...(retryChannelId ? { videoChannelId: retryChannelId, activeChannelId: retryChannelId } : {}), model: result.model, videoModel: result.model }, modelValue: result.model });
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.config, snapshot.model, "视频生成"))) return;
         setResults((value) => value.filter((item) => item.id !== result.id));
-        void submitGenerationSnapshot(snapshot);
+        await submitGenerationSnapshot(snapshot);
     };
 
     const previewGenerationResult = (result: GenerationResult) => {
@@ -1029,11 +1033,12 @@ export default function VideoPage() {
         updateConfig("videoCharacterOrientation", normalizeCharacterOrientation(log.config.videoCharacterOrientation));
     };
 
-    const retryGenerationLog = (log: GenerationLog) => {
+    const retryGenerationLog = async (log: GenerationLog) => {
         const retryChannelId = videoTaskChannelId(log.task);
         const snapshot = buildRequestSnapshot({ promptText: log.prompt, negativePromptText: log.config.videoNegativePrompt || "", referenceItems: log.references || [], firstFrameItem: log.firstFrame || null, lastFrameItem: log.lastFrame || null, videoReferenceItems: log.videoReferences || [], audioReferenceItems: log.audioReferences || [], taskCountValue: 1, configValue: { ...videoConfig, ...log.config, ...(retryChannelId ? { videoChannelId: retryChannelId, activeChannelId: retryChannelId } : {}), model: log.model, videoModel: log.model }, modelValue: log.model });
         if (!snapshot) return;
-        void submitGenerationSnapshot(snapshot);
+        if (!(await confirmGeneration(snapshot.config, snapshot.model, "视频生成"))) return;
+        await submitGenerationSnapshot(snapshot);
     };
 
     return (
@@ -2512,7 +2517,7 @@ function isCompletedVideoTask(task: VideoResponse) {
 }
 
 function isFailedVideoTask(task: VideoResponse) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((task.status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((task.status || "").toLowerCase());
 }
 
 function isTransientVideoPollError(error: unknown) {

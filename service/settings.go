@@ -325,7 +325,7 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 		timeout = 600
 	}
 	if channel.Restricted {
-		return SafeProxyHTTPClientWithTimeout(time.Duration(timeout) * time.Second)
+		return SafeProxyHTTPClientForBaseURL(channel.BaseURL, time.Duration(timeout)*time.Second)
 	}
 	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
 }
@@ -1029,6 +1029,18 @@ func testArkSeedanceChannelModel(channel model.ModelChannel, modelName string) (
 }
 
 func readAdminChannelError(body []byte, statusCode int, fallback string) error {
+	if statusCode == http.StatusUnauthorized {
+		return safeMessageError{message: "上游接口鉴权失败（401），请检查 API Key"}
+	}
+	if statusCode == http.StatusForbidden {
+		return safeMessageError{message: "上游接口拒绝访问（403），请检查套餐或模型权限"}
+	}
+	if statusCode == http.StatusTooManyRequests {
+		return safeMessageError{message: "上游接口限流或额度不足（429），请稍后重试或检查额度"}
+	}
+	if statusCode >= http.StatusInternalServerError {
+		return safeMessageError{message: fmt.Sprintf("上游接口暂时不可用（%d）", statusCode)}
+	}
 	var payload struct {
 		Error *struct {
 			Message string `json:"message"`
@@ -1037,17 +1049,11 @@ func readAdminChannelError(body []byte, statusCode int, fallback string) error {
 	}
 	if len(body) > 0 && json.Unmarshal(body, &payload) == nil {
 		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-			return safeMessageError{message: payload.Error.Message}
+			return safeMessageError{message: RedactSensitiveText(payload.Error.Message)}
 		}
 		if strings.TrimSpace(payload.Msg) != "" {
-			return safeMessageError{message: payload.Msg}
+			return safeMessageError{message: RedactSensitiveText(payload.Msg)}
 		}
-	}
-	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		return safeMessageError{message: fmt.Sprintf("上游接口鉴权失败（%d），请检查 API Key、套餐权限或模型权限", statusCode)}
-	}
-	if statusCode == http.StatusTooManyRequests {
-		return safeMessageError{message: "上游接口限流或额度不足（429），请稍后重试或检查额度"}
 	}
 	if statusCode > 0 {
 		return safeMessageError{message: fmt.Sprintf("%s：%d", fallback, statusCode)}

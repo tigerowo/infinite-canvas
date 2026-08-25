@@ -43,6 +43,19 @@ func TestProviderAdapterModelContracts(t *testing.T) {
 	}
 }
 
+func TestReadAdminChannelErrorMapsAndRedacts(t *testing.T) {
+	for status, expected := range map[int]string{
+		http.StatusUnauthorized:    "鉴权失败",
+		http.StatusForbidden:       "拒绝访问",
+		http.StatusTooManyRequests: "限流",
+		http.StatusBadGateway:      "暂时不可用",
+	} {
+		if message := readAdminChannelError([]byte(`{"error":{"message":"sk-1234567890abcdef"}}`), status, "测试失败").Error(); !strings.Contains(message, expected) || strings.Contains(message, "sk-1234567890abcdef") {
+			t.Fatalf("status=%d message=%q", status, message)
+		}
+	}
+}
+
 func TestProviderAdapterModelFailures(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -53,6 +66,9 @@ func TestProviderAdapterModelFailures(t *testing.T) {
 	}{
 		{name: "invalid json", status: http.StatusOK, body: "not-json", timeout: 2},
 		{name: "authentication rejected", status: http.StatusUnauthorized, body: `{"error":{"message":"unauthorized"}}`, timeout: 2},
+		{name: "forbidden", status: http.StatusForbidden, body: `{"error":{"message":"forbidden"}}`, timeout: 2},
+		{name: "rate limited", status: http.StatusTooManyRequests, body: `{"error":{"message":"rate limited"}}`, timeout: 2},
+		{name: "upstream unavailable", status: http.StatusBadGateway, body: `{"error":{"message":"bad gateway"}}`, timeout: 2},
 		{name: "response too large", status: http.StatusOK, body: strings.Repeat("x", 8*1024*1024+1), timeout: 2},
 		{name: "timeout", status: http.StatusOK, body: `{"models":[]}`, delay: 200 * time.Millisecond, timeout: 1},
 	}

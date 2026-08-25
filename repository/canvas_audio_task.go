@@ -1,6 +1,10 @@
 package repository
 
-import "github.com/tigerowo/infinite-canvas/model"
+import (
+	"strings"
+
+	"github.com/tigerowo/infinite-canvas/model"
+)
 
 func SaveCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, error) {
 	db, err := DB()
@@ -17,9 +21,24 @@ func UpdateCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, e
 	}
 
 	return task, db.Model(&model.CanvasAudioTask{}).
-		Where("user_id = ? AND id = ?", task.UserID, task.ID).
+		Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeCanvasTaskStatuses).
 		Select("*").
 		Updates(&task).Error
+}
+
+func CancelUserCanvasAudioTask(userID string, id string, completedAt string) (model.CanvasAudioTask, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.CanvasAudioTask{}, false, err
+	}
+	result := db.Model(&model.CanvasAudioTask{}).
+		Where("user_id = ? AND id = ? AND status IN ?", userID, strings.TrimSpace(id), activeCanvasTaskStatuses).
+		Updates(map[string]any{"status": "cancelled", "error": "任务已取消", "completed_at": completedAt, "updated_at": completedAt})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return model.CanvasAudioTask{}, false, result.Error
+	}
+	task, found, err := GetUserCanvasAudioTask(userID, id)
+	return task, found, err
 }
 
 func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bool, error) {

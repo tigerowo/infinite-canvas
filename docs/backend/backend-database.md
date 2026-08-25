@@ -182,7 +182,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `source_id` | string | 来源内 ID，画布任务记录画布节点 ID，视频创作台为空 |
 | `upstream_task_id` | string | 上游任务 ID |
 | `upstream_video_id` | string | 上游视频 ID，例如 Agnes 的 `video_...` |
-| `status` | string | 状态：`queued`、`processing`、`completed`、`failed` |
+| `status` | string | 状态：`queued`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out`；旧状态读取时会归一化 |
 | `progress` | number | 生成进度，0-100 |
 | `seconds` | string | 视频秒数 |
 | `size` | string | 视频尺寸 |
@@ -201,7 +201,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `completed_at` | string | 完成时间 |
 | `last_polled_at` | string | 最近轮询时间 |
 
-后台轮询器按 `status + created_at` 查询未完成任务；每个任务还受 360 次请求、32 MiB 累计响应体和自创建起 30 分钟总体 deadline 限制。旧数据库由 AutoMigrate 增加计数字段；如果残留废弃列，不再参与代码查询。
+后台轮询器按 `status + created_at` 查询未完成任务；每个任务还受 360 次请求、32 MiB 累计响应体和自创建起 30 分钟总体 deadline 限制。超过总体 deadline 时写入 `timed_out`；取消任务时停止当前轮询并使用条件更新阻止陈旧结果覆盖。旧数据库由 AutoMigrate 增加计数字段；如果残留废弃列，不再参与代码查询。
 
 ### video_generation_logs
 
@@ -250,7 +250,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `node_id` | string | 画布节点 ID |
 | `model` | string | 模型名称 |
 | `channel_id` | string | 模型渠道 ID |
-| `status` | string | 状态：`queued`、`processing`、`completed`、`failed` |
+| `status` | string | 状态：`queued`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out` |
 | `progress` | number | 生成进度 |
 | `prompt` | text | 提示词 |
 | `generation_type` | string | `generation` 或 `edit` |
@@ -264,7 +264,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `started_at` | string | 开始时间 |
 | `completed_at` | string | 完成时间 |
 
-索引：`idx_canvas_image_tasks_user_source_node (user_id, source, source_id, node_id)`
+索引：`idx_canvas_image_tasks_user_source_node (user_id, source, source_id, node_id)`。单个运行任务受 5 分钟总体 deadline 和 32 MiB 代理响应限制，支持显式取消。
 
 ### canvas_audio_tasks
 
@@ -279,7 +279,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `node_id` | string | 画布节点 ID |
 | `model` | string | 模型名称 |
 | `channel_id` | string | 模型渠道 ID |
-| `status` | string | 状态：`queued`、`processing`、`completed`、`failed` |
+| `status` | string | 状态：`queued`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out` |
 | `progress` | number | 生成进度 |
 | `prompt` | text | 提示词 |
 | `audio_url` | text | 完成后音频 URL |
@@ -291,7 +291,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `started_at` | string | 开始时间 |
 | `completed_at` | string | 完成时间 |
 
-索引：`idx_canvas_audio_tasks_user_source_node (user_id, source, source_id, node_id)`
+索引：`idx_canvas_audio_tasks_user_source_node (user_id, source, source_id, node_id)`。单个运行任务受 5 分钟总体 deadline 和 32 MiB 代理响应限制，支持显式取消。
 
 ### canvas_projects
 

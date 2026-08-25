@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -22,6 +23,8 @@ const (
 	videoTaskDeadline          = 30 * time.Minute
 	videoTaskResponseLimit     = int64(1024 * 1024)
 )
+
+var videoTaskPollCancels sync.Map
 
 func StartVideoTaskPoller() {
 	service.StartVideoTaskPoller(pollVideoTaskFromUpstream)
@@ -53,12 +56,49 @@ func DeleteUserVideoTask(w http.ResponseWriter, r *http.Request, id string) {
 		Fail(w, "视频任务不存在")
 		return
 	}
+	if value, found := videoTaskPollCancels.Load(id); found {
+		value.(context.CancelFunc)()
+	}
+	_, _, _ = service.CancelUserVideoTask(user.ID, id)
 	if err := service.DeleteUserVideoTask(user.ID, id); err != nil {
 		log.Printf("delete video task failed: user=%s id=%s err=%v", user.ID, id, err)
 		Fail(w, "AI 接口请求失败")
 		return
 	}
 	OK(w, map[string]any{"deleted": true})
+}
+
+func CancelUserVideoTask(w http.ResponseWriter, r *http.Request, id string) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		Fail(w, "视频任务不存在")
+		return
+	}
+	task, changed, err := service.CancelUserVideoTask(user.ID, id)
+	if err != nil {
+		log.Printf("cancel video task failed: user=%s id=%s err=%s", user.ID, id, service.RedactSensitiveText(err.Error()))
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	if !changed {
+		current, found, readErr := service.GetUserVideoTask(user.ID, id)
+		if readErr != nil || !found {
+			Fail(w, "视频任务不存在")
+			return
+		}
+		task = current
+	}
+	for _, key := range []string{id, task.ID} {
+		if value, found := videoTaskPollCancels.Load(key); found {
+			value.(context.CancelFunc)()
+		}
+	}
+	OK(w, service.VideoTaskResponse(task))
 }
 
 func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
@@ -290,7 +330,7 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 
 func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdate, error) {
 	if message := videoTaskPollBudgetError(task, time.Now()); message != "" {
-		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message}, nil
+		return service.VideoTaskPollUpdate{Status: videoTaskPollBudgetStatus(message), Error: message, ErrorDetail: message}, nil
 	}
 	var channel model.ModelChannel
 	var err error
@@ -314,6 +354,8 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	createdAt, _ := time.Parse(time.RFC3339Nano, strings.TrimSpace(task.CreatedAt))
 	pollContext, cancel := context.WithDeadline(context.Background(), createdAt.Add(videoTaskDeadline))
 	defer cancel()
+	videoTaskPollCancels.Store(task.ID, context.CancelFunc(cancel))
+	defer videoTaskPollCancels.Delete(task.ID)
 	request, err := http.NewRequestWithContext(pollContext, http.MethodGet, resolveAIProxyURL(channel, task.Model, upstreamPath), nil)
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
@@ -340,9 +382,9 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 			if task.ResponseBytes+int64(len(payload)) > videoTaskResponseByteLimit {
 				message = "视频任务上游累计响应超过 32 MiB 限制"
 			}
-			return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: err.Error(), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
+			return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: service.RedactSensitiveText(err.Error()), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
 		}
-		return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: err.Error(), PollRequests: 1}, nil
+		return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: service.RedactSensitiveText(err.Error()), PollRequests: 1}, nil
 	}
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
@@ -350,7 +392,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		if status == http.StatusTooManyRequests {
 			return service.VideoTaskPollUpdate{Status: task.Status, ErrorDetail: message, ResponseBody: string(payload), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
 		}
-		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: string(payload), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
+		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: service.RedactSensitiveText(string(payload)), ResponseBytes: int64(len(payload)), PollRequests: 1}, nil
 	}
 	transformed := transformVideoStatusPayload(payload, request, channel, task.Model)
 	parsed := parseVideoTaskPayload(transformed, task.Model)
@@ -364,7 +406,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		parsed.Status = "failed"
 	}
 	if parsed.ErrorDetail == "" && len(payload) > 0 && parsed.Error != "" {
-		parsed.ErrorDetail = string(payload)
+		parsed.ErrorDetail = service.RedactSensitiveText(string(payload))
 	}
 	saveAIProxyLog(logContext, status, string(transformed), firstNonEmpty(parsed.Error, ""))
 	return service.VideoTaskPollUpdate{
@@ -379,6 +421,13 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		ResponseBytes: int64(len(payload)),
 		PollRequests:  1,
 	}, nil
+}
+
+func videoTaskPollBudgetStatus(message string) string {
+	if strings.Contains(message, "deadline") || strings.Contains(message, "创建时间无效") {
+		return "timed_out"
+	}
+	return "failed"
 }
 
 func videoTaskPollBudgetError(task model.VideoTask, current time.Time) string {

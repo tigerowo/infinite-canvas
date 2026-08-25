@@ -20,6 +20,7 @@
 - [连接中心](backend/provider-center.md)
 - [连接中心第二阶段验收](provider-phase2-report.md)
 - [连接中心第三阶段离线接入](provider-phase3-report.md)
+- [连接中心第四阶段真实渠道与任务可靠性](provider-phase4-report.md)
 - [连接中心设计状态](design/provider-center-design-status.md)
 - [上游读取预算](backend/upstream-read-budgets.md)
 - [入站请求读取预算](backend/inbound-request-budgets.md)

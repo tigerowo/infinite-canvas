@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/service"
 )
 
 type response struct {
@@ -34,7 +35,7 @@ func writeJSONWithStatus(w http.ResponseWriter, status int, value any) {
 }
 
 func FailError(w http.ResponseWriter, err error) {
-	log.Printf("request failed: %v", err)
+	log.Printf("request failed: %s", service.RedactSensitiveText(err.Error()))
 	if safe, ok := err.(interface{ SafeMessage() string }); ok {
 		Fail(w, safe.SafeMessage())
 		return

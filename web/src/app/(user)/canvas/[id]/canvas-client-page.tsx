@@ -85,6 +85,7 @@ import {
 } from "../types";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio } from "@/types/media";
+import { useGenerationConfirm } from "@/hooks/use-generation-confirm";
 
 const CanvasPanoramaViewer = dynamic(() => import("../components/canvas-panorama-viewer"), { ssr: false, loading: () => null });
 
@@ -290,6 +291,7 @@ function NodeCreateMenu({
 
 function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const { message } = App.useApp();
+    const confirmGeneration = useGenerationConfirm();
     const router = useRouter();
     const containerRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
@@ -2522,6 +2524,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 openConfigDialog(true);
                 return;
             }
+            if ((mode === "image" || mode === "video") && !(await confirmGeneration(generationConfig, generationConfig.model, mode === "video" ? "视频生成" : "图片生成"))) return;
 
             setRunningNodeId(nodeId);
             const sourceTextContent = sourceNode?.type === CanvasNodeType.Text ? sourceNode.metadata?.content?.trim() || "" : "";
@@ -2959,7 +2962,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, openConfigDialog],
+        [confirmGeneration, effectiveConfig, openConfigDialog],
     );
 
     const getCanvasAgentContext = useCallback(
@@ -3407,6 +3410,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 openConfigDialog(true);
                 return;
             }
+            const retryTaskType = node.type === CanvasNodeType.Video ? "视频生成" : isCanvasImageNodeType(node.type) ? "图片生成" : null;
+            if (retryTaskType && !(await confirmGeneration(generationConfig, generationConfig.model, retryTaskType))) return;
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
             const prompt = (isPanorama ? savedImageMetadata?.panoramaFinalPrompt || "" : savedImageMetadata?.prompt || context?.prompt || "").trim();
@@ -3495,7 +3500,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, message, openConfigDialog, projectId],
+        [confirmGeneration, effectiveConfig, message, openConfigDialog, projectId],
     );
 
     const generateImageFromTextNode = useCallback(
@@ -4841,7 +4846,7 @@ function canvasVideoTaskCompleted(task: VideoResponse) {
 }
 
 function canvasVideoTaskFailed(task: VideoResponse) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((task.status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((task.status || "").toLowerCase());
 }
 
 function parseCanvasVideoTaskSize(value: unknown, fallback: { width: number; height: number }) {
@@ -4987,7 +4992,7 @@ function canvasTaskCompleted(status?: string) {
 }
 
 function canvasTaskFailed(status?: string) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((status || "").toLowerCase());
 }
 
 function findRetrySourceNode(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[]) {

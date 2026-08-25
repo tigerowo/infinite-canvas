@@ -32,7 +32,7 @@ API 响应不包含 `apiKey` 或自定义请求头值，只返回 `hasApiKey`、
 
 画布、生图台和视频台共用同一份连接中心模型目录。前端 Provider store 是登录用户的权威数据源，`AiConfig.localChannels` 只保存不含密钥的运行时投影和旧配置回退；Provider 新增、编辑、启停、删除、设为默认或迁移后都会同步刷新该投影。退出登录时会移除托管投影，未登录用户仍可使用浏览器中的旧本地直连配置。
 
-托管 API Provider 的 Base URL 标记为用户输入，所有请求使用 `SafeProxyHTTPClientWithTimeout`：禁止环境代理、私网/回环/链路本地/CGNAT 地址和非 HTTP(S) 重定向，并固定拨号到已检查的 DNS 结果。
+托管 API Provider 的 Base URL 标记为用户输入，所有请求使用按 Base URL 约束的安全客户端：禁止环境代理、私网/回环/链路本地/CGNAT 地址和非 HTTP(S) 重定向，固定拨号到已检查的 DNS 结果，并阻止携带渠道凭据跨来源重定向。
 
 ## 统一协议 adapter
 

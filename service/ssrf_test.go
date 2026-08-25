@@ -3,7 +3,9 @@ package service
 import (
 	"net"
 	"net/http"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestIsBlockedProxyIP(t *testing.T) {
@@ -31,6 +33,24 @@ func TestIsBlockedProxyIP(t *testing.T) {
 				expected,
 			)
 		}
+	}
+}
+
+func TestSafeProxyHTTPClientForBaseURLRejectsCrossOriginRedirect(t *testing.T) {
+	client := SafeProxyHTTPClientForBaseURL("https://api.example.com/v1", time.Second)
+	request, err := http.NewRequest(http.MethodGet, "https://cdn.example.com/result", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CheckRedirect(request, []*http.Request{{}}); err == nil || !strings.Contains(err.Error(), "其他来源") {
+		t.Fatalf("跨来源重定向应被拒绝：%v", err)
+	}
+	sameOrigin, err := http.NewRequest(http.MethodGet, "https://api.example.com/v2/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CheckRedirect(sameOrigin, []*http.Request{{}}); err != nil {
+		t.Fatalf("同源重定向不应被拒绝：%v", err)
 	}
 }
 

@@ -97,15 +97,17 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		UpdatedAt:       current,
 	}
 	if IsCompletedVideoTaskStatus(task.Status) || task.VideoURL != "" {
-		task.Status = "completed"
+		task.Status = "succeeded"
 		task.Progress = 100
 		task.CompletedAt = current
-	} else if IsFailedVideoTaskStatus(task.Status) || task.Error != "" {
-		task.Status = "failed"
+	} else if IsTerminalVideoTaskStatus(task.Status) || task.Error != "" {
+		if !IsTerminalVideoTaskStatus(task.Status) {
+			task.Status = "failed"
+		}
 		task.CompletedAt = current
 	}
 	saved, err := repository.SaveVideoTask(task)
-	if err == nil && !IsCompletedVideoTaskStatus(saved.Status) && !IsFailedVideoTaskStatus(saved.Status) {
+	if err == nil && !IsTerminalVideoTaskStatus(saved.Status) {
 		WakeVideoTaskPoller()
 	}
 	return saved, err
@@ -131,6 +133,10 @@ func DeleteUserVideoTask(userID string, id string) error {
 	return repository.DeleteUserVideoTask(strings.TrimSpace(userID), strings.TrimSpace(id))
 }
 
+func CancelUserVideoTask(userID string, id string) (model.VideoTask, bool, error) {
+	return repository.CancelUserVideoTask(strings.TrimSpace(userID), strings.TrimSpace(id), now())
+}
+
 func VideoTaskResponse(task model.VideoTask) map[string]any {
 	result := map[string]any{
 		"id":             task.ID,
@@ -141,7 +147,7 @@ func VideoTaskResponse(task model.VideoTask) map[string]any {
 		"channelName":    task.ChannelName,
 		"source":         task.Source,
 		"source_id":      task.SourceID,
-		"status":         task.Status,
+		"status":         NormalizeVideoTaskStatus(task.Status),
 		"progress":       task.Progress,
 		"task_id":        firstVideoTaskValue(task.UpstreamTaskID, task.ID),
 		"video_id":       task.UpstreamVideoID,
@@ -162,7 +168,7 @@ func VideoTaskResponse(task model.VideoTask) map[string]any {
 		result["video_url"] = task.VideoURL
 		result["data"] = []map[string]any{{"url": task.VideoURL}}
 	}
-	if IsFailedVideoTaskStatus(task.Status) && (task.Error != "" || task.ErrorDetail != "") {
+	if IsTerminalVideoTaskStatus(task.Status) && !IsCompletedVideoTaskStatus(task.Status) && (task.Error != "" || task.ErrorDetail != "") {
 		result["error"] = map[string]any{"message": firstVideoTaskValue(task.Error, task.ErrorDetail)}
 		result["error_detail"] = task.ErrorDetail
 	}
@@ -274,7 +280,7 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 	}
 	task.Status = NormalizeVideoTaskStatus(firstVideoTaskValue(update.Status, task.Status))
 	if task.Status == "" {
-		task.Status = "processing"
+		task.Status = "running"
 	}
 	if update.Progress > 0 || task.Progress == 0 {
 		task.Progress = clampProgress(update.Progress)
@@ -300,27 +306,32 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 	task.UpdatedAt = current
 	task.LastPolledAt = videoTaskTime(time.Now())
 	if task.VideoURL != "" || IsCompletedVideoTaskStatus(task.Status) {
-		task.Status = "completed"
+		task.Status = "succeeded"
 		task.Progress = 100
 		task.CompletedAt = current
 		task.Error = ""
 		task.ErrorDetail = ""
-	} else if task.Error != "" || IsFailedVideoTaskStatus(task.Status) {
-		task.Status = "failed"
+	} else if task.Error != "" || IsTerminalVideoTaskStatus(task.Status) {
+		if !IsTerminalVideoTaskStatus(task.Status) {
+			task.Status = "failed"
+		}
 		task.CompletedAt = current
 	}
-	_, err := repository.SaveVideoTask(task)
-	return err
+	return repository.UpdateActiveVideoTask(task)
 }
 
 func NormalizeVideoTaskStatus(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "completed", "complete", "done", "succeeded", "success":
-		return "completed"
-	case "failed", "fail", "error", "cancelled", "canceled":
+		return "succeeded"
+	case "failed", "fail", "error":
 		return "failed"
+	case "cancelled", "canceled":
+		return "cancelled"
+	case "timed_out", "timed-out", "timeout":
+		return "timed_out"
 	case "running", "processing", "in_progress", "in-progress":
-		return "processing"
+		return "running"
 	case "queued", "queue", "pending", "":
 		return "queued"
 	default:
@@ -329,11 +340,20 @@ func NormalizeVideoTaskStatus(status string) string {
 }
 
 func IsCompletedVideoTaskStatus(status string) bool {
-	return NormalizeVideoTaskStatus(status) == "completed"
+	return NormalizeVideoTaskStatus(status) == "succeeded"
 }
 
 func IsFailedVideoTaskStatus(status string) bool {
 	return NormalizeVideoTaskStatus(status) == "failed"
+}
+
+func IsTerminalVideoTaskStatus(status string) bool {
+	switch NormalizeVideoTaskStatus(status) {
+	case "succeeded", "failed", "cancelled", "timed_out":
+		return true
+	default:
+		return false
+	}
 }
 
 func videoTaskTime(value time.Time) string {

@@ -201,6 +201,15 @@ export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoRe
     if (payload.code !== 0) throw new VideoRequestError(payload.msg || payload.message || "删除视频任务失败", payload);
 }
 
+export async function cancelVideoGenerationTask(config: AiConfig, task?: VideoResponse | null) {
+    if (!usesAccountProxy(config) || !task) return task || null;
+    const id = task.id || task.task_id || task.video_id;
+    if (!id) return task;
+    const payload = (await axios.post<ApiVideoEnvelope>(`/api/v1/video-tasks/${encodeURIComponent(id)}/cancel`, null, { headers: aiHeaders(config) })).data;
+    if (payload.code !== 0 || !payload.data || Array.isArray(payload.data)) throw new VideoRequestError(payload.msg || payload.message || "取消视频任务失败", payload);
+    return normalizeVideoResponse(payload.data);
+}
+
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
     const normalizedModel = model.trim().toLowerCase();
     return (normalizedModel === "grok-imagine-video" || normalizedModel === "grok-imagine-video-1.5") && videoChannelProtocol(config, model) === "grok2api";
@@ -908,7 +917,7 @@ function isCompletedVideoStatus(status?: string) {
 }
 
 function isFailedVideoStatus(status?: string) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((status || "").toLowerCase());
 }
 
 function videoPayloadErrorMessage(value: unknown): string {

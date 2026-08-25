@@ -57,6 +57,9 @@ func New() *gin.Engine {
 	v1.GET("/canvas/image-tasks/:id", func(c *gin.Context) {
 		handler.GetCanvasImageTask(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/canvas/image-tasks/:id/cancel", func(c *gin.Context) {
+		handler.CancelUserCanvasImageTask(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.DELETE("/canvas/image-tasks/:id", func(c *gin.Context) {
 		handler.DeleteUserCanvasImageTask(c.Writer, c.Request, c.Param("id"))
 	})
@@ -64,9 +67,15 @@ func New() *gin.Engine {
 	v1.GET("/canvas/audio-tasks/:id", func(c *gin.Context) {
 		handler.GetCanvasAudioTask(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/canvas/audio-tasks/:id/cancel", func(c *gin.Context) {
+		handler.CancelUserCanvasAudioTask(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/ai-logs", gin.WrapF(handler.ClientAICallLog))
 	v1.POST("/videos", middleware.GenerationRequestBudget, gin.WrapF(handler.AIVideos))
 	v1.GET("/video-tasks", gin.WrapF(handler.UserVideoTasks))
+	v1.POST("/video-tasks/:id/cancel", func(c *gin.Context) {
+		handler.CancelUserVideoTask(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.DELETE("/video-tasks/:id", func(c *gin.Context) {
 		handler.DeleteUserVideoTask(c.Writer, c.Request, c.Param("id"))
 	})

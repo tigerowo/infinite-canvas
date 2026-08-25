@@ -110,12 +110,24 @@ func TestCleanupLegacyProviderConfigKeepsUnknownAndInvalidEntries(t *testing.T) 
 }
 
 func TestValidateProviderInputRejectsUnsafeURLShape(t *testing.T) {
-	input := normalizeProviderInput(ProviderInput{
-		Kind: model.ProviderKindAPI, Protocol: "openai", Name: "测试",
-		BaseURL: "https://user:password@example.com/v1", Timeout: 30,
+	for _, baseURL := range []string{"https://user:password@example.com/v1", "https://example.com/v1#internal"} {
+		input := normalizeProviderInput(ProviderInput{
+			Kind: model.ProviderKindAPI, Protocol: "openai", Name: "测试",
+			BaseURL: baseURL, Timeout: 30,
+		})
+		if err := validateProviderInput(input); err == nil {
+			t.Fatalf("不安全 Base URL 应被拒绝：%s", baseURL)
+		}
+	}
+}
+
+func TestNormalizeProviderHeadersRejectsHeaderInjection(t *testing.T) {
+	headers := normalizeProviderHeaders(map[string]string{
+		"X-Safe": "configured",
+		"X-Bad":  "value\r\nX-Injected: secret",
 	})
-	if err := validateProviderInput(input); err == nil {
-		t.Fatal("包含 URL 用户信息的 Base URL 应被拒绝")
+	if headers["X-Safe"] != "configured" || headers["X-Bad"] != "" {
+		t.Fatalf("headers=%#v", headers)
 	}
 }
 

@@ -51,6 +51,7 @@ import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploa
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
+import { useGenerationConfirm } from "@/hooks/use-generation-confirm";
 
 type GeneratedImage = {
     id: string;
@@ -137,6 +138,7 @@ export default function ImagePage() {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const confirmGeneration = useGenerationConfirm();
     const addAsset = useAssetStore((state) => state.addAsset);
     const token = useUserStore((state) => state.token);
     const isUserReady = useUserStore((state) => state.isReady);
@@ -395,6 +397,7 @@ export default function ImagePage() {
     const generate = async () => {
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.requestConfig, snapshot.displayConfig.imageModel || snapshot.displayConfig.model, "图片生成"))) return;
         setPrompt("");
         await submitGenerationBatch(snapshot);
     };
@@ -403,6 +406,7 @@ export default function ImagePage() {
         const retryChannelId = imageTaskChannelId(log.task);
         const snapshot = buildRequestSnapshot({ promptText: log.prompt, referenceItems: log.references, taskCount: Number(log.config.count) || 1, configOverride: { ...log.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.requestConfig, snapshot.displayConfig.imageModel || snapshot.displayConfig.model, "图片生成"))) return;
         await submitGenerationBatch(snapshot);
     };
 
@@ -994,12 +998,13 @@ export default function ImagePage() {
         }
     };
 
-    const retryResult = (result: GenerationResult) => {
+    const retryResult = async (result: GenerationResult) => {
         const retryChannelId = imageTaskChannelId(result.task);
         const snapshot = buildRequestSnapshot({ promptText: result.prompt, referenceItems: result.references, taskCount: 1, configOverride: { ...result.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.requestConfig, snapshot.displayConfig.imageModel || snapshot.displayConfig.model, "图片生成"))) return;
         setResults((value) => value.filter((item) => item.id !== result.id));
-        void submitGenerationBatch(snapshot);
+        await submitGenerationBatch(snapshot);
     };
 
     const handleWorkflowTaskStarted = (task: WorkflowExternalTaskStart) => {
@@ -2407,7 +2412,7 @@ function isCompletedImageTask(task: CanvasImageTask) {
 }
 
 function isFailedImageTask(task: CanvasImageTask) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((task.status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((task.status || "").toLowerCase());
 }
 
 function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[], config: AiConfig) {
@@ -2837,9 +2842,6 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
-
-
 
 
 

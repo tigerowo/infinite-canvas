@@ -1549,3 +1549,18 @@ export async function deleteCanvasImageTask(config: AiConfig, task?: CanvasImage
     const payload = (await response.json()) as { code?: number; msg?: string };
     if (payload.code !== 0) throw new ImageRequestError(payload.msg || "删除图片任务失败", payload);
 }
+
+export async function cancelCanvasImageTask(config: AiConfig, task?: CanvasImageTask | null) {
+    if (!usesAccountProxy(config) || !task?.id) return task || null;
+    const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(task.id)}/cancel`, {
+        method: "POST",
+        headers: aiHeaders(config),
+    });
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "取消图片任务失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
+    const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
+    if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "取消图片任务失败", payload);
+    return payload.data;
+}

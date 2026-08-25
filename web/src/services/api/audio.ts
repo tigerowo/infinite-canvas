@@ -183,6 +183,19 @@ export async function pollCanvasAudioTaskStatus(taskId: string): Promise<CanvasA
     return payload.data;
 }
 
+export async function cancelCanvasAudioTask(taskId: string): Promise<CanvasAudioTask> {
+    const token = useUserStore.getState().token;
+    if (!token) throw new Error("请先登录后再使用云端渠道");
+    const response = await fetch(`/api/v1/canvas/audio-tasks/${encodeURIComponent(taskId)}/cancel`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw new Error(await readFetchError(response, "取消音频任务失败"));
+    const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasAudioTask };
+    if (payload.code !== 0 || !payload.data) throw new Error(payload.msg || "取消音频任务失败");
+    return payload.data;
+}
+
 async function buildAudioSpeechRequest(config: AiConfig, model: string, prompt: string, referenceAudio?: ReferenceAudio) {
     if (isGeminiTtsModel(model) && isGeminiConfig(config, model)) {
         if (referenceAudio) throw new Error("Gemini TTS 不支持参考音频");

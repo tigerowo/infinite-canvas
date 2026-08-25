@@ -117,7 +117,7 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	upstreamPath := resolveAIProxyPath(channel, modelName, path)
-	request, err := http.NewRequest(http.MethodGet, resolveAIProxyURL(channel, modelName, upstreamPath), nil)
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, resolveAIProxyURL(channel, modelName, upstreamPath), nil)
 	if err != nil {
 		Fail(w, "AI 接口请求失败")
 		return
@@ -196,7 +196,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 			return
 		}
 	}
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, upstreamPath), err)
 		Fail(w, "AI 接口请求失败")
@@ -253,7 +253,7 @@ type aiLogContext struct {
 func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.ModelChannel, logContext aiLogContext, onFailure func()) {
 	response, err := service.HTTPClientForChannel(channel).Do(request)
 	if err != nil {
-		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)
+		log.Printf("AI proxy request failed: url=%s err=%s", service.RedactSensitiveText(request.URL.String()), service.RedactSensitiveText(err.Error()))
 		if onFailure != nil {
 			onFailure()
 		}
@@ -265,7 +265,7 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 
 	if response.StatusCode >= http.StatusBadRequest {
 		payload, _ := io.ReadAll(io.LimitReader(response.Body, 256*1024))
-		log.Printf("AI upstream error: url=%s status=%d body=%s", request.URL.String(), response.StatusCode, strings.TrimSpace(string(payload)))
+		log.Printf("AI upstream error: url=%s status=%d body=%s", service.RedactSensitiveText(request.URL.String()), response.StatusCode, service.RedactSensitiveText(strings.TrimSpace(string(payload))))
 		if onFailure != nil {
 			onFailure()
 		}
@@ -453,6 +453,17 @@ func summarizeMultipartAIRequest(body []byte, contentType string) string {
 }
 
 func readUpstreamAIErrorMessage(body []byte, statusCode int) string {
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return "上游接口鉴权失败（401），请检查 API Key"
+	case http.StatusForbidden:
+		return "上游接口拒绝访问（403），请检查套餐或模型权限"
+	case http.StatusTooManyRequests:
+		return "上游接口限流或额度不足（429），请稍后重试"
+	}
+	if statusCode >= http.StatusInternalServerError {
+		return fmt.Sprintf("上游接口暂时不可用（%d）", statusCode)
+	}
 	var payload struct {
 		Error *struct {
 			Message string `json:"message"`
@@ -462,13 +473,13 @@ func readUpstreamAIErrorMessage(body []byte, statusCode int) string {
 	}
 	if len(body) > 0 && json.Unmarshal(body, &payload) == nil {
 		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-			return payload.Error.Message
+			return service.RedactSensitiveText(payload.Error.Message)
 		}
 		if strings.TrimSpace(payload.Msg) != "" {
-			return payload.Msg
+			return service.RedactSensitiveText(payload.Msg)
 		}
 		if strings.TrimSpace(payload.Message) != "" {
-			return payload.Message
+			return service.RedactSensitiveText(payload.Message)
 		}
 	}
 	if statusCode > 0 {

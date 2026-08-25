@@ -7,6 +7,8 @@ import (
 	"gorm.io/gorm"
 )
 
+var activeCanvasTaskStatuses = []string{"queued", "processing", "running", "in_progress"}
+
 func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {
 	db, err := DB()
 	if err != nil {
@@ -22,9 +24,24 @@ func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, e
 	}
 
 	return task, db.Model(&model.CanvasImageTask{}).
-		Where("user_id = ? AND id = ?", task.UserID, task.ID).
+		Where("user_id = ? AND id = ? AND status IN ?", task.UserID, task.ID, activeCanvasTaskStatuses).
 		Select("*").
 		Updates(&task).Error
+}
+
+func CancelUserCanvasImageTask(userID string, id string, completedAt string) (model.CanvasImageTask, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.CanvasImageTask{}, false, err
+	}
+	result := db.Model(&model.CanvasImageTask{}).
+		Where("user_id = ? AND id = ? AND status IN ?", userID, strings.TrimSpace(id), activeCanvasTaskStatuses).
+		Updates(map[string]any{"status": "cancelled", "error": "任务已取消", "completed_at": completedAt, "updated_at": completedAt})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return model.CanvasImageTask{}, false, result.Error
+	}
+	task, found, err := GetUserCanvasImageTask(userID, id)
+	return task, found, err
 }
 
 func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bool, error) {
@@ -54,7 +71,7 @@ func ListUserCanvasImageTasks(userID string, sources []string, limit int) ([]mod
 		query = query.Where("source IN ?", sources)
 	}
 	err = query.
-		Where("status IN ?", []string{"queued", "processing", "running", "in_progress"}).
+		Where("status IN ?", activeCanvasTaskStatuses).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&tasks).Error

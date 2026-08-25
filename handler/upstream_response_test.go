@@ -63,6 +63,14 @@ func TestCopyLimitedUpstreamResponseStopsAtLimit(t *testing.T) {
 	}
 }
 
+func TestLimitedResponseRecorderStopsAtLimit(t *testing.T) {
+	recorder := newLimitedResponseRecorder(4)
+	written, err := recorder.Write([]byte("12345"))
+	if written != 4 || err == nil || !recorder.exceeded || recorder.Body.String() != "1234" {
+		t.Fatalf("written=%d exceeded=%v body=%q err=%v", written, recorder.exceeded, recorder.Body.String(), err)
+	}
+}
+
 func TestVideoTaskPollBudgetError(t *testing.T) {
 	current := time.Now()
 	tests := []struct {

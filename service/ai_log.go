@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 )
 
 const (
@@ -58,6 +58,9 @@ type AICallLogInput struct {
 }
 
 func SaveAICallLog(input AICallLogInput) {
+	input.RequestBody = RedactSensitiveText(input.RequestBody)
+	input.ResponseBody = RedactSensitiveText(input.ResponseBody)
+	input.Error = RedactSensitiveText(input.Error)
 	responseBody := normalizeAICallResponseLog(input.ResponseBody, input.Error)
 	errorText := normalizeAICallErrorLog(input.Error, input.ResponseBody)
 	item := model.AICallLog{
