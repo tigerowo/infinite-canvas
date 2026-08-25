@@ -17,3 +17,14 @@ func TestRedactSensitiveText(t *testing.T) {
 		t.Fatalf("脱敏标记不足：%s", cleaned)
 	}
 }
+
+func TestSanitizeAIStoredPayloadRedactsEmbeddedImageData(t *testing.T) {
+	payload := `{"choices":[{"message":{"content":"![generated image](data:image/png;base64,` + strings.Repeat("A", 600) + `)"}}]}`
+	cleaned := SanitizeAIStoredPayload(payload)
+	if strings.Contains(cleaned, strings.Repeat("A", 100)) {
+		t.Fatalf("任务详情仍包含长 Base64：%s", cleaned)
+	}
+	if !strings.Contains(cleaned, "redacted") {
+		t.Fatalf("任务详情缺少脱敏标记：%s", cleaned)
+	}
+}

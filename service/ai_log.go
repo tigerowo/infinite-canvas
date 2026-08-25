@@ -355,6 +355,10 @@ func formatAICallLogPayload(raw string) string {
 	return redactLargePlainLogText(raw)
 }
 
+func SanitizeAIStoredPayload(value string) string {
+	return truncateLogText(formatAICallLogPayload(RedactSensitiveText(value)), aiLogErrorTextLimit)
+}
+
 func formatEventStreamLog(raw string) string {
 	lines := strings.Split(raw, "\n")
 	formatted := make([]string, 0, len(lines))
@@ -523,7 +527,7 @@ func redactLargeLogStrings(value *any) {
 }
 
 func isLargeLogString(value string) bool {
-	if strings.HasPrefix(value, "data:image/") {
+	if strings.HasPrefix(value, "data:image/") || longDataURLPattern.MatchString(value) {
 		return true
 	}
 	return len(value) > 4096 && looksLikeLogBase64(value)

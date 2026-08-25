@@ -31,7 +31,7 @@ type ResponsesApiResponse = {
 };
 
 type ChatImagesApiResponse = {
-    choices?: Array<{ message?: { images?: Array<{ image_url?: { url?: string } }> } }>;
+    choices?: Array<{ message?: { content?: unknown; images?: Array<{ image_url?: { url?: string } }> } }>;
     error?: { message?: string };
     code?: number;
     msg?: string;
@@ -74,6 +74,8 @@ type ParsedImageResponse = {
     images: GeneratedImage[];
     responseBody: string;
 };
+
+const embeddedImageDataUrlPattern = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/gi;
 
 export class ImageRequestError extends Error {
     detail?: string;
@@ -267,14 +269,23 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
     return images;
 }
 
-function parseChatImagesPayload(payload: ChatImagesApiResponse): GeneratedImage[] {
+function collectEmbeddedImageDataUrls(value: unknown, depth = 0): string[] {
+    if (depth > 5 || value == null) return [];
+    if (typeof value === "string") return value.match(embeddedImageDataUrlPattern) || [];
+    if (Array.isArray(value)) return value.flatMap((item) => collectEmbeddedImageDataUrls(item, depth + 1));
+    if (typeof value !== "object") return [];
+    const record = value as Record<string, unknown>;
+    return ["content", "text", "url", "image_url"].flatMap((key) => collectEmbeddedImageDataUrls(record[key], depth + 1));
+}
+
+export function parseChatImagesPayload(payload: ChatImagesApiResponse): GeneratedImage[] {
     if (typeof payload.code === "number" && payload.code !== 0) throw new ImageRequestError(payload.msg || "请求失败", payload);
     if (payload.error?.message) throw new ImageRequestError(payload.error.message, payload);
-    const images = payload.choices
-        ?.flatMap((choice) => choice.message?.images || [])
-        .map((item) => item.image_url?.url || "")
-        .filter(Boolean)
-        .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    const imageUrls = payload.choices?.flatMap((choice) => [
+        ...(choice.message?.images || []).map((item) => item.image_url?.url || ""),
+        ...collectEmbeddedImageDataUrls(choice.message?.content),
+    ]).filter(Boolean) || [];
+    const images = Array.from(new Set(imageUrls)).map((dataUrl) => ({ id: nanoid(), dataUrl }));
     if (!images.length) throw new ImageRequestError("Chat Completions 没有返回图片", payload);
     return images;
 }
@@ -611,7 +622,7 @@ function redactLogImages(value: unknown) {
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
         const item = record[key];
-        if (typeof item === "string" && (item.startsWith("data:image/") || item.length > 2048 && looksLikeBase64(item))) {
+        if (typeof item === "string" && (item.startsWith("data:image/") || collectEmbeddedImageDataUrls(item).length > 0 || item.length > 2048 && looksLikeBase64(item))) {
             record[key] = `[redacted image/string len=${item.length}]`;
             continue;
         }

@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,8 @@ const canvasGenerationTaskDeadline = 5 * time.Minute
 const canvasGenerationResponseLimit = int64(32 * 1024 * 1024)
 
 var errCanvasGenerationResponseTooLarge = errors.New("画布生成任务响应超过 32 MiB 限制")
+
+var embeddedImageDataURLPattern = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+`)
 
 var (
 	canvasImageTaskCancels sync.Map
@@ -365,7 +368,7 @@ func runCanvasImageTask(ctx context.Context, cancel context.CancelFunc, task mod
 	task.Status = "succeeded"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
-	task.ResponseBody = string(payload)
+	task.ResponseBody = service.SanitizeAIStoredPayload(string(payload))
 	task.ImageURL = imageURLs[0]
 	if collectAll {
 		task.ImageURLs = imageURLs
@@ -485,7 +488,7 @@ func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detai
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
 	task.Error = service.RedactSensitiveText(firstNonEmpty(message, "图片生成失败"))
-	task.ErrorDetail = service.RedactSensitiveText(detail)
+	task.ErrorDetail = service.SanitizeAIStoredPayload(detail)
 	_, _ = service.SaveCanvasImageTask(task)
 }
 
@@ -493,7 +496,7 @@ func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detai
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
 	task.Error = service.RedactSensitiveText(firstNonEmpty(message, "音频生成失败"))
-	task.ErrorDetail = service.RedactSensitiveText(detail)
+	task.ErrorDetail = service.SanitizeAIStoredPayload(detail)
 	_, _ = service.SaveCanvasAudioTask(task)
 }
 
@@ -817,6 +820,7 @@ func collectImageCandidates(value any, depth int, includeChatImages bool) []stri
 		if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "data:image/") || looksLikeBase64(text) {
 			return []string{text}
 		}
+		return embeddedImageDataURLPattern.FindAllString(text, -1)
 	case []any:
 		var result []string
 		for _, item := range typed {

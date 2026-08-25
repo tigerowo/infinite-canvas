@@ -14,6 +14,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 - 画布、生图台和视频台的模型选择已统一合并系统公共渠道与连接中心用户 Provider；云端模式下用户 Provider 使用 `X-User-Model-Channel-ID`，系统渠道继续使用 `X-Model-Channel-ID`，退出登录会清除托管目录，未登录旧本地配置仍可继续使用。
 - OpenAI 兼容、Gemini 原生与通用 HTTP adapter 已通过本地 Mock 模型列表契约；通用 HTTP 使用原样 Base URL 和标准业务路径，支持 Bearer 或自定义请求头鉴权。
 - Mock 失败场景覆盖无效 JSON、鉴权失败、超大响应和请求超时；RunningHub 已完成一次真实任务，OpenAI、Gemini 和通用 HTTP 的最低成本请求仍需用户授权验证。
+- OpenAI 兼容 Chat 生图现可提取 `choices[].message.content` 中 Markdown 包裹的图片 Data URL；任务响应和错误详情保存前会摘要长 Base64。已用真实 OpenOx 返回结构补充 Go 与 Vitest 回归测试，重启 Go 后端后的 UI 成功态仍待人工确认。
 - 连接中心 `/providers` 已在隔离 SQLite 中完成登录后桌面与 390px 窄屏人工回归；后续收到正式 STITCH 实稿后仍需做像素级复核。
 - 旧 `localChannels` 的只读迁移预览、精确去重、事务导入，以及可选的旧明文密钥清理与渠道 ID 替换；迁移不会测试连接或请求真实 API。
 - API Provider 新增、编辑、复制、启停、设为默认、删除及历史引用冲突提示。
