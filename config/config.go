@@ -27,6 +27,8 @@ type Config struct {
 	CLIHelperEnabled    bool   `env:"CLI_HELPER_ENABLED" envDefault:"false"`
 	CLIHelperManifest   string `env:"CLI_HELPER_MANIFEST"`
 	CLIHelperPublicKey  string `env:"CLI_HELPER_PUBLIC_KEY"`
+	CLIHelperSocket     string `env:"CLI_HELPER_SOCKET"`
+	CLIHelperSecret     string `env:"CLI_HELPER_SHARED_SECRET"`
 }
 
 var Cfg Config

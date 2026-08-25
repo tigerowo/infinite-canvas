@@ -71,7 +71,7 @@ func TestCLIHelperManifestRequiresValidSignatureAndExpiry(t *testing.T) {
 	}
 }
 
-func TestDetectCLIProviderRunsOnlyVersionProbe(t *testing.T) {
+func TestExecuteCLICompanionVersionRunsOnlyVersionProbe(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Mac CLI helper only runs on macOS")
 	}
@@ -97,18 +97,15 @@ func TestDetectCLIProviderRunsOnlyVersionProbe(t *testing.T) {
 	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "codex", "codex", cliTestFileHash(t, path)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	previousEnabled := config.Cfg.CLIHelperEnabled
 	previousManifest := config.Cfg.CLIHelperManifest
 	previousPublicKey := config.Cfg.CLIHelperPublicKey
-	config.Cfg.CLIHelperEnabled = true
 	config.Cfg.CLIHelperManifest = manifestPath
 	config.Cfg.CLIHelperPublicKey = base64.StdEncoding.EncodeToString(publicKey)
 	t.Cleanup(func() {
-		config.Cfg.CLIHelperEnabled = previousEnabled
 		config.Cfg.CLIHelperManifest = previousManifest
 		config.Cfg.CLIHelperPublicKey = previousPublicKey
 	})
-	result, status := detectCLIProvider(context.Background(), model.Provider{Protocol: "codex"})
+	result, status := executeCLICompanionVersion(context.Background(), "codex")
 	if status != model.ProviderStatusConnected || !result.Available || result.Executable != resolvedPath || result.Version != "codex-cli 1.2.3" {
 		t.Fatalf("result=%#v status=%s", result, status)
 	}

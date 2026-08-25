@@ -101,12 +101,26 @@ func detectCLIProvider(parent context.Context, item model.Provider) (CLIHelperRe
 		result.Message = "CLI helper 仅支持 macOS"
 		return result, model.ProviderStatusUnavailable
 	}
-	spec, ok := cliSpecs[item.Protocol]
+	if _, ok := cliSpecs[item.Protocol]; !ok {
+		result.Message = "CLI 类型不受支持"
+		return result, model.ProviderStatusUnavailable
+	}
+	result, status, err := requestCLICompanion(parent, item.OwnerUserID, item.ID, item.Protocol)
+	if err != nil {
+		result = CLIHelperResult{Protocol: item.Protocol, Message: "CLI 伴随进程未连接或授权失败"}
+		return result, model.ProviderStatusUnavailable
+	}
+	return result, status
+}
+
+func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
+	result := CLIHelperResult{Protocol: protocol}
+	spec, ok := cliSpecs[protocol]
 	if !ok {
 		result.Message = "CLI 类型不受支持"
 		return result, model.ProviderStatusUnavailable
 	}
-	hashes, err := loadCLIHelperHashes(item.Protocol, time.Now())
+	hashes, err := loadCLIHelperHashes(protocol, time.Now())
 	if err != nil {
 		result.Message = "CLI helper 可信清单未配置或无效"
 		return result, model.ProviderStatusUnavailable

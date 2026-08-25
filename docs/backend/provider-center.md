@@ -54,9 +54,18 @@ RunningHub 使用独立协议，不会作为 OpenAI 兼容模型渠道同步。�
 
 ## CLI 边界
 
-受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST` 和 Base64 编码的原始 Ed25519 公钥 `CLI_HELPER_PUBLIC_KEY`。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行固定的 `--version` 参数；用户保存的可执行程序字段不参与命令选择。
+受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST`、Base64 编码的原始 Ed25519 公钥 `CLI_HELPER_PUBLIC_KEY`、绝对路径 `CLI_HELPER_SOCKET` 和至少 32 个随机字节的 Base64 `CLI_HELPER_SHARED_SECRET`。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行固定的 `--version` 参数；用户保存的可执行程序字段不参与命令选择。
 
-helper 不安装或登录 CLI，不读取 shell profile，不执行真实模型调用或任意参数。执行具有 5 秒超时、2 个并发槽位、16 KiB 输出上限和敏感词脱敏；可执行文件必须位于受控目录，解析后的普通文件不得允许组或其他用户写入，文件大小不得超过 256 MiB，并且 SHA-256 必须与签名清单一致。工作目录当前只作为元数据保存，不用于版本检测。
+Web 后端不再直接启动本机 CLI。独立伴随进程入口为 `cmd/infinite-canvas-cli-helper`，只监听本机 Unix Socket；Socket 所在目录必须已存在且权限不向组或其他用户开放，Socket 启动后固定为 `0600`。先启动伴随进程，再启动 Go Web 后端：
+
+```bash
+go run ./cmd/infinite-canvas-cli-helper
+go run .
+```
+
+helper 不安装或登录 CLI，不读取 shell profile，不执行真实模型调用或任意参数。伴随进程内的固定版本检测具有 5 秒超时、2 个并发槽位、16 KiB 输出上限和敏感词脱敏；可执行文件必须位于受控目录，解析后的普通文件不得允许组或其他用户写入，文件大小不得超过 256 MiB，并且 SHA-256 必须与签名清单一致。工作目录当前只作为元数据保存，不用于版本检测。
+
+每次 Web 请求只生成一个 `version` 动作授权，授权正文绑定用户 ID、Provider ID、协议和动作。Web 后端使用共享密钥对“Unix 时间戳、随机 nonce、请求体 SHA-256”生成 HMAC-SHA256；伴随进程要求时间偏差不超过 30 秒，并在内存中保留已使用 nonce 两分钟，最多保留 4096 项。授权验证通过后立即标记 nonce 已使用，即使动作本身失败也不能重放。响应体同样绑定请求 nonce 并使用 HMAC-SHA256 签名，Web 后端验证后才读取结果。请求与响应均限制为 32 KiB，单次客户端总超时为 7 秒。
 
 可信清单是一个不超过 64 KiB 的 JSON envelope：
 
@@ -80,6 +89,8 @@ helper 不安装或登录 CLI，不读取 shell profile，不执行真实模型�
 ```
 
 清单不保存私钥、登录凭据或 API Key。私钥只用于离线签名，不应放入项目目录、环境文件或 Git。清单签名错误、过期、缺少当前协议或文件哈希不一致时，helper 返回不可用且不会启动 CLI。
+
+共享密钥属于本机进程凭据，只能保存在被忽略的本地 `.env`、受保护的启动环境或系统钥匙串中，不得写入文档、日志或 Git。当前动作 allowlist 只有 `version`。[OpenAI 官方 Codex CLI 命令参考](https://developers.openai.com/codex/cli/reference)列出的 `codex login status` 和 `codex exec` 不会自动开放；以后增加登录状态或模型调用时，必须分别增加动作、请求字段限制、用户确认界面、输出预算和审计记录。
 
 ## 旧配置
 

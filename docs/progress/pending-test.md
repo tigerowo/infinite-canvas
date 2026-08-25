@@ -40,7 +40,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 - `/api` 的写请求按普通 JSON 2 MiB、同步数据 64 MiB、AI/画布任务 128 MiB、参考媒体 81 MiB、匿名上传 129 MiB 和登录用户对象存储上传 257 MiB 限制；KIE/APIMart 单参考文件超过 32 MiB 时明确失败而不是截断。
 - 登录入口按 IP 限制 20 次/分钟、AI 生成按用户限制 60 次/分钟并发 4、上传和重型上游操作限制 30 次/分钟并发 2、下载限制 120 次/分钟并发 4；超限返回 HTTP 429 和 `Retry-After`。
 - 每个用户最近 30 分钟最多同时保留 8 个视频、画布图片和画布音频活动任务；并发创建时尚未落库的槽位也参与计算。
-- CLI Provider 默认显示 helper 未启用；显式开启后，本机回环 Codex CLI 版本检测成功、非回环转发来源拒绝已人工验证，Gemini/即梦的实机缺失和成功状态仍待对应 CLI 安装后验证。
+- CLI Provider 默认显示 helper 未启用；旧同进程版本曾完成人工检测，改为独立伴随进程后需重新验证本机回环 Codex CLI、伴随进程未启动、Socket 权限错误、签名清单无效及 Gemini/即梦缺失状态。
 - CLI helper 启用后还必须读取绝对路径的 Ed25519 签名清单；清单签名、过期时间、协议/候选名和解析后二进制 SHA-256 全部通过才执行固定 `--version`。新增有效、篡改、过期、哈希不匹配和可写文件契约测试，按项目约束尚未执行。
+- Web 后端的 CLI 检测改为调用独立 `cmd/infinite-canvas-cli-helper` Unix Socket 进程；每次动作授权绑定用户、Provider、协议和动作，使用 30 秒 HMAC、随机 nonce、两分钟防重放缓存和签名响应。新增有效授权、过期、正文篡改、nonce 重放及私有 Socket 客户端契约测试，按项目约束尚未执行。
 - RunningHub 应用/工作流提交、查询和累计读取预算已通过本地模拟服务测试；真实账号的一次账户检测与一次工作流任务已成功，任务状态为 `QUEUED → RUNNING → SUCCESS` 并返回 1 个 PNG。
 - Linux.do OAuth state 应带签名、时效并与 HttpOnly SameSite Cookie 匹配；回调 URL 只携带两分钟有效且只能使用一次的交换码，不再出现 JWT。
