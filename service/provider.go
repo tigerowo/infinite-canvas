@@ -174,7 +174,7 @@ func SaveCurrentUserProvider(ctx context.Context, input ProviderInput) (Provider
 		}
 	}
 
-	changedConnection := item.Protocol != input.Protocol || item.BaseURL != input.BaseURL || item.DefaultModel != input.DefaultModel || credentialsChanged
+	changedConnection := item.Protocol != input.Protocol || item.BaseURL != input.BaseURL || credentialsChanged
 	protocolChanged := item.Protocol != input.Protocol
 	item.Kind = input.Kind
 	item.Protocol = input.Protocol
