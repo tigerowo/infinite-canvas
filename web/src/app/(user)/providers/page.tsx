@@ -92,12 +92,14 @@ export default function ProvidersPage() {
     const markDefault = useProviderStore((state) => state.setDefault);
     const test = useProviderStore((state) => state.test);
     const detectCLI = useProviderStore((state) => state.detectCLI);
+    const checkCLIAuth = useProviderStore((state) => state.checkCLIAuth);
     const migrate = useProviderStore((state) => state.migrate);
     const [activeKind, setActiveKind] = useState<ProviderKind>("api");
     const [drawerOpen, setDrawerOpen] = useState(false);
     const [editing, setEditing] = useState<Provider | null>(null);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
+    const [checkingAuth, setCheckingAuth] = useState(false);
     const [migrationOpen, setMigrationOpen] = useState(false);
     const [migrationPreview, setMigrationPreview] = useState<ProviderMigrationPreview | null>(null);
     const [cleanupLegacy, setCleanupLegacy] = useState(false);
@@ -205,6 +207,21 @@ export default function ProvidersPage() {
             message.error(testError instanceof Error ? testError.message : "连接测试失败");
         } finally {
             setTesting(false);
+        }
+    }
+
+    async function checkLoginStatus() {
+        if (!token || !editing || editing.protocol !== "codex") return;
+        setCheckingAuth(true);
+        try {
+            const result = await checkCLIAuth(token, editing.id);
+            if (result.authStatus === "authenticated") message.success(result.message);
+            else if (result.authStatus === "unauthenticated") message.warning(result.message);
+            else message.info(result.message);
+        } catch (authError) {
+            message.error(authError instanceof Error ? authError.message : "登录状态检测失败");
+        } finally {
+            setCheckingAuth(false);
         }
     }
 
@@ -440,10 +457,15 @@ export default function ProvidersPage() {
                 onClose={() => setDrawerOpen(false)}
                 footer={
                     <div className="flex items-center justify-between gap-3">
-                        <div>
+                        <div className="flex flex-wrap gap-2">
                             {editing ? (
                                 <Button icon={<RefreshCw className="size-4" />} loading={testing} onClick={() => void runTest(formKind === "api")}>
                                     {formKind === "cli" ? "检测 CLI" : formProtocol === "runninghub" ? "检测 OpenAPI" : "测试并拉取模型"}
+                                </Button>
+                            ) : null}
+                            {editing?.kind === "cli" && editing.protocol === "codex" && formProtocol === "codex" ? (
+                                <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
+                                    检查登录状态
                                 </Button>
                             ) : null}
                         </div>
@@ -542,6 +564,13 @@ export default function ProvidersPage() {
                         </>
                     ) : (
                         <>
+                            <Alert
+                                className="mb-5"
+                                type="info"
+                                showIcon
+                                title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : "当前仅检测 CLI 安装与版本"}
+                                description={formProtocol === "codex" ? "保存后可逐次授权执行官方 codex login status；不会启动登录流程、浏览器或模型调用。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
+                            />
                             <Form.Item name="executable" label="检测到的可执行程序" extra="该字段由受控 helper 写入；页面输入不会决定执行目标。">
                                 <Input readOnly placeholder="保存后点击“检测 CLI”" />
                             </Form.Item>

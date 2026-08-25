@@ -60,6 +60,19 @@ func DetectUserCLIProvider(w http.ResponseWriter, r *http.Request, providerID st
 	OK(w, result)
 }
 
+func CheckUserCLIProviderAuth(w http.ResponseWriter, r *http.Request, providerID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	result, err := service.CheckCurrentUserCLIProviderAuth(r.Context(), providerID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
 func isLoopbackWebRequest(r *http.Request) bool {
 	remoteHost, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err != nil {

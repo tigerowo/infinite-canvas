@@ -35,6 +35,11 @@ const (
 )
 
 const (
+	cliCompanionActionVersion    = "version"
+	cliCompanionActionAuthStatus = "auth-status"
+)
+
+const (
 	cliCompanionTimestampHeader = "X-CLI-Helper-Timestamp"
 	cliCompanionNonceHeader     = "X-CLI-Helper-Nonce"
 	cliCompanionSignatureHeader = "X-CLI-Helper-Signature"
@@ -59,7 +64,7 @@ type cliCompanionActionResponse struct {
 type cliCompanionHandler struct {
 	secret  []byte
 	now     func() time.Time
-	execute func(context.Context, string) (CLIHelperResult, model.ProviderStatus)
+	execute func(context.Context, string, string) (CLIHelperResult, model.ProviderStatus)
 	mu      sync.Mutex
 	seen    map[string]time.Time
 }
@@ -69,7 +74,7 @@ func NewCLICompanionHandler() (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	handler := &cliCompanionHandler{secret: secret, now: time.Now, execute: executeCLICompanionVersion, seen: map[string]time.Time{}}
+	handler := &cliCompanionHandler{secret: secret, now: time.Now, execute: executeCLICompanionAction, seen: map[string]time.Time{}}
 	mux := http.NewServeMux()
 	mux.Handle(cliCompanionActionPath, handler)
 	return mux, nil
@@ -94,11 +99,11 @@ func (handler *cliCompanionHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	decoder.DisallowUnknownFields()
 	decodeErr := decoder.Decode(&input)
 	trailingErr := decoder.Decode(&struct{}{})
-	if decodeErr != nil || trailingErr != io.EOF || strings.TrimSpace(input.Action) != "version" || !validCLICompanionID(input.UserID) || !validCLICompanionID(input.ProviderID) || cliSpecs[input.Protocol].Candidates == nil {
+	if decodeErr != nil || trailingErr != io.EOF || !validCLICompanionAction(input.Action) || !validCLICompanionID(input.UserID) || !validCLICompanionID(input.ProviderID) || cliSpecs[input.Protocol].Candidates == nil {
 		handler.writeResponse(w, http.StatusBadRequest, r.Header.Get(cliCompanionNonceHeader), cliCompanionActionResponse{Error: "CLI 动作不受支持"})
 		return
 	}
-	result, status := handler.execute(r.Context(), input.Protocol)
+	result, status := handler.execute(r.Context(), input.Action, input.Protocol)
 	handler.writeResponse(w, http.StatusOK, r.Header.Get(cliCompanionNonceHeader), cliCompanionActionResponse{Result: result, Status: status})
 }
 
@@ -143,6 +148,13 @@ func (handler *cliCompanionHandler) writeResponse(w http.ResponseWriter, status 
 }
 
 func requestCLICompanion(parent context.Context, userID string, providerID string, protocol string) (CLIHelperResult, model.ProviderStatus, error) {
+	return requestCLICompanionAction(parent, userID, providerID, protocol, cliCompanionActionVersion)
+}
+
+func requestCLICompanionAction(parent context.Context, userID string, providerID string, protocol string, action string) (CLIHelperResult, model.ProviderStatus, error) {
+	if !validCLICompanionAction(action) {
+		return CLIHelperResult{}, model.ProviderStatusUnavailable, errors.New("CLI companion action is invalid")
+	}
 	secret, err := cliCompanionSharedSecret()
 	if err != nil {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, err
@@ -151,7 +163,7 @@ func requestCLICompanion(parent context.Context, userID string, providerID strin
 	if err != nil {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, err
 	}
-	body, _ := json.Marshal(cliCompanionActionRequest{Action: "version", UserID: userID, ProviderID: providerID, Protocol: protocol})
+	body, _ := json.Marshal(cliCompanionActionRequest{Action: action, UserID: userID, ProviderID: providerID, Protocol: protocol})
 	nonceBytes := make([]byte, 24)
 	if _, err := rand.Read(nonceBytes); err != nil {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, err
@@ -196,10 +208,38 @@ func requestCLICompanion(parent context.Context, userID string, providerID strin
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, errors.New("CLI companion response signature is invalid")
 	}
 	var output cliCompanionActionResponse
-	if json.Unmarshal(responseBody, &output) != nil || response.StatusCode != http.StatusOK || output.Error != "" || output.Result.Protocol != protocol || !validCLICompanionStatus(output.Status) {
+	if json.Unmarshal(responseBody, &output) != nil || response.StatusCode != http.StatusOK || output.Error != "" || output.Result.Protocol != protocol || !validCLICompanionStatus(output.Status) || !validCLICompanionResult(action, output.Result) {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, errors.New("CLI companion rejected the action")
 	}
 	return output.Result, output.Status, nil
+}
+
+func validCLICompanionResult(action string, result CLIHelperResult) bool {
+	switch action {
+	case cliCompanionActionVersion:
+		return result.AuthStatus == ""
+	case cliCompanionActionAuthStatus:
+		if result.Version != "" {
+			return false
+		}
+		switch result.AuthStatus {
+		case "", "authenticated", "unauthenticated", "unsupported":
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+func validCLICompanionAction(action string) bool {
+	switch action {
+	case cliCompanionActionVersion, cliCompanionActionAuthStatus:
+		return true
+	default:
+		return false
+	}
 }
 
 func validCLICompanionID(value string) bool {

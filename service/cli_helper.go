@@ -48,6 +48,7 @@ type CLIHelperResult struct {
 	Protocol   string `json:"protocol"`
 	Executable string `json:"executable,omitempty"`
 	Version    string `json:"version,omitempty"`
+	AuthStatus string `json:"authStatus,omitempty"`
 	Message    string `json:"message"`
 }
 
@@ -87,6 +88,33 @@ func DetectCurrentUserCLIProvider(ctx context.Context, providerID string) (CLIHe
 	}
 	if _, err := repository.SaveProvider(item); err != nil {
 		return CLIHelperResult{}, err
+	}
+	return result, nil
+}
+
+func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CLIHelperResult, error) {
+	_, item, err := currentUserProvider(ctx, providerID)
+	if err != nil {
+		return CLIHelperResult{}, err
+	}
+	if item.Kind != model.ProviderKindCLI || !item.Enabled {
+		return CLIHelperResult{}, safeMessageError{message: "CLI 渠道不可用"}
+	}
+	if _, ok := cliSpecs[item.Protocol]; !ok {
+		return CLIHelperResult{Protocol: item.Protocol, AuthStatus: "unsupported", Message: "CLI 类型不受支持"}, nil
+	}
+	if item.Protocol != "codex" {
+		return CLIHelperResult{Protocol: item.Protocol, AuthStatus: "unsupported", Message: "该 CLI 暂无已确认的非交互登录状态命令"}, nil
+	}
+	if !config.Cfg.CLIHelperEnabled {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "Mac CLI helper 未启用"}, nil
+	}
+	if runtime.GOOS != "darwin" {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI helper 仅支持 macOS"}, nil
+	}
+	result, _, err := requestCLICompanionAction(ctx, item.OwnerUserID, item.ID, item.Protocol, cliCompanionActionAuthStatus)
+	if err != nil {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI 伴随进程未连接或授权失败"}, nil
 	}
 	return result, nil
 }
@@ -160,6 +188,64 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 	result.Executable = executable
 	result.Version = version
 	result.Message = "CLI 检测成功"
+	return result, model.ProviderStatusConnected
+}
+
+func executeCLICompanionAction(parent context.Context, action string, protocol string) (CLIHelperResult, model.ProviderStatus) {
+	switch action {
+	case cliCompanionActionVersion:
+		return executeCLICompanionVersion(parent, protocol)
+	case cliCompanionActionAuthStatus:
+		return executeCLICompanionAuthStatus(parent, protocol)
+	default:
+		return CLIHelperResult{Protocol: protocol, Message: "CLI 动作不受支持"}, model.ProviderStatusUnavailable
+	}
+}
+
+func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
+	result := CLIHelperResult{Protocol: protocol}
+	if protocol != "codex" {
+		result.AuthStatus = "unsupported"
+		result.Message = "该 CLI 暂无已确认的非交互登录状态命令"
+		return result, model.ProviderStatusUnavailable
+	}
+	hashes, err := loadCLIHelperHashes(protocol, time.Now())
+	if err != nil {
+		result.Message = "CLI helper 可信清单未配置或无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	select {
+	case cliHelperSlots <- struct{}{}:
+		defer func() { <-cliHelperSlots }()
+	default:
+		result.Message = "CLI helper 正忙，请稍后重试"
+		return result, model.ProviderStatusTimeout
+	}
+	executable, err := findControlledCLIExecutable(cliSpecs[protocol].Candidates, hashes)
+	if err != nil {
+		result.Message = "未检测到受支持的 CLI"
+		return result, model.ProviderStatusUnavailable
+	}
+	result.Available = true
+	result.Executable = executable
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "login", "status")
+	command.Env = controlledCLIEnvironment()
+	var output cappedCLIOutput
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			result.Message = "CLI 登录状态检测超时"
+			return result, model.ProviderStatusTimeout
+		}
+		result.AuthStatus = "unauthenticated"
+		result.Message = "Codex CLI 未登录或凭据不可用"
+		return result, model.ProviderStatusUnavailable
+	}
+	result.AuthStatus = "authenticated"
+	result.Message = "Codex CLI 已登录"
 	return result, model.ProviderStatusConnected
 }
 

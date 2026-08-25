@@ -111,6 +111,59 @@ func TestExecuteCLICompanionVersionRunsOnlyVersionProbe(t *testing.T) {
 	}
 }
 
+func TestExecuteCLICompanionAuthStatusRunsOnlyCodexStatusProbe(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Mac CLI helper only runs on macOS")
+	}
+	directory := t.TempDir()
+	resolvedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRoots := cliAllowedRoots
+	cliAllowedRoots = func() []string { return []string{directory, resolvedDirectory} }
+	t.Cleanup(func() { cliAllowedRoots = previousRoots })
+	path := filepath.Join(directory, "codex")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n[ \"$#\" -eq 2 ] && [ \"$1\" = login ] && [ \"$2\" = status ]\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(directory, "manifest.json")
+	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "codex", "codex", cliTestFileHash(t, path)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousManifest := config.Cfg.CLIHelperManifest
+	previousPublicKey := config.Cfg.CLIHelperPublicKey
+	config.Cfg.CLIHelperManifest = manifestPath
+	config.Cfg.CLIHelperPublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() {
+		config.Cfg.CLIHelperManifest = previousManifest
+		config.Cfg.CLIHelperPublicKey = previousPublicKey
+	})
+	result, status := executeCLICompanionAuthStatus(context.Background(), "codex")
+	if status != model.ProviderStatusConnected || !result.Available || result.AuthStatus != "authenticated" || result.Version != "" {
+		t.Fatalf("result=%#v status=%s", result, status)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'account=user@example.com\\n' >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "codex", "codex", cliTestFileHash(t, path)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loggedOut, loggedOutStatus := executeCLICompanionAuthStatus(context.Background(), "codex")
+	if loggedOutStatus != model.ProviderStatusUnavailable || !loggedOut.Available || loggedOut.AuthStatus != "unauthenticated" || strings.Contains(loggedOut.Message, "user@example.com") {
+		t.Fatalf("result=%#v status=%s", loggedOut, loggedOutStatus)
+	}
+	unsupported, unsupportedStatus := executeCLICompanionAuthStatus(context.Background(), "gemini-cli")
+	if unsupportedStatus != model.ProviderStatusUnavailable || unsupported.AuthStatus != "unsupported" {
+		t.Fatalf("result=%#v status=%s", unsupported, unsupportedStatus)
+	}
+}
+
 func cliTestFileHash(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

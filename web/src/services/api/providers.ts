@@ -33,6 +33,10 @@ export function detectCLIProvider(token: string, id: string) {
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/detect`, {}, token);
 }
 
+export function checkCLIProviderAuth(token: string, id: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/auth-status`, {}, token);
+}
+
 export function submitRunningHubTask(token: string, id: string, reference: string, nodeInfoList: RunningHubNodeInfo[]) {
     return apiPost<RunningHubTaskResult>(`/api/v1/providers/${encodeURIComponent(id)}/runninghub/tasks`, { reference, nodeInfoList }, token);
 }

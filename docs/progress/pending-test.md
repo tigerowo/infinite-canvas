@@ -43,5 +43,6 @@ description: 当前版本已实现但仍需人工验证的变更项
 - CLI Provider 默认显示 helper 未启用；旧同进程版本曾完成人工检测，改为独立伴随进程后需重新验证本机回环 Codex CLI、伴随进程未启动、Socket 权限错误、签名清单无效及 Gemini/即梦缺失状态。
 - CLI helper 启用后还必须读取绝对路径的 Ed25519 签名清单；清单签名、过期时间、协议/候选名和解析后二进制 SHA-256 全部通过才执行固定 `--version`。新增有效、篡改、过期、哈希不匹配和可写文件契约测试，按项目约束尚未执行。
 - Web 后端的 CLI 检测改为调用独立 `cmd/infinite-canvas-cli-helper` Unix Socket 进程；每次动作授权绑定用户、Provider、协议和动作，使用 30 秒 HMAC、随机 nonce、两分钟防重放缓存和签名响应。新增有效授权、过期、正文篡改、nonce 重放及私有 Socket 客户端契约测试，按项目约束尚未执行。
+- CLI Provider 编辑页新增独立“检查登录状态”入口；仅 Codex 逐次授权执行固定 `codex login status`，只返回登录/未登录枚举，不返回账号或认证方式。Gemini 与即梦因没有已确认的非交互状态命令不显示入口，也不会触发交互登录；新增伴随进程动作绑定、固定参数及前端接口路径契约测试，按项目约束尚未执行。
 - RunningHub 应用/工作流提交、查询和累计读取预算已通过本地模拟服务测试；真实账号的一次账户检测与一次工作流任务已成功，任务状态为 `QUEUED → RUNNING → SUCCESS` 并返回 1 个 PNG。
 - Linux.do OAuth state 应带签名、时效并与 HttpOnly SameSite Cookie 匹配；回调 URL 只携带两分钟有效且只能使用一次的交换码，不再出现 JWT。

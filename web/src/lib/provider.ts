@@ -63,6 +63,7 @@ export type CLIHelperResult = {
     protocol: string;
     executable?: string;
     version?: string;
+    authStatus?: "authenticated" | "unauthenticated" | "unsupported";
     message: string;
 };
 
