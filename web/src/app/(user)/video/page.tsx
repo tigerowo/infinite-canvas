@@ -1,7 +1,7 @@
 "use client";
 import axios from "axios";
 
-import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ChevronUp, ClipboardPaste, CloudUpload, Copy, Download, FolderPlus, History, LoaderCircle, Music2, PanelBottom, PanelLeft, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
+import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ChevronUp, CircleStop, ClipboardPaste, CloudUpload, Copy, Download, FolderPlus, History, LoaderCircle, Music2, PanelBottom, PanelLeft, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { App, Button, Checkbox, Empty, Input, Modal, Switch, Tag, Typography } from "antd";
 import localforage from "localforage";
@@ -21,7 +21,7 @@ import { COGVIDEOX3_DURATIONS, isAgnesVideoV25Model, isCogVideoX3Model, modelKey
 import { deleteStoredMedia, downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer } from "@/services/file-storage";
 import { deleteStoredImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { deleteVideoGenerationLogs, fetchVideoGenerationLogs, saveVideoGenerationLogs } from "@/services/api/generation-logs";
-import { createVideoGenerationTask, deleteVideoGenerationTask, listVideoGenerationTasks, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, VideoRequestError, type VideoResponse } from "@/services/api/video";
+import { cancelVideoGenerationTask, createVideoGenerationTask, deleteVideoGenerationTask, listVideoGenerationTasks, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, VideoRequestError, type VideoResponse } from "@/services/api/video";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { channelProtocolForConfig, modelChannelsForConfig, useConfigStore, useEffectiveConfig, type AiConfig, type VideoElementItem, type VideoElementReference } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -146,6 +146,7 @@ export default function VideoPage() {
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [taskCount, setTaskCount] = useState(1);
     const [syncingVideoIds, setSyncingVideoIds] = useState<string[]>([]);
+    const [cancellingResultIds, setCancellingResultIds] = useState<string[]>([]);
     const pollingLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(videoConfig);
@@ -962,6 +963,28 @@ export default function VideoPage() {
         await persistVideoLog(log);
     };
 
+    const cancelVideoResult = async (result: GenerationResult) => {
+        if (!result.task || isLocalClientVideoTask(result.task)) {
+            message.warning("任务正在创建，请稍后再取消");
+            return;
+        }
+        setCancellingResultIds((value) => [...value, result.id]);
+        try {
+            const task = await cancelVideoGenerationTask(effectiveConfigRef.current, result.task);
+            if (!task) throw new Error("取消视频任务失败");
+            const error = task.error?.message || "视频任务已取消";
+            const durationMs = Math.max(0, Date.now() - result.createdAt);
+            const log = logsRef.current.find((item) => item.id === result.taskLogId || item.id === result.id);
+            if (log) await finalizeGenerationLog({ ...log, task, status: "失败", durationMs, error, errorDetail: error, lastPolledAt: Date.now() });
+            setResults((value) => value.map((item) => (item.id === result.id ? { ...item, status: "failed", task, error, errorDetail: error, durationMs, lastPolledAt: Date.now() } : item)));
+            message.success("视频任务已取消");
+        } catch (error) {
+            message.error(errorMessage(error));
+        } finally {
+            setCancellingResultIds((value) => value.filter((id) => id !== result.id));
+        }
+    };
+
     const pollPendingLogOnce = async (log: GenerationLog, resumeConfig: AiConfig) => {
         pollingLogIdsRef.current.add(log.id);
         const startedAt = log.createdAt || Date.now();
@@ -1156,6 +1179,8 @@ export default function VideoPage() {
                             onSyncLog={syncLogVideo}
                             onSaveAsset={saveResultToAssets}
                             syncingVideoIds={syncingVideoIds}
+                            onCancelResult={(result) => void cancelVideoResult(result)}
+                            cancellingResultIds={cancellingResultIds}
                         />
                     </>
                 ) : (
@@ -1185,6 +1210,8 @@ export default function VideoPage() {
                             onSyncLog={syncLogVideo}
                             onSaveAsset={saveResultToAssets}
                             syncingVideoIds={syncingVideoIds}
+                            onCancelResult={(result) => void cancelVideoResult(result)}
+                            cancellingResultIds={cancellingResultIds}
                         />
                         <WorkbenchPanel
                             layout="bottom"
@@ -1795,6 +1822,8 @@ function ResultsPanel({
     onSyncLog,
     onSaveAsset,
     syncingVideoIds,
+    onCancelResult,
+    cancellingResultIds,
 }: {
     className?: string;
     results: GenerationResult[];
@@ -1817,6 +1846,8 @@ function ResultsPanel({
     onSyncLog: (log: GenerationLog, video: GeneratedVideo, index: number) => void;
     onSaveAsset: (video: GeneratedVideo) => void;
     syncingVideoIds: string[];
+    onCancelResult: (result: GenerationResult) => void;
+    cancellingResultIds: string[];
 }) {
     const visibleResults = results.filter((result) => result.status !== "failed" || pendingCount > 0);
     const liveResultKeys = new Set(visibleResults.flatMap(videoResultIdentityKeys));
@@ -1843,7 +1874,7 @@ function ResultsPanel({
             </div>
             {totalCount ? (
                 <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                    {visibleResults.map((result, index) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} result={result} video={result.video} index={index} syncing={syncingVideoIds.includes(result.video.id)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncResult(result.id, video, index)} onSaveAsset={onSaveAsset} /> : result.status === "failed" ? <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} /> : <PendingVideoCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />))}
+                    {visibleResults.map((result, index) => (result.status === "success" && result.video ? <ResultVideoCard key={result.id} result={result} video={result.video} index={index} syncing={syncingVideoIds.includes(result.video.id)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncResult(result.id, video, index)} onSaveAsset={onSaveAsset} /> : result.status === "failed" ? <FailedVideoCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onPreview={() => onPreviewResult(result)} onRetry={() => onRetryResult(result)} /> : <PendingVideoCard key={result.id} result={result} now={now} cancelling={cancellingResultIds.includes(result.id)} cancelDisabled={!result.task || isLocalClientVideoTask(result.task)} onCancel={() => onCancelResult(result)} onCopyPrompt={onCopyPrompt} />))}
                     {visibleLogs.map((log, index) => (
                         <HistoryLogCard key={log.id} log={log} index={index} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} syncing={Boolean(log.video && syncingVideoIds.includes(log.video.id))} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onDelete={() => onDeleteLog(log)} onPreview={() => onPreviewLog(log)} onRetry={() => onRetryLog(log)} onCopyPrompt={onCopyPrompt} onDownload={onDownload} onSync={(video) => onSyncLog(log, video, index)} onSaveAsset={onSaveAsset} />
                     ))}
@@ -1879,7 +1910,7 @@ function ResultVideoCard({ result, video, index, syncing, onCopyPrompt, onDownlo
     );
 }
 
-function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
+function PendingVideoCard({ result, now, cancelling, cancelDisabled, onCancel, onCopyPrompt }: { result: GenerationResult; now: number; cancelling: boolean; cancelDisabled: boolean; onCancel: () => void; onCopyPrompt: (text: string) => void | Promise<void> }) {
     const progress = typeof result.progress === "number" ? Math.max(0, Math.min(100, Math.floor(result.progress))) : null;
     const durationMs = Math.max(0, now - result.createdAt);
     return (
@@ -1904,6 +1935,11 @@ function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationRes
                 ) : null}
             </div>
             <TaskInfo item={{ ...result, durationMs }} onCopyPrompt={onCopyPrompt} />
+            <div className="flex justify-end border-t border-stone-200 px-3 py-2 dark:border-stone-800">
+                <Button size="small" type="text" danger icon={<CircleStop className="size-3.5" />} loading={cancelling} disabled={cancelDisabled} onClick={onCancel}>
+                    {cancelDisabled ? "等待任务创建" : "取消任务"}
+                </Button>
+            </div>
         </div>
     );
 }
@@ -1911,12 +1947,13 @@ function PendingVideoCard({ result, now, onCopyPrompt }: { result: GenerationRes
 function FailedVideoCard({ result, error, onCopyPrompt, onPreview, onRetry }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onPreview: () => void; onRetry: () => void }) {
     const [detailOpen, setDetailOpen] = useState(false);
     const detail = result.errorDetail || error;
+    const cancelled = isCancelledVideoTask(result.task);
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
             <div className="relative flex aspect-video flex-col items-center justify-center gap-3 p-5 text-center">
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <AlertCircle className="size-7 text-red-500" />
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                {cancelled ? <CircleStop className="size-7 text-amber-500" /> : <AlertCircle className="size-7 text-red-500" />}
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{cancelled ? "已取消" : "生成失败"}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
@@ -1948,7 +1985,7 @@ function HistoryLogCard({ log, index, selected, active, syncing, onSelectedChang
                 </div>
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
                     {log.video ? <VideoSourceTag video={log.video} /> : null}
-                    <Tag className="m-0 text-[10px]" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : "red"}>{log.status}</Tag>
+                    <Tag className="m-0 text-[10px]" color={log.status === "成功" ? "blue" : log.status === "生成中" ? "processing" : isCancelledVideoTask(log.task) ? "warning" : "red"}>{isCancelledVideoTask(log.task) ? "已取消" : log.status}</Tag>
                 </div>
                 {log.video ? <video src={log.video.url} controls className="size-full bg-black object-contain" /> : <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500"><AlertCircle className="size-7" /><span>{log.error || "没有可显示的视频"}</span></div>}
                 <ReferenceThumbnailOverlay references={log.references} className="bottom-1.5 right-1.5" />
@@ -2518,6 +2555,10 @@ function isCompletedVideoTask(task: VideoResponse) {
 
 function isFailedVideoTask(task: VideoResponse) {
     return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((task.status || "").toLowerCase());
+}
+
+function isCancelledVideoTask(task?: VideoResponse | null) {
+    return ["cancelled", "canceled"].includes((task?.status || "").toLowerCase());
 }
 
 function isTransientVideoPollError(error: unknown) {

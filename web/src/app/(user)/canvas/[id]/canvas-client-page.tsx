@@ -8,9 +8,9 @@ import { ChevronLeft, ChevronRight, Globe2, Home, ImageIcon, Images, Layers3, Li
 import { saveAs } from "file-saver";
 
 import { deleteCanvasProjects, deleteCanvasTasks } from "@/services/api/canvas-tasks";
-import { createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
-import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
-import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
+import { cancelCanvasImageTask, createCanvasImageTask, pollCanvasImageTaskStatus, requestImageQuestion, type CanvasImageTask } from "@/services/api/image";
+import { cancelCanvasAudioTask, createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask } from "@/services/api/audio";
+import { cancelVideoGenerationTask, createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { channelProtocolForConfig, defaultConfig, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
 import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
@@ -363,6 +363,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [nodeCreatePosition, setNodeCreatePosition] = useState<Position | null>(null);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
+    const [cancellingNodeIds, setCancellingNodeIds] = useState<Set<string>>(new Set());
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
     const [showImageInfo, setShowImageInfo] = useState(false);
@@ -3503,6 +3504,43 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [confirmGeneration, effectiveConfig, message, openConfigDialog, projectId],
     );
 
+    const handleCancelNode = useCallback(
+        async (node: CanvasNodeData) => {
+            const taskId = canvasRecoverableTaskId(node);
+            if (!taskId || taskId.startsWith("client_")) {
+                message.warning("任务正在创建，请稍后再取消");
+                return;
+            }
+            setCancellingNodeIds((value) => new Set(value).add(node.id));
+            try {
+                const startedAt = node.metadata?.startedAt || Date.now();
+                if (node.type === CanvasNodeType.Video) {
+                    const config = buildGenerationConfig(effectiveConfig, node, "video");
+                    const task = await cancelVideoGenerationTask(config, canvasVideoTaskFromMetadata(node.metadata));
+                    if (!task) throw new Error("取消视频任务失败");
+                    setNodes((value) => applyCanvasVideoTaskUpdate(value, node.id, task, config, startedAt, { width: node.width, height: node.height }));
+                } else if (node.type === CanvasNodeType.Audio) {
+                    const task = await cancelCanvasAudioTask(taskId);
+                    setNodes((value) => applyCanvasAudioTaskUpdate(value, node.id, task, startedAt));
+                } else if (isCanvasImageNodeType(node.type)) {
+                    const task = await cancelCanvasImageTask(effectiveConfig, { id: taskId, status: node.metadata?.status || "processing" });
+                    if (!task) throw new Error("取消图片任务失败");
+                    setNodes((value) => applyCanvasImageTaskUpdate(value, node.id, task, startedAt, { width: node.width, height: node.height }));
+                }
+                message.success("任务已取消");
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "取消任务失败");
+            } finally {
+                setCancellingNodeIds((value) => {
+                    const next = new Set(value);
+                    next.delete(node.id);
+                    return next;
+                });
+            }
+        },
+        [effectiveConfig, message],
+    );
+
     const generateImageFromTextNode = useCallback(
         (node: CanvasNodeData) => {
             const prompt = (node.metadata?.content || node.metadata?.prompt || "").trim();
@@ -3833,6 +3871,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             onToggleBatch={toggleBatchExpanded}
                             onSetBatchPrimary={setBatchPrimary}
                             onRetry={(node) => void handleRetryNode(node)}
+                            onCancel={(node) => void handleCancelNode(node)}
+                            cancelDisabled={!canvasRecoverableTaskId(node) || canvasRecoverableTaskId(node).startsWith("client_")}
+                            isCancelling={cancellingNodeIds.has(node.id)}
                             onGenerateImage={generateImageFromTextNode}
                             onViewImage={(node) => setPreviewNodeId(node.id)}
                             onContextMenu={(event, id) => {

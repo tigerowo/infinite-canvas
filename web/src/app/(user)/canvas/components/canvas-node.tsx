@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { ChevronRight, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
+import { ChevronRight, CircleStop, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
@@ -50,6 +50,9 @@ type CanvasNodeProps = {
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (node: CanvasNodeData) => void;
     onRetry?: (node: CanvasNodeData) => void;
+    onCancel?: (node: CanvasNodeData) => void;
+    cancelDisabled?: boolean;
+    isCancelling?: boolean;
     onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
@@ -71,6 +74,9 @@ type NodeContentRendererProps = {
     onStopEditing: () => void;
     mentionReferences: CanvasResourceReference[];
     onRetry?: (node: CanvasNodeData) => void;
+    onCancel?: (node: CanvasNodeData) => void;
+    cancelDisabled?: boolean;
+    isCancelling?: boolean;
     onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
     onToggleBatch?: () => void;
@@ -111,6 +117,9 @@ export const CanvasNode = React.memo(function CanvasNode({
     onToggleBatch,
     onSetBatchPrimary,
     onRetry,
+    onCancel,
+    cancelDisabled = false,
+    isCancelling = false,
     onGenerateImage,
     onViewImage,
     onContextMenu,
@@ -397,6 +406,9 @@ export const CanvasNode = React.memo(function CanvasNode({
                             onContentChange={onContentChange}
                             onStopEditing={() => setIsEditingContent(false)}
                             onRetry={onRetry}
+                            onCancel={onCancel}
+                            cancelDisabled={cancelDisabled}
+                            isCancelling={isCancelling}
                             onGenerateImage={onGenerateImage}
                             onViewImage={onViewImage}
                             onToggleBatch={() => onToggleBatch?.(data.id)}
@@ -432,7 +444,7 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Group) return null;
     if ((props.node.type === CanvasNodeType.Config || props.node.type === CanvasNodeType.Director) && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return props.node.type === CanvasNodeType.Panorama ? <PanoramaNodeContent {...props} /> : <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} now={props.now} />;
+    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} now={props.now} onCancel={props.onCancel} cancelDisabled={props.cancelDisabled} isCancelling={props.isCancelling} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type];
@@ -449,7 +461,7 @@ const nodeContentRenderers = {
     [CanvasNodeType.Director]: EmptyImageContent,
 } satisfies Partial<Record<CanvasNodeType, (props: NodeContentRendererProps) => ReactNode>>;
 
-function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "node" | "theme" | "now">) {
+function LoadingContent({ node, theme, now, onCancel, cancelDisabled, isCancelling }: Pick<NodeContentRendererProps, "node" | "theme" | "now" | "onCancel" | "cancelDisabled" | "isCancelling">) {
     const startTimeRef = useRef(Date.now());
     const [localNow, setLocalNow] = useState(Date.now());
     useEffect(() => {
@@ -473,6 +485,7 @@ function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "no
                     <span className="rounded-full px-2 py-1 text-xs" style={{ background: theme.toolbar.panel, color: theme.node.text }}>
                         {formatDuration(elapsedMs)}
                     </span>
+                    <CancelTaskButton node={node} theme={theme} disabled={cancelDisabled} loading={isCancelling} onCancel={onCancel} />
                 </div>
                 <div className="space-y-1">
                     <div className="flex items-center justify-between text-[11px]" style={{ color: theme.node.muted }}>
@@ -494,12 +507,32 @@ function LoadingContent({ node, theme, now }: Pick<NodeContentRendererProps, "no
             <span className="rounded-full border px-2 py-1 text-xs tracking-normal" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
                 {formatDuration(elapsedMs)}
             </span>
+            <CancelTaskButton node={node} theme={theme} disabled={cancelDisabled} loading={isCancelling} onCancel={onCancel} />
             {progress > 0 ? (
                 <div className="h-1.5 w-28 overflow-hidden rounded-full" style={{ background: theme.node.stroke }}>
                     <div className="h-full rounded-full transition-all" style={{ width: `${progress}%`, background: theme.node.activeStroke }} />
                 </div>
             ) : null}
         </div>
+    );
+}
+
+function CancelTaskButton({ node, theme, disabled, loading, onCancel }: { node: CanvasNodeData; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; disabled?: boolean; loading?: boolean; onCancel?: (node: CanvasNodeData) => void }) {
+    return (
+        <button
+            type="button"
+            disabled={disabled || loading}
+            className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02] disabled:cursor-wait disabled:opacity-50"
+            style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+            onClick={(event) => {
+                event.stopPropagation();
+                onCancel?.(node);
+            }}
+            onMouseDown={(event) => event.stopPropagation()}
+        >
+            <CircleStop className="size-3.5 text-red-400" />
+            {loading ? "正在取消" : disabled ? "等待任务创建" : "取消任务"}
+        </button>
     );
 }
 

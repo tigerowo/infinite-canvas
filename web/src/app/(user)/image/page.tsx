@@ -7,6 +7,7 @@ import {
     CheckSquare,
     ChevronDown,
     ChevronUp,
+    CircleStop,
     ClipboardPaste,
     CloudUpload,
     Copy,
@@ -46,7 +47,7 @@ import { modelChannelsForConfig, useConfigStore, useEffectiveConfig, type AiConf
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
+import { ImageRequestError, batchCanvasImageTaskStatus, cancelCanvasImageTask, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
 import { deleteImageGenerationLogs, fetchImageGenerationLogs, saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploadRemoteImageToServer } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -149,6 +150,7 @@ export default function ImagePage() {
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
     const [syncingImageIds, setSyncingImageIds] = useState<string[]>([]);
+    const [cancellingResultIds, setCancellingResultIds] = useState<string[]>([]);
     const [categories, setCategories] = useState<GenerationCategory[]>([]);
     const [resultViewMode, setResultViewModeState] = useState<ResultViewMode>("all");
     const [activeResultCategoryId, setActiveResultCategoryId] = useState<string | null>(null);
@@ -683,6 +685,28 @@ export default function ImagePage() {
         setPreviewLog(null);
     };
 
+    const cancelImageResult = async (result: GenerationResult) => {
+        if (!result.task?.id || isClientImageTaskId(result.task.id)) {
+            message.warning("任务正在创建，请稍后再取消");
+            return;
+        }
+        setCancellingResultIds((value) => [...value, result.id]);
+        try {
+            const task = await cancelCanvasImageTask(imageTaskConfig(), result.task);
+            if (!task) throw new Error("取消图片任务失败");
+            const error = task.error?.message || "图片任务已取消";
+            const durationMs = Math.max(0, Date.now() - result.createdAt);
+            const log = logsRef.current.find((item) => item.id === result.taskLogId || item.id === result.id);
+            if (log) await saveLog({ ...imageLogFromTask(log, task), errors: [error], errorDetails: [error] });
+            setResults((value) => value.map((item) => (item.id === result.id ? { ...item, status: "failed", task, error, errorDetail: error, durationMs, lastPolledAt: Date.now() } : item)));
+            message.success("图片任务已取消");
+        } catch (error) {
+            message.error(errorMessage(error));
+        } finally {
+            setCancellingResultIds((value) => value.filter((id) => id !== result.id));
+        }
+    };
+
     const deleteBackendImageTasks = async (items: GenerationLog[]) => {
         if (!token) return;
         const tasks = Array.from(
@@ -1161,6 +1185,8 @@ export default function ImagePage() {
                             onSyncResult={syncResultImage}
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
+                            onCancelResult={(result) => void cancelImageResult(result)}
+                            cancellingResultIds={cancellingResultIds}
                         />
                     </>
                 ) : (
@@ -1197,6 +1223,8 @@ export default function ImagePage() {
                             onSyncResult={syncResultImage}
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
+                            onCancelResult={(result) => void cancelImageResult(result)}
+                            cancellingResultIds={cancellingResultIds}
                         />
                         <WorkbenchPanel
                             layout="bottom"
@@ -1609,6 +1637,8 @@ function ResultsPanel({
     onSyncResult,
     onSyncLog,
     onRetry,
+    onCancelResult,
+    cancellingResultIds,
 }: {
     className?: string;
     results: GenerationResult[];
@@ -1641,6 +1671,8 @@ function ResultsPanel({
     onSyncResult: (resultId: string, image: GeneratedImage, index: number) => void;
     onSyncLog: (log: GenerationLog, image: GeneratedImage, index: number) => void;
     onRetry: (result: GenerationResult) => void;
+    onCancelResult: (result: GenerationResult) => void;
+    cancellingResultIds: string[];
 }) {
     const { message } = App.useApp();
     const [creatingCategory, setCreatingCategory] = useState(false);
@@ -1724,7 +1756,7 @@ function ResultsPanel({
                         ) : result.status === "failed" ? (
                             <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} />
                         ) : (
-                            <PendingImageCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />
+                            <PendingImageCard key={result.id} result={result} now={now} cancelling={cancellingResultIds.includes(result.id)} cancelDisabled={!result.task?.id || isClientImageTaskId(result.task.id)} onCancel={() => onCancelResult(result)} onCopyPrompt={onCopyPrompt} />
                         ),
                     )}
                     {resultViewMode === "category" ? (
@@ -1924,7 +1956,7 @@ function ResultImageCard({
     );
 }
 
-function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
+function PendingImageCard({ result, now, cancelling, cancelDisabled, onCancel, onCopyPrompt }: { result: GenerationResult; now: number; cancelling: boolean; cancelDisabled: boolean; onCancel: () => void; onCopyPrompt: (text: string) => void | Promise<void> }) {
     return (
         <div className="overflow-hidden rounded-xl border border-dashed border-sky-300 bg-sky-50/40 dark:border-sky-900 dark:bg-sky-950/10">
             <div className="relative aspect-[4/3]">
@@ -1942,6 +1974,11 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
                 </div>
             </div>
             <TaskInfo result={{ ...result, durationMs: Math.max(0, now - result.createdAt) }} onCopyPrompt={onCopyPrompt} />
+            <div className="flex justify-end border-t border-sky-200 px-3 py-2 dark:border-sky-950">
+                <Button size="small" type="text" danger icon={<CircleStop className="size-3.5" />} loading={cancelling} disabled={cancelDisabled} onClick={onCancel}>
+                    {cancelDisabled ? "等待任务创建" : "取消任务"}
+                </Button>
+            </div>
         </div>
     );
 }
@@ -1949,12 +1986,13 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
 function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onRetry: () => void }) {
     const [detailOpen, setDetailOpen] = useState(false);
     const detail = result.errorDetail || error;
+    const cancelled = isCancelledImageTask(result.task);
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
             <div className="relative flex aspect-[4/3] flex-col items-center justify-center gap-3 p-5 text-center">
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <AlertCircle className="size-7 text-red-500" />
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                {cancelled ? <CircleStop className="size-7 text-amber-500" /> : <AlertCircle className="size-7 text-red-500" />}
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{cancelled ? "已取消" : "生成失败"}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
@@ -2089,8 +2127,8 @@ function HistoryLogCard({
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
                     {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时结果</Tag> : null}
                     {missingTemporaryImage ? <Tag className="m-0 text-[10px]" color="warning">结果未保留</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : log.failCount ? "red" : "success"}>
-                        {log.status === "生成中" ? "生成中" : log.failCount ? `失败 ${log.failCount}` : "成功"}
+                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : isCancelledImageTask(log.task) ? "warning" : log.failCount ? "red" : "success"}>
+                        {log.status === "生成中" ? "生成中" : isCancelledImageTask(log.task) ? "已取消" : log.failCount ? `失败 ${log.failCount}` : "成功"}
                     </Tag>
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
@@ -2425,6 +2463,10 @@ function isCompletedImageTask(task: CanvasImageTask) {
 
 function isFailedImageTask(task: CanvasImageTask) {
     return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((task.status || "").toLowerCase());
+}
+
+function isCancelledImageTask(task?: CanvasImageTask | null) {
+    return ["cancelled", "canceled"].includes((task?.status || "").toLowerCase());
 }
 
 function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[], config: AiConfig) {
@@ -2852,8 +2894,6 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
-
 
 
 
