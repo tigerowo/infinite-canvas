@@ -58,7 +58,7 @@ func TestRunningHubResponseUsesAggregateReadBudget(t *testing.T) {
 	}
 }
 
-func TestRunningHubWorkflowSubmitAndQuery(t *testing.T) {
+func TestRunningHubWorkflowSubmitQueryAndCancel(t *testing.T) {
 	taskID := "2058824859437850625"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -77,6 +77,15 @@ func TestRunningHubWorkflowSubmitAndQuery(t *testing.T) {
 			_, _ = io.WriteString(w, `{"code":0,"msg":"success","data":"SUCCESS"}`)
 		case "/task/openapi/outputs":
 			_, _ = io.WriteString(w, `{"code":0,"msg":"success","data":[{"fileUrl":"https://cdn.example.test/result.png","fileType":"png","nodeId":"12"}]}`)
+		case "/task/openapi/cancel":
+			var payload struct {
+				APIKey string `json:"apiKey"`
+				TaskID string `json:"taskId"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil || payload.APIKey != "test-key" || payload.TaskID != taskID {
+				t.Fatalf("cancel payload=%#v error=%v", payload, err)
+			}
+			_, _ = io.WriteString(w, `{"code":0,"msg":"success","data":null}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -93,5 +102,9 @@ func TestRunningHubWorkflowSubmitAndQuery(t *testing.T) {
 	queried, err := queryRunningHubTask(context.Background(), channel, taskID)
 	if err != nil || queried.Status != "SUCCESS" || len(queried.Results) != 1 || queried.Results[0].URL != "https://cdn.example.test/result.png" {
 		t.Fatalf("queried=%#v error=%v", queried, err)
+	}
+	cancelled, err := cancelRunningHubTask(context.Background(), channel, taskID)
+	if err != nil || cancelled.TaskID != taskID || cancelled.Status != "CANCELLED" {
+		t.Fatalf("cancelled=%#v error=%v", cancelled, err)
 	}
 }

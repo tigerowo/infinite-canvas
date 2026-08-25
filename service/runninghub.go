@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	runningHubResponseLimit = int64(4 * 1024 * 1024)
-	runningHubDeadline      = 45 * time.Second
+	runningHubResponseLimit  = int64(4 * 1024 * 1024)
+	runningHubDeadline       = 45 * time.Second
+	runningHubCancelLimit    = int64(512 * 1024)
+	runningHubCancelDeadline = 20 * time.Second
 )
 
 var runningHubNumericID = regexp.MustCompile(`^[0-9]{6,32}$`)
@@ -127,6 +129,35 @@ func QueryCurrentUserRunningHubTask(ctx context.Context, providerID string, task
 	return queryRunningHubTask(ctx, channel, taskID)
 }
 
+func CancelCurrentUserRunningHubTask(ctx context.Context, providerID string, taskID string) (RunningHubTaskResult, error) {
+	_, item, err := currentUserProvider(ctx, providerID)
+	if err != nil {
+		return RunningHubTaskResult{}, err
+	}
+	channel, err := runningHubProviderChannel(item)
+	if err != nil {
+		return RunningHubTaskResult{}, err
+	}
+	return cancelRunningHubTask(ctx, channel, taskID)
+}
+
+func cancelRunningHubTask(ctx context.Context, channel model.ModelChannel, taskID string) (RunningHubTaskResult, error) {
+	taskID = strings.TrimSpace(taskID)
+	if !runningHubNumericID.MatchString(taskID) {
+		return RunningHubTaskResult{}, safeMessageError{message: "RunningHub 任务 ID 无效"}
+	}
+	budget := newUpstreamReadBudget(ctx, "RunningHub 任务取消", upstreamReadLimits{MaxRequests: 1, MaxBytes: runningHubCancelLimit, Deadline: runningHubCancelDeadline})
+	defer budget.Close()
+	body, err := doRunningHubJSON(channel, budget, "/task/openapi/cancel", map[string]any{"apiKey": channel.APIKey, "taskId": taskID})
+	if err != nil {
+		return RunningHubTaskResult{}, err
+	}
+	if _, err := parseRunningHubEnvelope(body); err != nil {
+		return RunningHubTaskResult{}, err
+	}
+	return RunningHubTaskResult{TaskID: taskID, Status: "CANCELLED"}, nil
+}
+
 func queryRunningHubTask(ctx context.Context, channel model.ModelChannel, taskID string) (RunningHubTaskResult, error) {
 	taskID = strings.TrimSpace(taskID)
 	if !runningHubNumericID.MatchString(taskID) {
@@ -149,7 +180,7 @@ func queryRunningHubTask(ctx context.Context, channel model.ModelChannel, taskID
 	if status == "" {
 		status = "RUNNING"
 	}
-	if status != "QUEUED" && status != "RUNNING" && status != "SUCCESS" && status != "FAILED" {
+	if status != "QUEUED" && status != "RUNNING" && status != "SUCCESS" && status != "FAILED" && status != "CANCELLED" {
 		return RunningHubTaskResult{}, safeMessageError{message: "RunningHub 返回了未知任务状态"}
 	}
 	result := RunningHubTaskResult{TaskID: taskID, Status: status}

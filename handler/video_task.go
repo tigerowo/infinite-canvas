@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -18,10 +19,12 @@ import (
 )
 
 const (
-	videoTaskPollCountLimit    = 360
-	videoTaskResponseByteLimit = int64(32 * 1024 * 1024)
-	videoTaskDeadline          = 30 * time.Minute
-	videoTaskResponseLimit     = int64(1024 * 1024)
+	videoTaskPollCountLimit      = 360
+	videoTaskResponseByteLimit   = int64(32 * 1024 * 1024)
+	videoTaskDeadline            = 30 * time.Minute
+	videoTaskResponseLimit       = int64(1024 * 1024)
+	videoTaskCancelDeadline      = 10 * time.Second
+	videoTaskCancelResponseLimit = int64(64 * 1024)
 )
 
 var videoTaskPollCancels sync.Map
@@ -56,10 +59,9 @@ func DeleteUserVideoTask(w http.ResponseWriter, r *http.Request, id string) {
 		Fail(w, "视频任务不存在")
 		return
 	}
-	if value, found := videoTaskPollCancels.Load(id); found {
-		value.(context.CancelFunc)()
+	if _, _, err := cancelUserVideoTask(r.Context(), user.ID, id); err != nil {
+		log.Printf("cancel video task before delete failed: user=%s id=%s err=%s", user.ID, id, service.RedactSensitiveText(err.Error()))
 	}
-	_, _, _ = service.CancelUserVideoTask(user.ID, id)
 	if err := service.DeleteUserVideoTask(user.ID, id); err != nil {
 		log.Printf("delete video task failed: user=%s id=%s err=%v", user.ID, id, err)
 		Fail(w, "AI 接口请求失败")
@@ -79,26 +81,111 @@ func CancelUserVideoTask(w http.ResponseWriter, r *http.Request, id string) {
 		Fail(w, "视频任务不存在")
 		return
 	}
-	task, changed, err := service.CancelUserVideoTask(user.ID, id)
+	task, found, err := cancelUserVideoTask(r.Context(), user.ID, id)
 	if err != nil {
 		log.Printf("cancel video task failed: user=%s id=%s err=%s", user.ID, id, service.RedactSensitiveText(err.Error()))
 		Fail(w, "AI 接口请求失败")
 		return
 	}
-	if !changed {
-		current, found, readErr := service.GetUserVideoTask(user.ID, id)
-		if readErr != nil || !found {
-			Fail(w, "视频任务不存在")
-			return
-		}
-		task = current
+	if !found {
+		Fail(w, "视频任务不存在")
+		return
 	}
-	for _, key := range []string{id, task.ID} {
+	OK(w, service.VideoTaskResponse(task))
+}
+
+func cancelUserVideoTask(parent context.Context, userID string, id string) (model.VideoTask, bool, error) {
+	current, found, err := service.GetUserVideoTask(userID, id)
+	if err != nil || !found {
+		return current, found, err
+	}
+	for _, key := range []string{id, current.ID} {
 		if value, found := videoTaskPollCancels.Load(key); found {
 			value.(context.CancelFunc)()
 		}
 	}
-	OK(w, service.VideoTaskResponse(task))
+	if service.NormalizeVideoTaskStatus(current.Status) == "queued" {
+		channel, channelErr := videoTaskChannel(current)
+		if channelErr != nil {
+			log.Printf("select video task channel before cancel failed: user=%s id=%s err=%s", userID, id, service.RedactSensitiveText(channelErr.Error()))
+		} else if attempted, cancelErr := cancelUpstreamVideoTask(parent, current, channel); attempted && cancelErr != nil {
+			log.Printf("cancel upstream video task failed: user=%s id=%s err=%s", userID, id, service.RedactSensitiveText(cancelErr.Error()))
+		}
+	}
+	task, changed, err := service.CancelUserVideoTask(userID, id)
+	if err != nil {
+		return model.VideoTask{}, true, err
+	}
+	if !changed {
+		current, found, readErr := service.GetUserVideoTask(userID, id)
+		if readErr != nil || !found {
+			return current, found, readErr
+		}
+		task = current
+	}
+	return task, true, nil
+}
+
+func videoTaskChannel(task model.VideoTask) (model.ModelChannel, error) {
+	if strings.TrimSpace(task.UserChannelID) != "" {
+		return service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
+	}
+	return service.SelectModelChannelForModel(task.Model, task.ChannelID)
+}
+
+func cancelUpstreamVideoTask(parent context.Context, task model.VideoTask, channel model.ModelChannel) (bool, error) {
+	requestContext, cancel := context.WithTimeout(parent, videoTaskCancelDeadline)
+	defer cancel()
+	request, supported, err := newUpstreamVideoCancelRequest(requestContext, task, channel)
+	if err != nil || !supported {
+		return supported, err
+	}
+	taskID := firstNonEmpty(task.UpstreamTaskID, task.UpstreamVideoID)
+	startedAt := time.Now()
+	logContext := aiLogContext{
+		StartedAt:       startedAt,
+		Endpoint:        "/videos/" + taskID + "/cancel",
+		Method:          http.MethodDelete,
+		Model:           task.Model,
+		Channel:         channel,
+		UserID:          task.UserID,
+		UserDisplayName: task.UserDisplayName,
+		RequestBody:     fmt.Sprintf(`{"taskId":%q}`, taskID),
+	}
+	payload, status, err := doAIRequestWithLimit(request, channel, videoTaskCancelResponseLimit)
+	responseBody := service.RedactSensitiveText(string(payload))
+	if err != nil {
+		saveAIProxyLog(logContext, status, responseBody, service.RedactSensitiveText(err.Error()))
+		return true, err
+	}
+	if status == http.StatusNotFound {
+		saveAIProxyLog(logContext, status, responseBody, "")
+		return true, nil
+	}
+	if status >= http.StatusBadRequest {
+		message := readUpstreamAIErrorMessage(payload, status)
+		saveAIProxyLog(logContext, status, responseBody, message)
+		return true, errors.New(message)
+	}
+	saveAIProxyLog(logContext, status, responseBody, "")
+	return true, nil
+}
+
+func newUpstreamVideoCancelRequest(ctx context.Context, task model.VideoTask, channel model.ModelChannel) (*http.Request, bool, error) {
+	if service.NormalizeVideoTaskStatus(task.Status) != "queued" || !strings.EqualFold(strings.TrimSpace(channel.Protocol), "volcengine") || !isArkSeedanceVideo(channel.BaseURL, task.Model) {
+		return nil, false, nil
+	}
+	taskID := firstNonEmpty(task.UpstreamTaskID, task.UpstreamVideoID)
+	if taskID == "" {
+		return nil, false, nil
+	}
+	endpoint := "/contents/generations/tasks/" + url.PathEscape(taskID)
+	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, service.BuildModelChannelURL(channel, endpoint), nil)
+	if err != nil {
+		return nil, true, err
+	}
+	service.SetModelChannelAuthHeader(request, channel)
+	return request, true, nil
 }
 
 func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
@@ -332,13 +419,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 	if message := videoTaskPollBudgetError(task, time.Now()); message != "" {
 		return service.VideoTaskPollUpdate{Status: videoTaskPollBudgetStatus(message), Error: message, ErrorDetail: message}, nil
 	}
-	var channel model.ModelChannel
-	var err error
-	if strings.TrimSpace(task.UserChannelID) != "" {
-		channel, err = service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
-	} else {
-		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID)
-	}
+	channel, err := videoTaskChannel(task)
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}

@@ -118,6 +118,9 @@ func New() *gin.Engine {
 	v1.GET("/providers/:id/runninghub/tasks/:taskId", middleware.GenerationRequestBudget, func(c *gin.Context) {
 		handler.QueryRunningHubTask(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
 	})
+	v1.POST("/providers/:id/runninghub/tasks/:taskId/cancel", middleware.GenerationRequestBudget, func(c *gin.Context) {
+		handler.CancelRunningHubTask(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
+	})
 	v1.POST("/providers/:id/cli/detect", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.DetectUserCLIProvider(c.Writer, c.Request, c.Param("id"))
 	})

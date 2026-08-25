@@ -138,8 +138,9 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 - 未运行 `bun run typecheck`。
 - 未运行 `bun run lint`，也未清理历史 ESLint warning。
 - 未运行 Prettier 写入或批量格式化。
+- 本次远端取消适配新增的 Go 契约测试未执行；项目当前 `AGENTS.md` 要求写完代码后不执行测试或构建，前表仍是本阶段此前已完成的验收记录。
 
-本阶段用户明确要求的 Go、前端、Mock 和安全测试均已运行；构建、类型检查和 lint 留给用户验收。
+本阶段此前要求的 Go、前端、Mock 和安全测试均已运行；本次远端取消增量及构建、类型检查和 lint 留给用户验收。
 
 ## 旧配置回退
 
@@ -154,8 +155,24 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 - 编辑 Gemini 原生连接并保存新的默认模型曾把刚通过的连接状态重置为 `untested`；更新逻辑已改为仅在协议、Base URL、密钥或请求头变化时清除测试状态。修复前已被重置的本地状态不会伪造恢复，报告仍按实际调用记录连接和模型拉取已通过，本轮没有为了恢复 UI 标签重复测试。
 - Gemini 原生模型目录仍包含已不再向新用户开放的 `gemini-2.5-flash-lite`；模型拉取成功不等于当前账号拥有生成权限。真实请求应优先使用已验证的 `gemini-3.5-flash-lite`，并保留上游模型不可用错误的明确提示。
 - 通用 HTTP 的 `gemini-3.5-flash` 在极低 8-token 预算下可能只消耗内部处理预算并以 `length` 结束；128 tokens 已验证能返回短文本。OpenOx 曾有一次连接 `EOF`，由用户确认后的独立请求成功，不应在代码中增加隐式自动重试。
-- 通用视频上游没有统一取消协议。本阶段能停止本地轮询和当前网络读取，但已提交的异步上游任务可能继续运行；需要按供应商 adapter 增加显式 cancel API 后才能保证远端终止。
+- 通用视频上游没有统一取消协议。后续已为火山方舟 Seedance 排队任务和 RunningHub ComfyUI 任务接入各自官方取消端点；Gemini Veo、MiniMax、KIE、APIMart、OpenAI/grok2api、CogVideoX/Agnes 和通用 HTTP 尚无可确认的运行中取消契约，取消仍只能停止本地轮询和当前网络读取，已提交的异步上游任务可能继续运行。
 - 画布图片、视频和音频运行节点，以及生图台、视频台运行任务卡已提供独立“取消任务”按钮；取消后保留记录并明确显示“已取消”，删除任务/记录仍沿用先取消再删除的既有行为。
 - 生成前确认框已经接入画布、生图台、视频台及重试入口；正式有渠道后需人工确认渠道名称、模型和任务类型与实际请求一致。
 - 生图台浮动工作流按钮已统一服务端与浏览器首次渲染坐标，并在客户端恢复保存位置后再显示，避免原有位置差异触发 hydration warning 或首屏闪跳。
 - 不开始 Tauri，不修改线上部署，不推送分支。
+
+### 视频供应商远端取消审计
+
+| 供应商 / 协议 | 审计结果 | 当前行为 |
+| --- | --- | --- |
+| 火山方舟 Ark Seedance | 官方提供 `DELETE /contents/generations/tasks/{id}`；排队任务可取消，完成任务调用同一路径属于删除语义 | 仅本地最后状态为 `queued` 时传播；单次请求限制 64 KiB / 10 秒，远端失败仍保留本地取消 |
+| RunningHub App / Workflow | 官方提供 `POST /task/openapi/cancel`，请求包含 `apiKey` 与 `taskId` | Provider API 新增独立取消入口；单次请求限制 512 KiB / 20 秒 |
+| Gemini Veo | 官方视频文档仅确认长任务查询，未确认视频任务取消方法 | 只停止本地轮询与当前网络读取 |
+| MiniMax 视频 | 官方 API 概览仅确认创建、查询与文件获取，未确认取消方法 | 只停止本地轮询与当前网络读取 |
+| KIE / APIMart | 官方任务文档确认创建与状态查询，未确认运行中取消方法 | 只停止本地轮询与当前网络读取 |
+| OpenAI Videos / grok2api | OpenAI 的删除接口面向已完成或失败的视频资源，不作为运行中取消使用 | 不猜测调用删除端点；只停止本地轮询与当前网络读取 |
+| CogVideoX / Agnes / 通用 HTTP | 当前没有可确认且能安全绑定到现有 adapter 的正式取消契约 | 只停止本地轮询与当前网络读取 |
+
+审计依据为供应商正式文档和官方客户端所公开的协议；后续只有取得明确的运行中取消契约后才扩展 adapter，避免把资源删除、批处理取消或其他产品线接口误用为视频任务取消。
+
+主要依据：火山方舟 [API 文档中心](https://api.volcengine.com/api-docs/?serviceCode=ark&version=2024-01-01) 与官方 [Ark CLI 生成任务参考](https://github.com/volcengine/ark-cli/blob/main/skills/arkcli-gen/references/gen-meta.md)、RunningHub [取消任务文档](https://www.runninghub.cn/runninghub-api-doc-cn/api-425749015)、Gemini [Veo 视频文档](https://ai.google.dev/gemini-api/docs/video)、MiniMax [视频 API 概览](https://platform.minimaxi.com/docs/api-reference/api-overview)、KIE [任务查询文档](https://docs.kie.ai/market/common/get-task-detail)、APIMart [任务状态文档](https://docs.apimart.ai/cn/api-reference/tasks/status) 和 OpenAI [Videos API 参考](https://developers.openai.com/api/reference/cli/resources/videos)。

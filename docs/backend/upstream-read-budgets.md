@@ -17,6 +17,8 @@ description: 存储、同步、工作流 Agent、模型探测及生成协议的�
 | 后台单模型连通测试 | 1 | 16 MiB | 30 秒客户端超时 |
 | KIE / APIMart 同步图片任务轮询 | 300 | 32 MiB；单响应 512 KiB | 10 分钟 |
 | 持久化视频任务轮询 | 360 | 32 MiB；单响应 1 MiB | 自任务创建起 30 分钟 |
+| 火山方舟 Seedance 排队任务取消 | 1 | 64 KiB | 10 秒 |
+| RunningHub 任务取消 | 1 | 512 KiB | 20 秒 |
 | 画布图片或音频任务 | 1 | 32 MiB | 5 分钟 |
 | KIE / APIMart 结构化生成响应 | 1 | 8 MiB | 渠道客户端超时 |
 | KIE / APIMart 文件上传响应 | 1 | 512 KiB | 渠道客户端超时 |
@@ -34,6 +36,7 @@ description: 存储、同步、工作流 Agent、模型探测及生成协议的�
 - Gemini 模型分页拒绝重复 `nextPageToken`，避免上游循环分页持续消耗请求。
 - KIE / APIMart 的同步图片轮询在同一个前端请求内共享请求数、字节和 deadline；每个响应采用 `limit + 1` 探测，不再把超限 JSON 静默截断后继续解析。
 - 后台持久化视频任务把累计 `poll_count` 和 `response_bytes` 写入 `video_tasks`，进程重启后预算不会清零；单次轮询请求使用任务绝对 deadline。
+- 火山方舟 Seedance 只在本地最后状态仍为 `queued` 时调用官方取消端点；RunningHub ComfyUI 任务使用独立官方取消接口。上游失败或不支持取消时仍完成本地取消，且不会为其他供应商猜测取消路径。
 - 画布图片和音频任务在代理写入内存 recorder 时即执行 32 MiB 上限，并继承可取消的 5 分钟任务上下文。
 - 结构化生成、模型测试、文件上传响应和 MiMo TTS 都在 JSON 解析或 Base64 解码前完成限量读取。Gemini 视频内容和通用 AI 媒体采用流式上限，不把完整媒体载入内存。
 

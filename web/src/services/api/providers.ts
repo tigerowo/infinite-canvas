@@ -40,3 +40,7 @@ export function submitRunningHubTask(token: string, id: string, reference: strin
 export function queryRunningHubTask(token: string, id: string, taskId: string) {
     return apiGet<RunningHubTaskResult>(`/api/v1/providers/${encodeURIComponent(id)}/runninghub/tasks/${encodeURIComponent(taskId)}`, undefined, token);
 }
+
+export function cancelRunningHubTask(token: string, id: string, taskId: string) {
+    return apiPost<RunningHubTaskResult>(`/api/v1/providers/${encodeURIComponent(id)}/runninghub/tasks/${encodeURIComponent(taskId)}/cancel`, {}, token);
+}

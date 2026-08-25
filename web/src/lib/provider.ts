@@ -76,7 +76,7 @@ export type RunningHubNodeInfo = {
 
 export type RunningHubTaskResult = {
     taskId: string;
-    status: "QUEUED" | "RUNNING" | "SUCCESS" | "FAILED";
+    status: "QUEUED" | "RUNNING" | "SUCCESS" | "FAILED" | "CANCELLED";
     errorMessage?: string;
     results?: Array<{ url: string; outputType: string; nodeId?: string }>;
 };

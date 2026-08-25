@@ -38,6 +38,15 @@ func QueryRunningHubTask(w http.ResponseWriter, r *http.Request, providerID stri
 	OK(w, result)
 }
 
+func CancelRunningHubTask(w http.ResponseWriter, r *http.Request, providerID string, taskID string) {
+	result, err := service.CancelCurrentUserRunningHubTask(r.Context(), providerID, taskID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
 func DetectUserCLIProvider(w http.ResponseWriter, r *http.Request, providerID string) {
 	if !isLoopbackWebRequest(r) {
 		Fail(w, "CLI helper 只接受本机回环请求")
