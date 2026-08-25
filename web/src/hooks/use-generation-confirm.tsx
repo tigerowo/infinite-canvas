@@ -3,15 +3,13 @@
 import { useCallback } from "react";
 import { App } from "antd";
 
-import { channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { modelChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 
 export type GenerationTaskType = "图片生成" | "视频生成";
 
 export function generationCallSummary(config: AiConfig, model: string, taskType: GenerationTaskType) {
     const scopedConfig = { ...config, model };
-    const channel = config.channelMode === "remote"
-        ? config.publicChannels.find((item) => item.id === channelIdForActiveModel(scopedConfig)) || config.publicChannels.find((item) => item.models.includes(model))
-        : localChannelForActiveModel(scopedConfig);
+    const channel = modelChannelForActiveModel(scopedConfig);
     return {
         taskType,
         model: model || "未选择",

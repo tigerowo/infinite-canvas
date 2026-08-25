@@ -6,7 +6,7 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, modelChannelHeaders, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
@@ -545,15 +545,14 @@ export function aiHeaders(config: AiConfig, contentType?: string) {
     if (config.channelMode === "remote") {
         return {
             Authorization: `Bearer ${token}`,
-            ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
+            ...modelChannelHeaders(config),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }
     if (token) {
-        const userChannelId = channelIdForActiveModel(config);
         return {
             Authorization: `Bearer ${token}`,
-            ...(userChannelId ? { "X-User-Model-Channel-ID": userChannelId } : {}),
+            ...modelChannelHeaders(config),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }
@@ -1049,9 +1048,8 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
     assertImageReferencesSupported(config.model, references);
     const taskChannelId = channelIdForActiveModel(config);
-    const taskChannelHeader: Record<string, string> = config.channelMode === "remote" && taskChannelId ? { "X-Model-Channel-ID": taskChannelId } : {};
-    const tokenHeaders = { ...aiHeaders(config), ...taskChannelHeader };
-    const jsonHeaders = { ...aiHeaders(config, "application/json"), ...taskChannelHeader };
+    const tokenHeaders = aiHeaders(config);
+    const jsonHeaders = aiHeaders(config, "application/json");
     const meta = { nodeId: options.nodeId || "", source: options.source || "canvas", sourceId: options.sourceId || "", clientTaskId: options.clientTaskId || "", prompt, channelId: taskChannelId };
     if (isGeminiConfig(config)) {
         const body = await createGeminiImageBody(config, prompt, references, params);

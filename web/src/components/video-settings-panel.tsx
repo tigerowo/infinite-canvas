@@ -18,7 +18,7 @@ import {
 } from "@/lib/seedance-video";
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import { COGVIDEOX3_DURATIONS, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { channelIdForActiveModel, channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, modelChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 
 export const videoResolutionOptions = [
     { value: "720", label: "720p" },
@@ -521,9 +521,7 @@ function isProviderKlingConfig(config: AiConfig, modelName: string, key: string,
     const model = modelName || config.model || config.videoModel;
     if (modelKey(model) !== key) return false;
     const scopedConfig = { ...config, model, videoModel: model };
-    const channelId = channelIdForActiveModel(scopedConfig);
-    const channels = config.channelMode === "remote" ? config.publicChannels : [localChannelForActiveModel(scopedConfig)];
-    const channel = channels.find((item) => (item?.id || "") === channelId) || channels[0];
+    const channel = modelChannelForActiveModel(scopedConfig);
     const record = channel as { id?: string; name?: string; baseUrl?: string; remark?: string } | undefined;
     const text = [record?.id, record?.name, record?.baseUrl, record?.remark].filter(Boolean).join(" ").toLowerCase();
     return text.includes(provider);

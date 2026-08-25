@@ -5,7 +5,7 @@ import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { filterModelsByCapability, normalizeLocalChannels, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { filterModelsByCapability, modelChannelsForConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -23,12 +23,9 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     const pickerId = useId();
     const [open, setOpen] = useState(false);
     const channelOptions = useMemo(() => {
-        const channels =
-            config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, capabilities: channel.capabilities }));
+        const channels = modelChannelsForConfig(config);
         const models = channels.flatMap((channel) =>
-            (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model, capabilities: "capabilities" in channel ? channel.capabilities : undefined })),
+            channel.models.map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name || ("managed" in channel && channel.managed ? "连接中心" : config.channelMode === "remote" ? "云端渠道" : "本地渠道"), protocol: channel.protocol, model, capabilities: "capabilities" in channel ? channel.capabilities : undefined })),
         );
         if (!capability) return models;
         return models.filter((item) => (item.capabilities?.length === 1 ? item.capabilities[0] === capability : filterModelsByCapability([item.model], capability, item.protocol || "").length > 0));
