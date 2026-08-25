@@ -326,6 +326,7 @@ export function AppConfigModal() {
                                                 options={[
                                                     { label: "OpenAI", value: "openai" },
                                                     { label: "Gemini", value: "gemini" },
+                                                    { label: "通用 HTTP", value: "http" },
                                                     { label: "Grok2API", value: "grok2api" },
                                                     { label: "MiniMax & METASO", value: "metaso" },
                                                     { label: "APIMart", value: "apimart" },

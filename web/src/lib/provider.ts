@@ -1,7 +1,8 @@
 export type ProviderKind = "api" | "cli";
 export type ProviderStatus = "untested" | "connected" | "failed" | "timeout" | "disabled" | "unavailable";
 export type ProviderCapability = "text" | "image" | "video" | "audio";
-export type ProviderProtocol = "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "runninghub" | "volcengine" | "codex" | "gemini-cli" | "jimeng";
+export type ProviderProtocol = "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "runninghub" | "volcengine" | "codex" | "gemini-cli" | "jimeng";
+export type ManagedProviderProtocol = "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
 
 export type Provider = {
     id: string;
@@ -109,7 +110,27 @@ export type ProviderMigrationResult = {
     providers: Provider[];
 };
 
-export const managedProviderProtocols = new Set<ProviderProtocol>(["openai", "gemini", "grok2api", "metaso", "apimart", "kie", "mimo", "volcengine"]);
+export const managedProviderProtocols = new Set<ProviderProtocol>(["openai", "gemini", "http", "grok2api", "metaso", "apimart", "kie", "mimo", "volcengine"]);
+
+export function providerModelChannels(providers: Provider[]) {
+    return providers
+        .filter((provider) => provider.kind === "api" && managedProviderProtocols.has(provider.protocol))
+        .map((provider) => ({
+            id: provider.id,
+            protocol: provider.protocol as ManagedProviderProtocol,
+            name: provider.name,
+            baseUrl: provider.baseUrl,
+            apiKey: "",
+            models: provider.models,
+            capabilities: provider.capabilities,
+            defaultModel: provider.defaultModel,
+            managed: true as const,
+            hasApiKey: provider.hasApiKey,
+            hasHeaders: provider.hasHeaders,
+            enabled: provider.enabled,
+            isDefault: provider.isDefault,
+        }));
+}
 
 export function isRunningHubReference(value: string) {
     return /^(app|workflow):[0-9]{6,32}$/.test(value.trim().toLowerCase());

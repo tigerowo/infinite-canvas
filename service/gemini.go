@@ -10,9 +10,14 @@ import (
 )
 
 const ModelChannelProtocolGemini = "gemini"
+const ModelChannelProtocolHTTP = "http"
 
 func IsGeminiChannel(channel model.ModelChannel) bool {
 	return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocolGemini)
+}
+
+func IsGenericHTTPChannel(channel model.ModelChannel) bool {
+	return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocolHTTP)
 }
 
 func GeminiModelActionPath(modelName string, action string) string {
@@ -38,10 +43,14 @@ func SetModelChannelAuthHeader(request *http.Request, channel model.ModelChannel
 		request.Header.Set(name, value)
 	}
 	if IsGeminiChannel(channel) {
-		request.Header.Set("x-goog-api-key", channel.APIKey)
+		if channel.APIKey != "" && request.Header.Get("x-goog-api-key") == "" {
+			request.Header.Set("x-goog-api-key", channel.APIKey)
+		}
 		return
 	}
-	request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	if channel.APIKey != "" && request.Header.Get("Authorization") == "" {
+		request.Header.Set("Authorization", "Bearer "+channel.APIKey)
+	}
 }
 
 func StripGeminiModelField(body []byte, contentType string) ([]byte, error) {

@@ -21,7 +21,7 @@ import (
 )
 
 var providerAPIProtocols = map[string]bool{
-	"openai": true, "gemini": true, "grok2api": true, "metaso": true,
+	"openai": true, "gemini": true, "http": true, "grok2api": true, "metaso": true,
 	"apimart": true, "kie": true, "mimo": true, "runninghub": true, "volcengine": true,
 }
 
@@ -335,7 +335,7 @@ func modelChannelFromProvider(item model.Provider) (model.ModelChannel, error) {
 	if err != nil {
 		return model.ModelChannel{}, err
 	}
-	if strings.TrimSpace(credentials.APIKey) == "" {
+	if strings.TrimSpace(credentials.APIKey) == "" && (item.Protocol != ModelChannelProtocolHTTP || len(credentials.Headers) == 0) {
 		return model.ModelChannel{}, safeMessageError{message: "渠道 API Key 未配置"}
 	}
 	return model.ModelChannel{

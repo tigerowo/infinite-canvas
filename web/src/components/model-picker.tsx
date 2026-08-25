@@ -26,10 +26,12 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
         const channels =
             config.channelMode === "remote"
                 ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
-        const models = channels.flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model })));
+                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, capabilities: channel.capabilities }));
+        const models = channels.flatMap((channel) =>
+            (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model, capabilities: "capabilities" in channel ? channel.capabilities : undefined })),
+        );
         if (!capability) return models;
-        return models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "").length > 0);
+        return models.filter((item) => (item.capabilities?.length === 1 ? item.capabilities[0] === capability : filterModelsByCapability([item.model], capability, item.protocol || "").length > 0));
     }, [capability, config]);
     const currentOption = useMemo(() => {
         if (!value) return undefined;

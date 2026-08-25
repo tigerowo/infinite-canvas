@@ -3,7 +3,8 @@
 import { create } from "zustand";
 
 import { deleteProvider, detectCLIProvider, fetchProviders, migrateLegacyProviders, saveProvider, setDefaultProvider, testProvider } from "@/services/api/providers";
-import type { CLIHelperResult, Provider, ProviderInput, ProviderMigrationResult } from "@/lib/provider";
+import { providerModelChannels, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderMigrationResult } from "@/lib/provider";
+import { useConfigStore, type AiConfig, type LocalModelChannel } from "@/stores/use-config-store";
 
 type ProviderStore = {
     items: Provider[];
@@ -27,11 +28,15 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     error: "",
     load: async (token, force = false) => {
         if (!token) return [];
-        if (!force && get().loadedToken === token) return get().items;
+        if (!force && get().loadedToken === token) {
+            syncProviderCatalog(get().items);
+            return get().items;
+        }
         set({ loading: true, error: "" });
         try {
             const items = await fetchProviders(token);
             set({ items, loading: false, loadedToken: token });
+            syncProviderCatalog(items);
             return items;
         } catch (error) {
             set({ loading: false, error: error instanceof Error ? error.message : "读取连接失败" });
@@ -42,11 +47,13 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         const item = await saveProvider(token, input);
         set((state) => ({ items: state.items.some((current) => current.id === item.id) ? state.items.map((current) => (current.id === item.id ? item : current)) : [...state.items, item] }));
         if (item.isDefault) await get().load(token, true);
+        else syncProviderCatalog(get().items);
         return item;
     },
     remove: async (token, id) => {
         await deleteProvider(token, id);
         set((state) => ({ items: state.items.filter((item) => item.id !== id) }));
+        syncProviderCatalog(get().items);
     },
     setDefault: async (token, id) => {
         const item = await setDefaultProvider(token, id);
@@ -70,7 +77,32 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     migrate: async (token, cleanupLegacy) => {
         const result = await migrateLegacyProviders(token, cleanupLegacy);
         set({ items: result.providers, loadedToken: token, error: "" });
+        syncProviderCatalog(result.providers);
         return result;
     },
-    clear: () => set({ items: [], loading: false, loadedToken: "", error: "" }),
+    clear: () => {
+        set({ items: [], loading: false, loadedToken: "", error: "" });
+        syncProviderCatalog([]);
+    },
 }));
+
+export function syncProviderCatalog(providers: Provider[]) {
+    const configStore = useConfigStore.getState();
+    const current = configStore.config.localChannels;
+    const managed: LocalModelChannel[] = providerModelChannels(providers);
+    const legacy = current.filter((channel) => !channel.managed);
+    const next = [...legacy, ...managed];
+    if (JSON.stringify(next) !== JSON.stringify(current)) configStore.updateConfig("localChannels", next);
+
+    const fields: Array<[keyof Pick<AiConfig, "imageChannelId" | "videoChannelId" | "textChannelId" | "audioChannelId">, ProviderCapability]> = [
+        ["imageChannelId", "image"],
+        ["videoChannelId", "video"],
+        ["textChannelId", "text"],
+        ["audioChannelId", "audio"],
+    ];
+    for (const [field, capability] of fields) {
+        if (managed.some((channel) => channel.id === configStore.config[field] && channel.enabled !== false && channel.capabilities?.includes(capability))) continue;
+        const preferred = managed.find((channel) => channel.enabled !== false && channel.isDefault && channel.capabilities?.includes(capability)) || managed.find((channel) => channel.enabled !== false && channel.capabilities?.includes(capability));
+        if (preferred) configStore.updateConfig(field, preferred.id);
+    }
+}

@@ -335,6 +335,9 @@ func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 		return BuildGeminiChannelURL(channel, path)
 	}
 	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
+	if IsGenericHTTPChannel(channel) {
+		return baseURL + "/" + strings.TrimLeft(path, "/")
+	}
 	if IsMiniMaxChannel(channel) {
 		return baseURL + path
 	}
@@ -558,20 +561,62 @@ func fetchAdminChannelModelsWithBudget(channel model.ModelChannel, budget *upstr
 		}
 		return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
 	}
+	result, err := parseProviderModelList(body)
+	if err != nil {
+		return nil, safeMessageError{message: "读取模型失败：上游响应无法解析"}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func parseProviderModelList(body []byte) ([]string, error) {
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
+		Models json.RawMessage `json:"models"`
 	}
-	_ = json.Unmarshal(body, &payload)
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
 	result := make([]string, 0, len(payload.Data))
 	for _, item := range payload.Data {
-		if strings.TrimSpace(item.ID) != "" {
-			result = append(result, item.ID)
+		result = appendUniqueModel(result, item.ID)
+	}
+	if len(payload.Models) == 0 {
+		return result, nil
+	}
+	var objects []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(payload.Models, &objects) == nil {
+		for _, item := range objects {
+			result = appendUniqueModel(result, firstVideoTaskValue(item.ID, item.Name))
+		}
+		return result, nil
+	}
+	var names []string
+	if err := json.Unmarshal(payload.Models, &names); err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		result = appendUniqueModel(result, name)
+	}
+	return result, nil
+}
+
+func appendUniqueModel(models []string, name string) []string {
+	name = strings.TrimPrefix(strings.TrimSpace(name), "models/")
+	if name == "" {
+		return models
+	}
+	for _, item := range models {
+		if item == name {
+			return models
 		}
 	}
-	sort.Strings(result)
-	return result, nil
+	return append(models, name)
 }
 
 func isKIEAdminChannel(channel model.ModelChannel) bool {

@@ -5,9 +5,9 @@ import { App, Alert, Button, Checkbox, Drawer, Dropdown, Empty, Form, Input, Inp
 import type { MenuProps, TableProps } from "antd";
 import { ArrowRight, Cable, Check, CircleAlert, CircleDashed, Clock3, Copy, Ellipsis, Import, KeyRound, Plus, RefreshCw, Server, ShieldCheck, TerminalSquare, Unplug, WifiOff } from "lucide-react";
 
-import { isRunningHubReference, managedProviderProtocols, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
+import { isRunningHubReference, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
 import { fetchProviderMigrationPreview } from "@/services/api/providers";
-import { useConfigStore, type LocalModelChannel } from "@/stores/use-config-store";
+import { useConfigStore } from "@/stores/use-config-store";
 import { useProviderStore } from "@/stores/use-provider-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -31,6 +31,7 @@ type ProviderForm = {
 const apiProtocolOptions = [
     ["OpenAI 兼容", "openai"],
     ["Gemini", "gemini"],
+    ["通用 HTTP", "http"],
     ["Grok2API", "grok2api"],
     ["MetaSo / MiniMax", "metaso"],
     ["APIMart", "apimart"],
@@ -116,10 +117,6 @@ export default function ProvidersPage() {
             .then(setMigrationPreview)
             .catch(() => undefined);
     }, [token]);
-
-    useEffect(() => {
-        syncManagedProvidersToConfig(items);
-    }, [items]);
 
     const visibleItems = useMemo(() => items.filter((item) => item.kind === activeKind), [activeKind, items]);
     const connectedCount = visibleItems.filter((item) => item.connectionStatus === "connected").length;
@@ -253,7 +250,6 @@ export default function ProvidersPage() {
         try {
             const result = await migrate(token, cleanupLegacy);
             if (cleanupLegacy) applyCleanedMigrationToConfig(result.mappings);
-            syncManagedProvidersToConfig(result.providers);
             const nextPreview = await fetchProviderMigrationPreview(token);
             setMigrationPreview(nextPreview);
             setMigrationOpen(false);
@@ -464,6 +460,8 @@ export default function ProvidersPage() {
                                 onChange={(protocol: ProviderProtocol) => {
                                     if (protocol === "runninghub") {
                                         form.setFieldsValue({ baseUrl: "https://www.runninghub.ai", capabilities: ["image", "video", "audio", "text"], models: [], defaultModel: "" });
+                                    } else if (protocol === "http") {
+                                        form.setFieldsValue({ baseUrl: "", capabilities: ["text"], models: [], defaultModel: "" });
                                     }
                                 }}
                             />
@@ -518,6 +516,14 @@ export default function ProvidersPage() {
                                     showIcon
                                     title="RunningHub 应用 / 工作流 adapter"
                                     description="引用格式为 app:<ID> 或 workflow:<ID>。连接检测只读取账户状态；任务提交与查询使用独立受控接口，不会伪装成 OpenAI 模型协议。"
+                                />
+                            ) : formProtocol === "http" ? (
+                                <Alert
+                                    className="mb-5"
+                                    type="info"
+                                    showIcon
+                                    title="通用 HTTP adapter"
+                                    description="Base URL 按原样使用，系统直接追加 /models、/chat/completions、/images/generations 或 /videos 等业务路径；鉴权可使用 API Key 或自定义请求头。"
                                 />
                             ) : null}
                         </>
@@ -699,31 +705,6 @@ function providerToInput(item: Provider): ProviderInput {
         executable: item.executable,
         workingDirectory: item.workingDirectory,
     };
-}
-
-function syncManagedProvidersToConfig(providers: Provider[]) {
-    const configStore = useConfigStore.getState();
-    const current = configStore.config.localChannels;
-    const managed: LocalModelChannel[] = providers
-        .filter((provider) => provider.kind === "api" && managedProviderProtocols.has(provider.protocol))
-        .map((provider) => ({
-            id: provider.id,
-            protocol: provider.protocol as LocalModelChannel["protocol"],
-            name: provider.name,
-            baseUrl: provider.baseUrl,
-            apiKey: "",
-            models: provider.models,
-            managed: true,
-            hasApiKey: provider.hasApiKey,
-        }));
-    const next = [...current.filter((channel) => !channel.managed), ...managed];
-    if (JSON.stringify(next) !== JSON.stringify(current)) configStore.updateConfig("localChannels", next);
-    const preferred = providers.find((provider) => provider.kind === "api" && provider.enabled && provider.isDefault && managedProviderProtocols.has(provider.protocol));
-    if (!preferred) return;
-    if (preferred.capabilities.includes("image")) configStore.updateConfig("imageChannelId", preferred.id);
-    if (preferred.capabilities.includes("video")) configStore.updateConfig("videoChannelId", preferred.id);
-    if (preferred.capabilities.includes("text")) configStore.updateConfig("textChannelId", preferred.id);
-    if (preferred.capabilities.includes("audio")) configStore.updateConfig("audioChannelId", preferred.id);
 }
 
 function applyCleanedMigrationToConfig(mappings: Array<{ sourceId: string; providerId: string }>) {

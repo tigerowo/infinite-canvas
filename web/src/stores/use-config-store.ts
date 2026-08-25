@@ -10,13 +10,18 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
+    protocol: "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
     name: string;
     baseUrl: string;
     apiKey: string;
     models: string[];
     managed?: boolean;
     hasApiKey?: boolean;
+    hasHeaders?: boolean;
+    capabilities?: ModelCapability[];
+    defaultModel?: string;
+    enabled?: boolean;
+    isDefault?: boolean;
 };
 
 export type VideoMultiPromptItem = { prompt: string; duration: string };
@@ -184,11 +189,27 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     const channelMode = canUseRemoteChannel ? (modelChannel?.allowCustomChannel ? config.channelMode : "remote") : "local";
     if (channelMode === "local" || !modelChannel) {
         const localChannels = normalizeLocalChannels(config);
+        const models = normalizeModelList(localChannels.flatMap((channel) => channel.models));
+        const textModels = filterChannelModelsByCapability(localChannels, "text", models);
+        const imageModels = filterChannelModelsByCapability(localChannels, "image", models);
+        const videoModels = filterChannelModelsByCapability(localChannels, "video", models);
+        const audioModels = filterChannelModelsByCapability(localChannels, "audio", models);
+        const defaultFor = (capability: ModelCapability, available: string[]) =>
+            localChannels.find((channel) => channel.isDefault && channel.capabilities?.includes(capability) && available.includes(channel.defaultModel || ""))?.defaultModel || available[0] || "";
         return {
             ...config,
             channelMode,
             localChannels,
-            models: normalizeModelList(localChannels.flatMap((channel) => channel.models)),
+            models,
+            textModels,
+            imageModels,
+            videoModels,
+            audioModels,
+            model: textModels.includes(config.model) ? config.model : defaultFor("text", textModels),
+            textModel: textModels.includes(config.textModel) ? config.textModel : defaultFor("text", textModels),
+            imageModel: imageModels.includes(config.imageModel) ? config.imageModel : defaultFor("image", imageModels),
+            videoModel: videoModels.includes(config.videoModel) ? config.videoModel : defaultFor("video", videoModels),
+            audioModel: audioModels.includes(config.audioModel) ? config.audioModel : defaultFor("audio", audioModels),
             publicChannels: modelChannel?.channels || [],
         };
     }
@@ -338,9 +359,11 @@ export function filterModelsByCapability(models: string[], capability?: ModelCap
     return capability ? models.filter((model) => modelMatchesCapability(model, capability, protocol)) : models;
 }
 
-export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[] }>, capability: ModelCapability, allowedModels?: string[]) {
+export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[]; capabilities?: ModelCapability[] }>, capability: ModelCapability, allowedModels?: string[]) {
     const allowed = allowedModels ? new Set(allowedModels) : null;
-    return normalizeModelList(channels.flatMap((channel) => filterModelsByCapability(channel.models, capability, channel.protocol || ""))).filter((model) => !allowed || allowed.has(model));
+    return normalizeModelList(
+        channels.flatMap((channel) => (channel.capabilities?.length === 1 ? (channel.capabilities[0] === capability ? channel.models : []) : filterModelsByCapability(channel.models, capability, channel.protocol || ""))),
+    ).filter((model) => !allowed || allowed.has(model));
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
@@ -351,7 +374,7 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = localChannelForActiveModel({ ...config, model });
-    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey)));
+    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey || channel?.hasHeaders)));
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -492,20 +515,33 @@ function normalizeVersionedBaseUrl(baseUrl: string) {
 
 export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelChannel[] {
     const channels = Array.isArray(config.localChannels) ? config.localChannels : [];
-    const normalized: LocalModelChannel[] = channels.map((channel, index) => ({
-        id: channel.id || `local-${index + 1}`,
-        protocol: channel.protocol || "openai",
-        name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
-        baseUrl: channel.baseUrl || "",
-        apiKey: channel.apiKey || "",
-        models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
-        managed: channel.managed === true,
-        hasApiKey: channel.hasApiKey === true,
-    }));
-    if (!normalized.length) {
+    const enabled = channels
+        .filter((channel) => channel.enabled !== false)
+        .map((channel, index) => ({
+            id: channel.id || `local-${index + 1}`,
+            protocol: channel.protocol || "openai",
+            name: typeof channel.name === "string" ? channel.name : `本地渠道 ${index + 1}`,
+            baseUrl: channel.baseUrl || "",
+            apiKey: channel.apiKey || "",
+            models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+            managed: channel.managed === true,
+            hasApiKey: channel.hasApiKey === true,
+            hasHeaders: channel.hasHeaders === true,
+            capabilities: Array.isArray(channel.capabilities) ? channel.capabilities : undefined,
+            defaultModel: channel.defaultModel || "",
+            enabled: channel.enabled !== false,
+            isDefault: channel.isDefault === true,
+        }));
+    const managedFingerprints = new Set(enabled.filter((channel) => channel.managed).map(modelChannelFingerprint));
+    const normalized: LocalModelChannel[] = enabled.filter((channel) => channel.managed || !managedFingerprints.has(modelChannelFingerprint(channel)));
+    if (!normalized.length && !channels.some((channel) => channel.managed)) {
         normalized.push({ id: "local-default", protocol: "openai", name: "本地直连", baseUrl: config.baseUrl || defaultConfig.baseUrl, apiKey: config.apiKey || "", models: Array.isArray(config.models) ? config.models.filter(Boolean) : [] });
     }
     return normalized;
+}
+
+function modelChannelFingerprint(channel: Pick<LocalModelChannel, "name" | "protocol" | "baseUrl">) {
+    return `${channel.protocol}|${channel.name.trim().toLowerCase()}|${channel.baseUrl.trim().replace(/\/+$/, "").toLowerCase()}`;
 }
 
 export function channelIdForActiveModel(config: AiConfig) {

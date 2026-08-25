@@ -134,6 +134,37 @@ func TestValidateProviderInputRestrictsRunningHubCredentialDestination(t *testin
 	}
 }
 
+func TestGenericHTTPProviderAcceptsHeaderAuthentication(t *testing.T) {
+	previous := config.Cfg.JWTSecret
+	config.Cfg.JWTSecret = "provider-http-test-secret"
+	t.Cleanup(func() { config.Cfg.JWTSecret = previous })
+	ciphertext, err := encryptProviderCredentials(providerCredentials{Headers: map[string]string{"X-API-Key": "configured"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel, err := modelChannelFromProvider(model.Provider{
+		ID: "provider-http", Kind: model.ProviderKindAPI, Protocol: "http", Name: "通用 HTTP",
+		BaseURL: "https://api.example.test", CredentialsCiphertext: ciphertext, Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !IsGenericHTTPChannel(channel) || channel.Headers["X-API-Key"] != "configured" {
+		t.Fatalf("channel = %#v", channel)
+	}
+}
+
+func TestLegacyGenericHTTPProviderCanMigrate(t *testing.T) {
+	raw := `{"localChannels":[{"id":"legacy-http","protocol":"http","name":"旧通用接口","baseUrl":"https://api.example.test","apiKey":"legacy-secret","models":["custom-model"]}]}`
+	candidates, err := buildLegacyProviderMigration(raw, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 || candidates[0].Action != "import" || candidates[0].Input.Protocol != "http" {
+		t.Fatalf("candidates = %#v", candidates)
+	}
+}
+
 func TestHTTPClientForRestrictedChannelUsesSafeTransport(t *testing.T) {
 	client := HTTPClientForChannel(model.ModelChannel{Restricted: true, Timeout: 12})
 	if client.Transport == nil {
