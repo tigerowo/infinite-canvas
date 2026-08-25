@@ -317,16 +317,25 @@ export default function ProvidersPage() {
                     </Button>
                 </div>
 
-                <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-stone-500 dark:text-stone-400">
-                    <span>{visibleItems.length} 个连接</span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <span className={`size-1.5 rounded-full ${connectedCount ? "bg-emerald-500" : "bg-stone-300 dark:bg-stone-700"}`} />
-                        {connectedCount} 个已连接
-                    </span>
-                    <span className="inline-flex items-center gap-1.5">
-                        <ShieldCheck className="size-4" />
-                        SSRF 防护与响应限额已启用
-                    </span>
+                <div className="mt-5 grid gap-2 sm:grid-cols-3">
+                    <div className="rounded-xl border border-stone-200 bg-background px-4 py-3 dark:border-stone-800">
+                        <div className="text-xs text-stone-500 dark:text-stone-400">当前连接</div>
+                        <div className="mt-1 text-lg font-semibold text-stone-950 dark:text-stone-100">{visibleItems.length}</div>
+                    </div>
+                    <div className="rounded-xl border border-stone-200 bg-background px-4 py-3 dark:border-stone-800">
+                        <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-stone-400">
+                            <span className={`size-1.5 rounded-full ${connectedCount ? "bg-emerald-500" : "bg-stone-300 dark:bg-stone-700"}`} />
+                            已连接
+                        </div>
+                        <div className="mt-1 text-lg font-semibold text-stone-950 dark:text-stone-100">{connectedCount}</div>
+                    </div>
+                    <div className="rounded-xl border border-stone-200 bg-background px-4 py-3 dark:border-stone-800">
+                        <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-stone-400">
+                            <ShieldCheck className="size-3.5" />
+                            请求防护
+                        </div>
+                        <div className="mt-1 text-sm font-medium text-stone-950 dark:text-stone-100">SSRF 与响应限额已启用</div>
+                    </div>
                 </div>
 
                 <Tabs
@@ -386,7 +395,7 @@ export default function ProvidersPage() {
                     />
                 ) : null}
 
-                <section className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
+                <section className="overflow-hidden rounded-xl border border-stone-200 bg-background shadow-sm dark:border-stone-800">
                     {loading && !visibleItems.length ? (
                         <div className="p-6">
                             <Skeleton active paragraph={{ rows: 5 }} />

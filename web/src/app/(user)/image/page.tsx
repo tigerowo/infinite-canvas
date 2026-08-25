@@ -3,6 +3,7 @@
 import {
     AlertCircle,
     BookOpen,
+    CheckCircle2,
     CheckSquare,
     ChevronDown,
     ChevronUp,
@@ -1420,7 +1421,7 @@ function WorkbenchPanel({
     return (
         <div className="flex min-h-[420px] flex-col overflow-hidden rounded-lg border border-stone-200 bg-card shadow-sm dark:border-stone-800 lg:min-h-0">
             <div className="shrink-0 p-4 pb-3">
-                <WorkbenchHeader currentLayout={currentLayout} onLayoutChange={onLayoutChange} />
+                <WorkbenchHeader currentLayout={currentLayout} summary={settingsSummary(config, model)} onLayoutChange={onLayoutChange} />
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
                 <section className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
@@ -1466,11 +1467,12 @@ function WorkbenchPanel({
     );
 }
 
-function WorkbenchHeader({ currentLayout, onLayoutChange, compact = false }: { currentLayout: WorkbenchLayout; onLayoutChange: (layout: WorkbenchLayout) => void; compact?: boolean }) {
+function WorkbenchHeader({ currentLayout, summary, onLayoutChange, compact = false }: { currentLayout: WorkbenchLayout; summary?: string; onLayoutChange: (layout: WorkbenchLayout) => void; compact?: boolean }) {
     return (
         <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
                 <h1 className={`${compact ? "text-base" : "text-2xl"} font-semibold text-stone-950 dark:text-stone-100`}>生图工作台</h1>
+                {summary ? <p className="mt-1 truncate text-xs text-stone-500 dark:text-stone-400">{summary}</p> : null}
             </div>
             <div className="flex shrink-0 rounded-lg border border-stone-200 bg-stone-50 p-1 dark:border-stone-800 dark:bg-stone-900">
                 <Button size="small" type={currentLayout === "side" ? "primary" : "text"} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>
@@ -1565,10 +1567,10 @@ function QuickNumber({ label, value, min, max, disabled, onChange }: { label: st
 function settingsSummary(config: AiConfig, model: string) {
     return [
         model,
+        config.apiMode === "chat" ? "Chat" : config.apiMode === "responses" ? "Responses" : "Images",
         imageSizeLabel(config.size || "auto"),
         imageQualityLabel(config.quality || "auto"),
         `${config.count || "1"} 张`,
-        config.apiMode !== "chat" && config.streamImages ? `流式 ${config.streamPartialImages || "1"}` : "非流式",
     ].join(" · ");
 }
 
@@ -1648,6 +1650,8 @@ function ResultsPanel({
     const visibleLogs = resultViewMode === "category" ? (activeCategoryId ? baseVisibleLogs.filter((log) => log.categoryIds.includes(activeCategoryId)) : baseVisibleLogs.filter((log) => !log.categoryIds.length)) : baseVisibleLogs;
     const totalCount = results.length + (resultViewMode === "category" ? (activeCategoryId ? visibleLogs.length : categories.length + visibleLogs.length) : visibleLogs.length);
     const shouldShowGrid = totalCount > 0;
+    const completedCount = results.filter((result) => result.status === "success").length + visibleLogs.filter((log) => log.status === "成功").length;
+    const failedCount = results.filter((result) => result.status === "failed").length + visibleLogs.filter((log) => log.status === "失败").length;
     const allVisibleLogsSelected = Boolean(visibleLogs.length) && visibleLogs.every((log) => selectedLogIds.includes(log.id));
     const toggleVisibleLogs = () => onSelectedLogIdsChange(allVisibleLogsSelected ? selectedLogIds.filter((id) => !visibleLogs.some((log) => log.id === id)) : Array.from(new Set([...selectedLogIds, ...visibleLogs.map((log) => log.id)])));
     const createCategory = async () => {
@@ -1668,14 +1672,16 @@ function ResultsPanel({
 
     return (
         <div className={`thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5 ${className}`}>
-            <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2">
+            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <History className="size-4 text-stone-400" />
                     <h2 className="truncate text-xl font-semibold">{activeCategory ? activeCategory.name : "全部结果"}</h2>
                     <Tag className="m-0">{totalCount}</Tag>
-                    {pendingCount ? <Tag className="m-0 px-2 py-1">{pendingCount} 个生成中</Tag> : null}
+                    {completedCount ? <Tag className="m-0" color="success">{completedCount} 个成功</Tag> : null}
+                    {pendingCount ? <Tag className="m-0" color="processing">{pendingCount} 个生成中</Tag> : null}
+                    {failedCount ? <Tag className="m-0" color="error">{failedCount} 个失败</Tag> : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
                     {activeCategory ? (
                         <Button size="small" onClick={() => onActiveCategoryChange(null)}>
                             返回分类
@@ -1708,7 +1714,7 @@ function ResultsPanel({
                 </div>
             </div>
             {shouldShowGrid ? (
-                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {results.map((result, index) =>
                         result.status === "success" && result.image ? (
                             <ResultImageCard key={result.id} result={result} image={result.image} index={index} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
@@ -1886,14 +1892,14 @@ function ResultImageCard({
     onSync: (image: GeneratedImage) => void;
 }) {
     return (
-        <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
+        <div className="group overflow-hidden rounded-xl border border-stone-200 bg-background transition duration-200 hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-lg dark:border-stone-800 dark:hover:border-stone-700">
+            <div className="relative aspect-[4/3] bg-[radial-gradient(circle_at_center,rgba(120,113,108,0.12),transparent_65%)] dark:bg-[radial-gradient(circle_at_center,rgba(168,162,158,0.10),transparent_65%)]">
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
-                    {!image.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color="blue">新生成</Tag>
+                    {!image.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时结果</Tag> : null}
+                    <Tag className="m-0 text-[10px]" color="success" icon={<CheckCircle2 className="size-3" />}>已完成</Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-contain" />
             </div>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
@@ -1917,7 +1923,7 @@ function ResultImageCard({
 
 function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
     return (
-        <div className="overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
+        <div className="overflow-hidden rounded-xl border border-dashed border-sky-300 bg-sky-50/40 dark:border-sky-900 dark:bg-sky-950/10">
             <div className="relative aspect-[4/3]">
                 <div
                     className="absolute inset-0 opacity-60"
@@ -1927,8 +1933,8 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
                     }}
                 />
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
-                    <LoaderCircle className="size-6 animate-spin" />
-                    <span>生成中</span>
+                    <LoaderCircle className="size-6 animate-spin text-sky-500" />
+                    <span className="font-medium text-stone-700 dark:text-stone-200">请求处理中</span>
                     <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(Math.max(0, now - result.createdAt))}</span>
                 </div>
             </div>
@@ -2048,6 +2054,7 @@ function HistoryLogCard({
     const [detailOpen, setDetailOpen] = useState(false);
     const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
+    const missingTemporaryImage = log.status === "成功" && log.imageCount > 0 && !firstImage && !log.errors.length;
     const createCategory = async () => {
         const category = await onCreateCategory(categoryName);
         if (!category) return;
@@ -2070,25 +2077,27 @@ function HistoryLogCard({
     }, [categoryOpen]);
 
     return (
-        <div className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
+        <div className={`overflow-hidden rounded-xl border bg-background transition duration-200 hover:shadow-md dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 hover:border-stone-300 dark:border-stone-800 dark:hover:border-stone-700"}`}>
             <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
                 <div className="absolute left-1.5 top-1.5 z-10 flex items-center gap-1 rounded-md bg-white/85 px-1.5 py-1 shadow-sm dark:bg-stone-950/80">
                     <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
                     {selected ? <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={onDelete} /> : null}
                 </div>
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
-                    {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : log.failCount ? "red" : "blue"}>
+                    {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时结果</Tag> : null}
+                    {missingTemporaryImage ? <Tag className="m-0 text-[10px]" color="warning">结果未保留</Tag> : null}
+                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : log.failCount ? "red" : "success"}>
                         {log.status === "生成中" ? "生成中" : log.failCount ? `失败 ${log.failCount}` : "成功"}
                     </Tag>
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
                 {firstImage ? (
-                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-contain" />
                 ) : (
-                    <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
-                        <AlertCircle className="size-7" />
-                        <span>{log.errors[0] || "没有可显示的图片"}</span>
+                    <div className={`flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm ${missingTemporaryImage ? "text-amber-600 dark:text-amber-300" : "text-red-500"}`}>
+                        {missingTemporaryImage ? <CloudUpload className="size-7" /> : <AlertCircle className="size-7" />}
+                        <span>{missingTemporaryImage ? "生成成功，临时结果未同步" : log.errors[0] || "没有可显示的图片"}</span>
+                        {missingTemporaryImage ? <span className="max-w-52 text-xs leading-5 text-stone-500 dark:text-stone-400">下次生成后请在刷新前同步到云端或保存到素材库</span> : null}
                     </div>
                 )}
                 {displayImages.length > 1 ? (
@@ -2840,8 +2849,6 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
-
 
 
 
