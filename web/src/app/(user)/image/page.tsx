@@ -160,7 +160,8 @@ export default function ImagePage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [now, setNow] = useState(Date.now());
-    const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 0, y: 0 });
+    const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 24, y: 320 });
+    const [workflowButtonReady, setWorkflowButtonReady] = useState(false);
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
     const accountHistorySyncEnabledRef = useRef(false);
@@ -203,6 +204,7 @@ export default function ImagePage() {
             // Local storage can be unavailable in restricted browser contexts.
             setWorkflowButtonPosition(defaultWorkflowButtonPosition());
         }
+        setWorkflowButtonReady(true);
 
         // 监听窗口大小变化，拉窄窗口时自动将工作流按钮实时 clamp 限制在可视区域内，杜绝越界
         const handleResize = () => {
@@ -1227,8 +1229,9 @@ export default function ImagePage() {
                 type="button"
                 className="fixed z-50 inline-flex touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
                 style={{
-                    left: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).x,
-                    top: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).y
+                    left: workflowButtonPosition.x,
+                    top: workflowButtonPosition.y,
+                    visibility: workflowButtonReady ? "visible" : "hidden",
                 }}
                 onPointerDown={handleWorkflowButtonPointerDown}
                 onPointerMove={handleWorkflowButtonPointerMove}
@@ -2849,7 +2852,6 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
 
 
 
