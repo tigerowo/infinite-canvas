@@ -3,7 +3,13 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,7 +23,11 @@ import (
 	"github.com/tigerowo/infinite-canvas/repository"
 )
 
-const cliHelperOutputLimit = 16 * 1024
+const (
+	cliHelperOutputLimit   = 16 * 1024
+	cliHelperManifestLimit = 64 * 1024
+	cliHelperBinaryLimit   = int64(256 * 1024 * 1024)
+)
 
 var (
 	cliHelperSlots  = make(chan struct{}, 2)
@@ -39,6 +49,23 @@ type CLIHelperResult struct {
 	Executable string `json:"executable,omitempty"`
 	Version    string `json:"version,omitempty"`
 	Message    string `json:"message"`
+}
+
+type cliHelperManifestEnvelope struct {
+	Payload   string `json:"payload"`
+	Signature string `json:"signature"`
+}
+
+type cliHelperManifest struct {
+	Version     int                      `json:"version"`
+	ExpiresAt   string                   `json:"expiresAt"`
+	Executables []cliHelperManifestEntry `json:"executables"`
+}
+
+type cliHelperManifestEntry struct {
+	Protocol  string `json:"protocol"`
+	Candidate string `json:"candidate"`
+	SHA256    string `json:"sha256"`
 }
 
 func DetectCurrentUserCLIProvider(ctx context.Context, providerID string) (CLIHelperResult, error) {
@@ -79,6 +106,11 @@ func detectCLIProvider(parent context.Context, item model.Provider) (CLIHelperRe
 		result.Message = "CLI 类型不受支持"
 		return result, model.ProviderStatusUnavailable
 	}
+	hashes, err := loadCLIHelperHashes(item.Protocol, time.Now())
+	if err != nil {
+		result.Message = "CLI helper 可信清单未配置或无效"
+		return result, model.ProviderStatusUnavailable
+	}
 	select {
 	case cliHelperSlots <- struct{}{}:
 		defer func() { <-cliHelperSlots }()
@@ -86,7 +118,7 @@ func detectCLIProvider(parent context.Context, item model.Provider) (CLIHelperRe
 		result.Message = "CLI helper 正忙，请稍后重试"
 		return result, model.ProviderStatusTimeout
 	}
-	executable, err := findControlledCLIExecutable(spec.Candidates)
+	executable, err := findControlledCLIExecutable(spec.Candidates, hashes)
 	if err != nil {
 		result.Message = "未检测到受支持的 CLI"
 		return result, model.ProviderStatusUnavailable
@@ -117,10 +149,88 @@ func detectCLIProvider(parent context.Context, item model.Provider) (CLIHelperRe
 	return result, model.ProviderStatusConnected
 }
 
-func findControlledCLIExecutable(candidates []string) (string, error) {
+func loadCLIHelperHashes(protocol string, current time.Time) (map[string]string, error) {
+	path := strings.TrimSpace(config.Cfg.CLIHelperManifest)
+	publicKeyValue := strings.TrimSpace(config.Cfg.CLIHelperPublicKey)
+	if path == "" || !filepath.IsAbs(path) || publicKeyValue == "" {
+		return nil, errors.New("CLI helper manifest configuration is missing")
+	}
+	data, err := readCLIHelperManifest(path)
+	if err != nil {
+		return nil, errors.New("CLI helper manifest cannot be read")
+	}
+	publicKey, err := base64.StdEncoding.DecodeString(publicKeyValue)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return nil, errors.New("CLI helper public key is invalid")
+	}
+	return verifyCLIHelperManifest(data, publicKey, protocol, current)
+}
+
+func readCLIHelperManifest(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > int64(cliHelperManifestLimit) {
+		return nil, errors.New("CLI helper manifest file is invalid")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, int64(cliHelperManifestLimit)+1))
+	if err != nil || len(data) == 0 || len(data) > cliHelperManifestLimit {
+		return nil, errors.New("CLI helper manifest file is invalid")
+	}
+	return data, nil
+}
+
+func verifyCLIHelperManifest(data []byte, publicKey ed25519.PublicKey, protocol string, current time.Time) (map[string]string, error) {
+	var envelope cliHelperManifestEnvelope
+	if json.Unmarshal(data, &envelope) != nil {
+		return nil, errors.New("CLI helper manifest envelope is invalid")
+	}
+	payload, err := base64.StdEncoding.DecodeString(strings.TrimSpace(envelope.Payload))
+	if err != nil || len(payload) == 0 || len(payload) > cliHelperManifestLimit {
+		return nil, errors.New("CLI helper manifest payload is invalid")
+	}
+	signature, err := base64.StdEncoding.DecodeString(strings.TrimSpace(envelope.Signature))
+	if err != nil || !ed25519.Verify(publicKey, payload, signature) {
+		return nil, errors.New("CLI helper manifest signature is invalid")
+	}
+	var manifest cliHelperManifest
+	if json.Unmarshal(payload, &manifest) != nil || manifest.Version != 1 || len(manifest.Executables) == 0 || len(manifest.Executables) > 128 {
+		return nil, errors.New("CLI helper manifest payload is invalid")
+	}
+	expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(manifest.ExpiresAt))
+	if err != nil || !current.Before(expiresAt) {
+		return nil, errors.New("CLI helper manifest has expired")
+	}
+	hashes := map[string]string{}
+	for _, entry := range manifest.Executables {
+		candidate := strings.TrimSpace(entry.Candidate)
+		hash := strings.ToLower(strings.TrimSpace(entry.SHA256))
+		if entry.Protocol != protocol || filepath.Base(candidate) != candidate || strings.ContainsAny(candidate, `/\\`) {
+			continue
+		}
+		decoded, decodeErr := hex.DecodeString(hash)
+		if decodeErr != nil || len(decoded) != sha256.Size {
+			return nil, errors.New("CLI helper manifest hash is invalid")
+		}
+		hashes[candidate] = hash
+	}
+	if len(hashes) == 0 {
+		return nil, errors.New("CLI helper manifest does not allow this protocol")
+	}
+	return hashes, nil
+}
+
+func findControlledCLIExecutable(candidates []string, allowedHashes map[string]string) (string, error) {
 	allowedRoots := cliAllowedRoots()
 	for _, name := range candidates {
 		if filepath.Base(name) != name || strings.ContainsAny(name, `/\\`) {
+			continue
+		}
+		expectedHash := strings.ToLower(strings.TrimSpace(allowedHashes[name]))
+		if expectedHash == "" {
 			continue
 		}
 		path, err := exec.LookPath(name)
@@ -138,13 +248,27 @@ func findControlledCLIExecutable(candidates []string) (string, error) {
 		if !pathWithinControlledRoots(path, allowedRoots) || !pathWithinControlledRoots(resolved, allowedRoots) {
 			continue
 		}
-		info, err := os.Stat(resolved)
-		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
+		if !matchesCLIExecutableHash(resolved, expectedHash) {
 			continue
 		}
-		return path, nil
+		return resolved, nil
 	}
 	return "", errors.New("controlled CLI not found")
+}
+
+func matchesCLIExecutableHash(path string, expectedHash string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 || info.Size() < 0 || info.Size() > cliHelperBinaryLimit {
+		return false
+	}
+	hash := sha256.New()
+	written, err := io.Copy(hash, io.LimitReader(file, cliHelperBinaryLimit+1))
+	return err == nil && written == info.Size() && hex.EncodeToString(hash.Sum(nil)) == expectedHash
 }
 
 func controlledCLIAllowedRoots() []string {

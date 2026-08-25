@@ -54,9 +54,32 @@ RunningHub 使用独立协议，不会作为 OpenAI 兼容模型渠道同步。�
 
 ## CLI 边界
 
-受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行固定的 `--version` 参数；用户保存的可执行程序字段不参与命令选择。
+受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST` 和 Base64 编码的原始 Ed25519 公钥 `CLI_HELPER_PUBLIC_KEY`。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行固定的 `--version` 参数；用户保存的可执行程序字段不参与命令选择。
 
-helper 不安装或登录 CLI，不读取 shell profile，不执行真实模型调用或任意参数。执行具有 5 秒超时、2 个并发槽位、16 KiB 输出上限和敏感词脱敏；可执行文件必须位于受控目录，解析后的普通文件不得允许组或其他用户写入。工作目录当前只作为元数据保存，不用于版本检测。
+helper 不安装或登录 CLI，不读取 shell profile，不执行真实模型调用或任意参数。执行具有 5 秒超时、2 个并发槽位、16 KiB 输出上限和敏感词脱敏；可执行文件必须位于受控目录，解析后的普通文件不得允许组或其他用户写入，文件大小不得超过 256 MiB，并且 SHA-256 必须与签名清单一致。工作目录当前只作为元数据保存，不用于版本检测。
+
+可信清单是一个不超过 64 KiB 的 JSON envelope：
+
+```json
+{
+  "payload": "<Base64 编码的清单 JSON 原始字节>",
+  "signature": "<对 payload 原始字节生成的 Base64 Ed25519 签名>"
+}
+```
+
+解码后的 payload 结构如下；`expiresAt` 必须为未来的 RFC 3339 时间，`sha256` 为解析软链接后实际可执行文件的小写十六进制摘要：
+
+```json
+{
+  "version": 1,
+  "expiresAt": "<未来的 RFC 3339 时间>",
+  "executables": [
+    { "protocol": "codex", "candidate": "codex", "sha256": "<64 个十六进制字符>" }
+  ]
+}
+```
+
+清单不保存私钥、登录凭据或 API Key。私钥只用于离线签名，不应放入项目目录、环境文件或 Git。清单签名错误、过期、缺少当前协议或文件哈希不一致时，helper 返回不可用且不会启动 CLI。
 
 ## 旧配置
 

@@ -25,6 +25,8 @@ type Config struct {
 	LinuxDoUserInfoURL  string `env:"LINUX_DO_USERINFO_URL" envDefault:"https://connect.linux.do/api/user"`
 	AILogDir            string `env:"AI_LOG_DIR" envDefault:"data/logs/ai-calls"`
 	CLIHelperEnabled    bool   `env:"CLI_HELPER_ENABLED" envDefault:"false"`
+	CLIHelperManifest   string `env:"CLI_HELPER_MANIFEST"`
+	CLIHelperPublicKey  string `env:"CLI_HELPER_PUBLIC_KEY"`
 }
 
 var Cfg Config
