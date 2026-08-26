@@ -344,6 +344,13 @@ func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLI
 func loadCLIHelperHashes(protocol string, current time.Time) (map[string]string, error) {
 	path := strings.TrimSpace(config.Cfg.CLIHelperManifest)
 	publicKeyValue := strings.TrimSpace(config.Cfg.CLIHelperPublicKey)
+	if publicKeyValue == "" {
+		data, err := readProtectedCLIHelperFile(config.Cfg.CLIHelperPublicKeyFile, 4*1024)
+		if err != nil {
+			return nil, errors.New("CLI helper public key file is invalid")
+		}
+		publicKeyValue = strings.TrimSpace(string(data))
+	}
 	if path == "" || !filepath.IsAbs(path) || publicKeyValue == "" {
 		return nil, errors.New("CLI helper manifest configuration is missing")
 	}
@@ -356,6 +363,11 @@ func loadCLIHelperHashes(protocol string, current time.Time) (map[string]string,
 		return nil, errors.New("CLI helper public key is invalid")
 	}
 	return verifyCLIHelperManifest(data, publicKey, protocol, current)
+}
+
+func ValidateCLIHelperTrustConfiguration() error {
+	_, err := loadCLIHelperHashes("codex", time.Now())
+	return err
 }
 
 func readCLIHelperManifest(path string) ([]byte, error) {

@@ -18,6 +18,7 @@
 - [接口响应约定](backend/api-response.md)
 - [系统配置数据结构](backend/system-settings.md)
 - [连接中心](backend/provider-center.md)
+- [Mac CLI helper 安装与签名发布](backend/cli-helper-macos.md)
 - [连接中心第二阶段验收](provider-phase2-report.md)
 - [连接中心第三阶段离线接入](provider-phase3-report.md)
 - [连接中心第四阶段真实渠道与任务可靠性](provider-phase4-report.md)

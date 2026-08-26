@@ -118,6 +118,33 @@ func TestRequestCLICompanionUsesPrivateUnixSocket(t *testing.T) {
 	}
 }
 
+func TestCLICompanionSharedSecretFileRequiresPrivatePermissions(t *testing.T) {
+	directory := t.TempDir()
+	secretPath := filepath.Join(directory, "shared-secret")
+	secret := bytes.Repeat([]byte{0x52}, 32)
+	if err := os.WriteFile(secretPath, []byte(base64.StdEncoding.EncodeToString(secret)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousSecret := config.Cfg.CLIHelperSecret
+	previousSecretFile := config.Cfg.CLIHelperSecretFile
+	config.Cfg.CLIHelperSecret = ""
+	config.Cfg.CLIHelperSecretFile = secretPath
+	t.Cleanup(func() {
+		config.Cfg.CLIHelperSecret = previousSecret
+		config.Cfg.CLIHelperSecretFile = previousSecretFile
+	})
+	loaded, err := cliCompanionSharedSecret()
+	if err != nil || !bytes.Equal(loaded, secret) {
+		t.Fatalf("secret=%x error=%v", loaded, err)
+	}
+	if err := os.Chmod(secretPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cliCompanionSharedSecret(); err == nil {
+		t.Fatal("group/world readable secret file must be rejected")
+	}
+}
+
 func TestCLICompanionAuthStatusActionIsBoundToAuthorization(t *testing.T) {
 	secret := bytes.Repeat([]byte{0x61}, 32)
 	current := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)

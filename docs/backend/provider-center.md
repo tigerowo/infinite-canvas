@@ -59,7 +59,7 @@ RunningHub 使用独立协议，不会作为 OpenAI 兼容模型渠道同步。�
 
 ## CLI 边界
 
-受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST`、Base64 编码的原始 Ed25519 公钥 `CLI_HELPER_PUBLIC_KEY`、绝对路径 `CLI_HELPER_SOCKET` 和至少 32 个随机字节的 Base64 `CLI_HELPER_SHARED_SECRET`。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行 allowlist 中的固定参数；用户保存的可执行程序字段不参与命令选择。
+受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST`、绝对路径 `CLI_HELPER_SOCKET`，以及公钥和共享密钥。开发环境可直接使用 `CLI_HELPER_PUBLIC_KEY` 与 `CLI_HELPER_SHARED_SECRET`；正式安装优先使用权限为 `0600` 的 `CLI_HELPER_PUBLIC_KEY_FILE` 与 `CLI_HELPER_SHARED_SECRET_FILE`，避免把凭据正文放进 LaunchAgent、命令行或环境文件。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行 allowlist 中的固定参数；用户保存的可执行程序字段不参与命令选择。
 
 Web 后端不再直接启动本机 CLI。独立伴随进程入口为 `cmd/infinite-canvas-cli-helper`，只监听本机 Unix Socket；Socket 所在目录必须已存在且权限不向组或其他用户开放，Socket 启动后固定为 `0600`。先启动伴随进程，再启动 Go Web 后端：
 
@@ -97,7 +97,9 @@ helper 不安装 CLI、不读取 shell profile，也不接受任意参数。伴�
 
 清单不保存私钥、登录凭据或 API Key。私钥只用于离线签名，不应放入项目目录、环境文件或 Git。清单签名错误、过期、缺少当前协议或文件哈希不一致时，helper 返回不可用且不会启动 CLI。
 
-共享密钥属于本机进程凭据，只能保存在被忽略的本地 `.env`、受保护的启动环境或系统钥匙串中，不得写入文档、日志或 Git。动作 allowlist 与固定参数依据 [OpenAI 官方 Codex CLI 命令参考](https://developers.openai.com/codex/cli/reference)约束。API Key、Access Token、device code、自定义模型、自定义提示词与安装动作均不开放。Gemini 官方当前只确认交互式 `/auth`，即梦参考脚本会直接执行 `dreamina login`，因此两者不开放登录或模型调用动作。以后增加安装或其他写操作时，必须分别增加动作、请求字段限制、用户确认界面、输出预算和审计记录。
+仓库提供离线清单工具 `cmd/infinite-canvas-cli-manifest`，以及 `scripts/macos/` 下的 Developer ID 发布、当前用户安装和显式卸载脚本。安装器验证 Apple 代码签名与 Team ID，注册 LaunchAgent，并生成只包含配置路径的 `backend.env`。完整流程见 [Mac CLI helper 安装与签名发布](cli-helper-macos.md)。
+
+共享密钥属于本机进程凭据，只能保存在权限为 `0600` 的共享密钥文件、被忽略的本地 `.env`、受保护的启动环境或系统钥匙串中，不得写入文档、日志或 Git。动作 allowlist 与固定参数依据 [OpenAI 官方 Codex CLI 命令参考](https://developers.openai.com/codex/cli/reference)约束。安装只通过用户从可信发布包中显式运行的本机脚本完成，Web UI 和 helper API 不开放安装动作。API Key、Access Token、device code、自定义模型与自定义提示词均不开放。Gemini 官方当前只确认交互式 `/auth`，即梦参考脚本会直接执行 `dreamina login`，因此两者不开放登录或模型调用动作。以后增加其他写操作时，必须分别增加动作、请求字段限制、用户确认界面、输出预算和审计记录。
 
 ## 旧配置
 

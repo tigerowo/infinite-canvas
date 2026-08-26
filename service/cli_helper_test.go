@@ -71,6 +71,42 @@ func TestCLIHelperManifestRequiresValidSignatureAndExpiry(t *testing.T) {
 	}
 }
 
+func TestCLIHelperPublicKeyFileRequiresPrivatePermissions(t *testing.T) {
+	directory := t.TempDir()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(directory, "manifest.json")
+	publicKeyPath := filepath.Join(directory, "public-key.txt")
+	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "codex", "codex", strings.Repeat("a", 64)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(publicKeyPath, []byte(base64.StdEncoding.EncodeToString(publicKey)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousManifest := config.Cfg.CLIHelperManifest
+	previousPublicKey := config.Cfg.CLIHelperPublicKey
+	previousPublicKeyFile := config.Cfg.CLIHelperPublicKeyFile
+	config.Cfg.CLIHelperManifest = manifestPath
+	config.Cfg.CLIHelperPublicKey = ""
+	config.Cfg.CLIHelperPublicKeyFile = publicKeyPath
+	t.Cleanup(func() {
+		config.Cfg.CLIHelperManifest = previousManifest
+		config.Cfg.CLIHelperPublicKey = previousPublicKey
+		config.Cfg.CLIHelperPublicKeyFile = previousPublicKeyFile
+	})
+	if _, err := loadCLIHelperHashes("codex", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(publicKeyPath, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCLIHelperHashes("codex", time.Now()); err == nil {
+		t.Fatal("group/world readable public key file must be rejected")
+	}
+}
+
 func TestExecuteCLICompanionVersionRunsOnlyVersionProbe(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Mac CLI helper only runs on macOS")
@@ -251,9 +287,9 @@ func cliTestManifest(t *testing.T, privateKey ed25519.PrivateKey, expiresAt time
 		Version:   1,
 		ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 		Executables: []cliHelperManifestEntry{{
-			Protocol: protocol,
+			Protocol:  protocol,
 			Candidate: candidate,
-			SHA256: hash,
+			SHA256:    hash,
 		}},
 	})
 	if err != nil {

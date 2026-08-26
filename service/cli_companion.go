@@ -331,6 +331,13 @@ func cliCompanionSocketPath() (string, error) {
 
 func cliCompanionSharedSecret() ([]byte, error) {
 	value := strings.TrimSpace(config.Cfg.CLIHelperSecret)
+	if value == "" {
+		data, err := readProtectedCLIHelperFile(config.Cfg.CLIHelperSecretFile, 4*1024)
+		if err != nil {
+			return nil, errors.New("CLI companion shared secret file is invalid")
+		}
+		value = strings.TrimSpace(string(data))
+	}
 	for _, encoding := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.RawURLEncoding} {
 		secret, err := encoding.DecodeString(value)
 		if err == nil && len(secret) >= 32 && len(secret) <= 64 {
@@ -338,6 +345,31 @@ func cliCompanionSharedSecret() ([]byte, error) {
 		}
 	}
 	return nil, errors.New("CLI companion shared secret is invalid")
+}
+
+func readProtectedCLIHelperFile(path string, limit int64) ([]byte, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || !filepath.IsAbs(path) || limit <= 0 {
+		return nil, errors.New("CLI helper protected file path is invalid")
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil || !pathInfo.Mode().IsRegular() || pathInfo.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("CLI helper protected file is invalid")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !os.SameFile(pathInfo, info) || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 || info.Size() <= 0 || info.Size() > limit {
+		return nil, errors.New("CLI helper protected file is invalid")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || len(data) == 0 || int64(len(data)) > limit {
+		return nil, errors.New("CLI helper protected file is invalid")
+	}
+	return data, nil
 }
 
 func cliCompanionRequestSignature(secret []byte, timestamp string, nonce string, body []byte) []byte {

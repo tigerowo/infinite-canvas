@@ -28,6 +28,18 @@ func main() {
 	if !config.Cfg.CLIHelperEnabled {
 		log.Fatal("CLI_HELPER_ENABLED 未启用")
 	}
+	if len(os.Args) == 2 && os.Args[1] == "verify-config" {
+		if err := service.ValidateCLIHelperTrustConfiguration(); err != nil {
+			log.Fatal("CLI helper 可信配置无效")
+		}
+		if _, err := service.NewCLICompanionHandler(context.Background()); err != nil {
+			log.Fatal("CLI helper 安全配置无效")
+		}
+		return
+	}
+	if len(os.Args) != 1 {
+		log.Fatal("CLI helper 参数无效")
+	}
 	socketPath := strings.TrimSpace(config.Cfg.CLIHelperSocket)
 	if err := validateSocketDirectory(socketPath); err != nil {
 		log.Fatal(err)
