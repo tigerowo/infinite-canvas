@@ -56,6 +56,9 @@ type CLIHelperResult struct {
 	Version      string `json:"version,omitempty"`
 	AuthStatus   string `json:"authStatus,omitempty"`
 	ActionStatus string `json:"actionStatus,omitempty"`
+	TaskID       string `json:"taskId,omitempty"`
+	TaskStatus   string `json:"taskStatus,omitempty"`
+	Output       string `json:"output,omitempty"`
 	Message      string `json:"message"`
 }
 
@@ -222,16 +225,22 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 	return result, model.ProviderStatusConnected
 }
 
-func executeCLICompanionAction(parent context.Context, action string, protocol string) (CLIHelperResult, model.ProviderStatus) {
-	switch action {
+func executeCLICompanionAction(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
+	switch input.Action {
 	case cliCompanionActionVersion:
-		return executeCLICompanionVersion(parent, protocol)
+		return executeCLICompanionVersion(parent, input.Protocol)
 	case cliCompanionActionAuthStatus:
-		return executeCLICompanionAuthStatus(parent, protocol)
+		return executeCLICompanionAuthStatus(parent, input.Protocol)
 	case cliCompanionActionLoginStart:
-		return executeCLICompanionLoginStart(parent, protocol)
+		return executeCLICompanionLoginStart(parent, input.Protocol)
+	case cliCompanionActionProbeStart:
+		return executeCLIModelProbeStart(parent, input)
+	case cliCompanionActionProbeStatus:
+		return executeCLIModelProbeStatus(input)
+	case cliCompanionActionProbeCancel:
+		return executeCLIModelProbeCancel(input)
 	default:
-		return CLIHelperResult{Protocol: protocol, Message: "CLI 动作不受支持"}, model.ProviderStatusUnavailable
+		return CLIHelperResult{Protocol: input.Protocol, Message: "CLI 动作不受支持"}, model.ProviderStatusUnavailable
 	}
 }
 

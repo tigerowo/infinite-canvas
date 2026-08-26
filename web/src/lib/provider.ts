@@ -65,6 +65,9 @@ export type CLIHelperResult = {
     version?: string;
     authStatus?: "authenticated" | "unauthenticated" | "unsupported";
     actionStatus?: "started" | "running" | "unsupported";
+    taskId?: string;
+    taskStatus?: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
+    output?: string;
     message: string;
 };
 

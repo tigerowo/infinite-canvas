@@ -35,9 +35,12 @@ const (
 )
 
 const (
-	cliCompanionActionVersion    = "version"
-	cliCompanionActionAuthStatus = "auth-status"
-	cliCompanionActionLoginStart = "login-start"
+	cliCompanionActionVersion     = "version"
+	cliCompanionActionAuthStatus  = "auth-status"
+	cliCompanionActionLoginStart  = "login-start"
+	cliCompanionActionProbeStart  = "model-probe-start"
+	cliCompanionActionProbeStatus = "model-probe-status"
+	cliCompanionActionProbeCancel = "model-probe-cancel"
 )
 
 const (
@@ -48,25 +51,27 @@ const (
 )
 
 var cliCompanionNoncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,64}$`)
+var cliCompanionTaskPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32}$`)
 
 type cliCompanionActionRequest struct {
 	Action     string `json:"action"`
 	UserID     string `json:"userId"`
 	ProviderID string `json:"providerId"`
 	Protocol   string `json:"protocol"`
+	TaskID     string `json:"taskId,omitempty"`
 }
 
 type cliCompanionActionResponse struct {
-	Result CLIHelperResult     `json:"result,omitempty"`
+	Result CLIHelperResult      `json:"result,omitempty"`
 	Status model.ProviderStatus `json:"status,omitempty"`
-	Error  string              `json:"error,omitempty"`
+	Error  string               `json:"error,omitempty"`
 }
 
 type cliCompanionHandler struct {
 	secret   []byte
 	now      func() time.Time
 	lifetime context.Context
-	execute  func(context.Context, string, string) (CLIHelperResult, model.ProviderStatus)
+	execute  func(context.Context, cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus)
 	mu       sync.Mutex
 	seen     map[string]time.Time
 }
@@ -104,15 +109,15 @@ func (handler *cliCompanionHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 	decoder.DisallowUnknownFields()
 	decodeErr := decoder.Decode(&input)
 	trailingErr := decoder.Decode(&struct{}{})
-	if decodeErr != nil || trailingErr != io.EOF || !validCLICompanionAction(input.Action) || !validCLICompanionID(input.UserID) || !validCLICompanionID(input.ProviderID) || cliSpecs[input.Protocol].Candidates == nil {
+	if decodeErr != nil || trailingErr != io.EOF || !validCLICompanionActionRequest(input) || !validCLICompanionID(input.UserID) || !validCLICompanionID(input.ProviderID) || cliSpecs[input.Protocol].Candidates == nil {
 		handler.writeResponse(w, http.StatusBadRequest, r.Header.Get(cliCompanionNonceHeader), cliCompanionActionResponse{Error: "CLI 动作不受支持"})
 		return
 	}
 	executionContext := r.Context()
-	if input.Action == cliCompanionActionLoginStart {
+	if input.Action == cliCompanionActionLoginStart || input.Action == cliCompanionActionProbeStart {
 		executionContext = handler.lifetime
 	}
-	result, status := handler.execute(executionContext, input.Action, input.Protocol)
+	result, status := handler.execute(executionContext, input)
 	handler.writeResponse(w, http.StatusOK, r.Header.Get(cliCompanionNonceHeader), cliCompanionActionResponse{Result: result, Status: status})
 }
 
@@ -161,7 +166,12 @@ func requestCLICompanion(parent context.Context, userID string, providerID strin
 }
 
 func requestCLICompanionAction(parent context.Context, userID string, providerID string, protocol string, action string) (CLIHelperResult, model.ProviderStatus, error) {
-	if !validCLICompanionAction(action) {
+	return requestCLICompanionTaskAction(parent, userID, providerID, protocol, action, "")
+}
+
+func requestCLICompanionTaskAction(parent context.Context, userID string, providerID string, protocol string, action string, taskID string) (CLIHelperResult, model.ProviderStatus, error) {
+	input := cliCompanionActionRequest{Action: action, UserID: userID, ProviderID: providerID, Protocol: protocol, TaskID: taskID}
+	if !validCLICompanionActionRequest(input) {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, errors.New("CLI companion action is invalid")
 	}
 	secret, err := cliCompanionSharedSecret()
@@ -172,7 +182,7 @@ func requestCLICompanionAction(parent context.Context, userID string, providerID
 	if err != nil {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, err
 	}
-	body, _ := json.Marshal(cliCompanionActionRequest{Action: action, UserID: userID, ProviderID: providerID, Protocol: protocol})
+	body, _ := json.Marshal(input)
 	nonceBytes := make([]byte, 24)
 	if _, err := rand.Read(nonceBytes); err != nil {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, err
@@ -217,18 +227,18 @@ func requestCLICompanionAction(parent context.Context, userID string, providerID
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, errors.New("CLI companion response signature is invalid")
 	}
 	var output cliCompanionActionResponse
-	if json.Unmarshal(responseBody, &output) != nil || response.StatusCode != http.StatusOK || output.Error != "" || output.Result.Protocol != protocol || !validCLICompanionStatus(output.Status) || !validCLICompanionResult(action, output.Result) {
+	if json.Unmarshal(responseBody, &output) != nil || response.StatusCode != http.StatusOK || output.Error != "" || output.Result.Protocol != protocol || !validCLICompanionStatus(output.Status) || !validCLICompanionResult(input, output.Result) {
 		return CLIHelperResult{}, model.ProviderStatusUnavailable, errors.New("CLI companion rejected the action")
 	}
 	return output.Result, output.Status, nil
 }
 
-func validCLICompanionResult(action string, result CLIHelperResult) bool {
-	switch action {
+func validCLICompanionResult(input cliCompanionActionRequest, result CLIHelperResult) bool {
+	switch input.Action {
 	case cliCompanionActionVersion:
-		return result.AuthStatus == "" && result.ActionStatus == ""
+		return result.AuthStatus == "" && result.ActionStatus == "" && !hasCLIModelProbeResult(result)
 	case cliCompanionActionAuthStatus:
-		if result.Version != "" || result.ActionStatus != "" {
+		if result.Version != "" || result.ActionStatus != "" || hasCLIModelProbeResult(result) {
 			return false
 		}
 		switch result.AuthStatus {
@@ -238,7 +248,7 @@ func validCLICompanionResult(action string, result CLIHelperResult) bool {
 			return false
 		}
 	case cliCompanionActionLoginStart:
-		if result.Version != "" || result.AuthStatus != "" {
+		if result.Version != "" || result.AuthStatus != "" || hasCLIModelProbeResult(result) {
 			return false
 		}
 		switch result.ActionStatus {
@@ -247,6 +257,26 @@ func validCLICompanionResult(action string, result CLIHelperResult) bool {
 		default:
 			return false
 		}
+	case cliCompanionActionProbeStart:
+		return validCLIModelProbeResult(result) && ((result.TaskStatus == "" && result.TaskID == "" && result.Output == "") || (result.TaskStatus == "running" && cliCompanionTaskPattern.MatchString(result.TaskID) && result.Output == ""))
+	case cliCompanionActionProbeStatus, cliCompanionActionProbeCancel:
+		return validCLIModelProbeResult(result) && result.TaskID == input.TaskID && ((result.TaskStatus == "succeeded" && result.Output != "") || (result.TaskStatus != "succeeded" && result.Output == ""))
+	default:
+		return false
+	}
+}
+
+func hasCLIModelProbeResult(result CLIHelperResult) bool {
+	return result.TaskID != "" || result.TaskStatus != "" || result.Output != ""
+}
+
+func validCLIModelProbeResult(result CLIHelperResult) bool {
+	if result.Version != "" || result.AuthStatus != "" || result.ActionStatus != "" || len(result.Output) > cliModelProbeOutputLimit {
+		return false
+	}
+	switch result.TaskStatus {
+	case "", "running", "succeeded", "failed", "cancelled", "timed_out":
+		return true
 	default:
 		return false
 	}
@@ -254,10 +284,22 @@ func validCLICompanionResult(action string, result CLIHelperResult) bool {
 
 func validCLICompanionAction(action string) bool {
 	switch action {
-	case cliCompanionActionVersion, cliCompanionActionAuthStatus, cliCompanionActionLoginStart:
+	case cliCompanionActionVersion, cliCompanionActionAuthStatus, cliCompanionActionLoginStart, cliCompanionActionProbeStart, cliCompanionActionProbeStatus, cliCompanionActionProbeCancel:
 		return true
 	default:
 		return false
+	}
+}
+
+func validCLICompanionActionRequest(input cliCompanionActionRequest) bool {
+	if !validCLICompanionAction(input.Action) {
+		return false
+	}
+	switch input.Action {
+	case cliCompanionActionProbeStatus, cliCompanionActionProbeCancel:
+		return cliCompanionTaskPattern.MatchString(input.TaskID)
+	default:
+		return input.TaskID == ""
 	}
 }
 

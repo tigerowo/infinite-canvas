@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Alert, Button, Checkbox, Drawer, Dropdown, Empty, Form, Input, InputNumber, Modal, Select, Skeleton, Switch, Table, Tabs, Tag, Tooltip } from "antd";
 import type { MenuProps, TableProps } from "antd";
-import { ArrowRight, Cable, Check, CircleAlert, CircleDashed, Clock3, Copy, Ellipsis, Import, KeyRound, LogIn, Plus, RefreshCw, Server, ShieldCheck, TerminalSquare, Unplug, WifiOff } from "lucide-react";
+import { ArrowRight, Cable, Check, CircleAlert, CircleDashed, Clock3, Copy, Ellipsis, Import, KeyRound, LogIn, Play, Plus, RefreshCw, Server, ShieldCheck, Square, TerminalSquare, Unplug, WifiOff } from "lucide-react";
 
-import { isRunningHubReference, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
+import { isRunningHubReference, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
 import { fetchProviderMigrationPreview } from "@/services/api/providers";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useProviderStore } from "@/stores/use-provider-store";
@@ -26,6 +26,12 @@ type ProviderForm = {
     isDefault: boolean;
     executable: string;
     workingDirectory: string;
+};
+
+type CLIProbeState = {
+    providerId: string;
+    providerName: string;
+    result: CLIHelperResult;
 };
 
 const apiProtocolOptions = [
@@ -63,6 +69,14 @@ const statusMeta: Record<ProviderStatus, { label: string; color: string; icon: t
     untested: { label: "未测试", color: "processing", icon: CircleDashed },
 };
 
+const probeStatusMeta = {
+    running: { label: "运行中", color: "processing" },
+    succeeded: { label: "已成功", color: "success" },
+    failed: { label: "失败", color: "error" },
+    cancelled: { label: "已取消", color: "default" },
+    timed_out: { label: "已超时", color: "warning" },
+} as const;
+
 const initialForm: ProviderForm = {
     kind: "api",
     protocol: "openai",
@@ -94,6 +108,9 @@ export default function ProvidersPage() {
     const detectCLI = useProviderStore((state) => state.detectCLI);
     const checkCLIAuth = useProviderStore((state) => state.checkCLIAuth);
     const startCLILogin = useProviderStore((state) => state.startCLILogin);
+    const startCLIProbe = useProviderStore((state) => state.startCLIProbe);
+    const queryCLIProbe = useProviderStore((state) => state.queryCLIProbe);
+    const cancelCLIProbe = useProviderStore((state) => state.cancelCLIProbe);
     const migrate = useProviderStore((state) => state.migrate);
     const [activeKind, setActiveKind] = useState<ProviderKind>("api");
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -102,10 +119,17 @@ export default function ProvidersPage() {
     const [testing, setTesting] = useState(false);
     const [checkingAuth, setCheckingAuth] = useState(false);
     const [startingLogin, setStartingLogin] = useState(false);
+    const [startingProbe, setStartingProbe] = useState(false);
+    const [cancellingProbe, setCancellingProbe] = useState(false);
+    const [probeOpen, setProbeOpen] = useState(false);
+    const [probe, setProbe] = useState<CLIProbeState | null>(null);
     const [migrationOpen, setMigrationOpen] = useState(false);
     const [migrationPreview, setMigrationPreview] = useState<ProviderMigrationPreview | null>(null);
     const [cleanupLegacy, setCleanupLegacy] = useState(false);
     const [migrating, setMigrating] = useState(false);
+    const probeProviderId = probe?.providerId;
+    const probeTaskId = probe?.result.taskId;
+    const probeTaskStatus = probe?.result.taskStatus;
     const [form] = Form.useForm<ProviderForm>();
     const formKind = Form.useWatch("kind", form) || activeKind;
     const formProtocol = Form.useWatch("protocol", form) || (formKind === "api" ? "openai" : "codex");
@@ -121,6 +145,33 @@ export default function ProvidersPage() {
             .then(setMigrationPreview)
             .catch(() => undefined);
     }, [token]);
+
+    useEffect(() => {
+        if (!token || !probeOpen || !probeProviderId || !probeTaskId || probeTaskStatus !== "running") return;
+        let active = true;
+        let timer: number | undefined;
+        const poll = () => {
+            timer = window.setTimeout(() => {
+                void queryCLIProbe(token, probeProviderId, probeTaskId)
+                    .then((result) => setProbe((current) => (current?.result.taskId === probeTaskId ? { ...current, result } : current)))
+                    .catch((queryError) =>
+                        setProbe((current) =>
+                            current?.result.taskId === probeTaskId
+                                ? { ...current, result: { ...current.result, message: queryError instanceof Error ? queryError.message : "调用状态读取失败" } }
+                                : current,
+                        ),
+                    )
+                    .finally(() => {
+                        if (active) poll();
+                    });
+            }, 5000);
+        };
+        poll();
+        return () => {
+            active = false;
+            if (timer) window.clearTimeout(timer);
+        };
+    }, [probeOpen, probeProviderId, probeTaskId, probeTaskStatus, queryCLIProbe, token]);
 
     const visibleItems = useMemo(() => items.filter((item) => item.kind === activeKind), [activeKind, items]);
     const connectedCount = visibleItems.filter((item) => item.connectionStatus === "connected").length;
@@ -254,6 +305,67 @@ export default function ProvidersPage() {
                 }
             },
         });
+    }
+
+    function confirmCLIModelProbe() {
+        if (!token || !editing || editing.protocol !== "codex" || startingProbe) return;
+        const providerId = editing.id;
+        const providerName = editing.name;
+        setStartingProbe(true);
+        modal.confirm({
+            title: "确认执行 Codex 最小调用？",
+            width: 560,
+            content: (
+                <div className="space-y-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
+                    <div className="grid grid-cols-[88px_1fr] gap-x-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+                        <span>调用渠道</span>
+                        <span className="font-medium text-stone-950 dark:text-stone-100">{providerName}</span>
+                        <span>模型</span>
+                        <span className="font-medium text-stone-950 dark:text-stone-100">Codex CLI 当前默认模型</span>
+                        <span>任务类型</span>
+                        <span className="font-medium text-stone-950 dark:text-stone-100">固定最小文本验证</span>
+                        <span>固定提示词</span>
+                        <code className="break-all text-xs">Reply with exactly OK. Do not inspect files, run commands, or use tools.</code>
+                    </div>
+                    <p>伴随进程只会在临时目录和只读沙箱中执行一次非交互调用，最长 2 分钟，最终输出最多读取 4 KiB；不会接收自定义提示词、参数或工作目录。</p>
+                    <Alert type="warning" showIcon title="此操作可能产生少量模型调用费用，不会自动重试。" />
+                </div>
+            ),
+            okText: "确认调用",
+            cancelText: "取消",
+            onCancel: () => setStartingProbe(false),
+            async onOk() {
+                try {
+                    const result = await startCLIProbe(token, providerId);
+                    if (!result.taskId || !result.taskStatus) {
+                        message.warning(result.message);
+                        return;
+                    }
+                    setProbe({ providerId, providerName, result });
+                    setProbeOpen(true);
+                } catch (probeError) {
+                    message.error(probeError instanceof Error ? probeError.message : "Codex 最小调用启动失败");
+                    throw probeError;
+                } finally {
+                    setStartingProbe(false);
+                }
+            },
+        });
+    }
+
+    async function cancelCurrentCLIModelProbe() {
+        const taskId = probe?.result.taskId;
+        if (!token || !probe || !taskId || probe.result.taskStatus !== "running" || cancellingProbe) return;
+        setCancellingProbe(true);
+        try {
+            const result = await cancelCLIProbe(token, probe.providerId, taskId);
+            setProbe((current) => (current?.result.taskId === taskId ? { ...current, result } : current));
+            message.success(result.message);
+        } catch (cancelError) {
+            message.error(cancelError instanceof Error ? cancelError.message : "取消调用失败");
+        } finally {
+            setCancellingProbe(false);
+        }
     }
 
     async function toggleProvider(item: Provider, enabled: boolean) {
@@ -431,7 +543,7 @@ export default function ProvidersPage() {
                     />
                 ) : null}
 
-                {activeKind === "cli" ? <Alert className="mb-4" type="info" showIcon title="受控 Mac CLI helper" description="仅在本机回环地址且显式启用时检测固定 CLI 的版本；不会执行用户填写路径、安装脚本、登录命令、任意参数或真实模型调用。" /> : null}
+                {activeKind === "cli" ? <Alert className="mb-4" type="info" showIcon title="受控 Mac CLI helper" description="仅在本机回环地址且显式启用时执行固定版本检测；Codex 登录和最小调用都需要逐次确认，不接受用户填写的命令、参数、提示词或执行路径。" /> : null}
                 {error ? (
                     <Alert
                         className="mb-4"
@@ -501,6 +613,9 @@ export default function ProvidersPage() {
                                     </Button>
                                     <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
                                         检查登录状态
+                                    </Button>
+                                    <Button icon={<Play className="size-4" />} loading={startingProbe} onClick={confirmCLIModelProbe}>
+                                        最小调用
                                     </Button>
                                 </>
                             ) : null}
@@ -605,7 +720,7 @@ export default function ProvidersPage() {
                                 type="info"
                                 showIcon
                                 title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : "当前仅检测 CLI 安装与版本"}
-                                description={formProtocol === "codex" ? "保存后可逐次授权检查状态；点击登录并二次确认后，伴随进程才会打开官方浏览器 OAuth。不会接收 API Key、Token、自定义参数或执行模型调用。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
+                                description={formProtocol === "codex" ? "保存后可逐次授权检查状态；登录和最小模型调用均需二次确认。最小调用使用固定提示词、只读沙箱和当前默认模型，不接受 API Key、Token 或自定义参数。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
                             />
                             <Form.Item name="executable" label="检测到的可执行程序" extra="该字段由受控 helper 写入；页面输入不会决定执行目标。">
                                 <Input readOnly placeholder="保存后点击“检测 CLI”" />
@@ -652,6 +767,48 @@ export default function ProvidersPage() {
                     </div>
                 </Form>
             </Drawer>
+            <Modal
+                title="Codex 最小调用"
+                width={560}
+                open={probeOpen}
+                closable={probe?.result.taskStatus !== "running"}
+                keyboard={probe?.result.taskStatus !== "running"}
+                maskClosable={probe?.result.taskStatus !== "running"}
+                onCancel={() => probe?.result.taskStatus !== "running" && setProbeOpen(false)}
+                footer={
+                    probe?.result.taskStatus === "running"
+                        ? [
+                              <Button key="cancel" danger icon={<Square className="size-3.5" />} loading={cancellingProbe} onClick={() => void cancelCurrentCLIModelProbe()}>
+                                  取消调用
+                              </Button>,
+                          ]
+                        : [
+                              <Button key="close" type="primary" onClick={() => setProbeOpen(false)}>
+                                  关闭
+                              </Button>,
+                          ]
+                }
+            >
+                {probe ? (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-4 py-3 dark:border-stone-800">
+                            <div>
+                                <div className="font-medium text-stone-950 dark:text-stone-100">{probe.providerName}</div>
+                                <div className="mt-1 text-xs text-stone-500">Codex CLI 当前默认模型 · 固定最小文本验证</div>
+                            </div>
+                            {probe.result.taskStatus ? <Tag color={probeStatusMeta[probe.result.taskStatus].color}>{probeStatusMeta[probe.result.taskStatus].label}</Tag> : null}
+                        </div>
+                        <Alert type={probe.result.taskStatus === "failed" || probe.result.taskStatus === "timed_out" ? "error" : probe.result.taskStatus === "succeeded" ? "success" : "info"} showIcon title={probe.result.message} />
+                        {probe.result.output ? (
+                            <div>
+                                <div className="mb-2 text-xs font-medium text-stone-500">最终输出（最多 4 KiB）</div>
+                                <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-stone-100 p-3 text-xs text-stone-900 dark:bg-stone-900 dark:text-stone-100">{probe.result.output}</pre>
+                            </div>
+                        ) : null}
+                        <p className="text-xs leading-5 text-stone-500">任务运行期间必须先点击“取消调用”才能关闭窗口；关闭完成状态不会再次调用模型。</p>
+                    </div>
+                ) : null}
+            </Modal>
             <Modal
                 title="迁移旧版渠道"
                 width={720}

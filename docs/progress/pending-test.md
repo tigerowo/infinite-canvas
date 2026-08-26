@@ -45,5 +45,6 @@ description: 当前版本已实现但仍需人工验证的变更项
 - Web 后端的 CLI 检测改为调用独立 `cmd/infinite-canvas-cli-helper` Unix Socket 进程；每次动作授权绑定用户、Provider、协议和动作，使用 30 秒 HMAC、随机 nonce、两分钟防重放缓存和签名响应。新增有效授权、过期、正文篡改、nonce 重放及私有 Socket 客户端契约测试，按项目约束尚未执行。
 - CLI Provider 编辑页新增独立“检查登录状态”入口；仅 Codex 逐次授权执行固定 `codex login status`，只返回登录/未登录枚举，不返回账号或认证方式。Gemini 与即梦因没有已确认的非交互状态命令不显示入口，也不会触发交互登录；新增伴随进程动作绑定、固定参数及前端接口路径契约测试，按项目约束尚未执行。
 - Codex CLI Provider 新增“登录 Codex”二次确认入口；接口还要求 `confirmed=true`，确认后逐次授权启动固定无参数 `codex login` 浏览器 OAuth。登录全局互斥、最长 10 分钟、stdin 为空、输出全部丢弃，helper 退出时取消；API Key、Access Token、device code、自定义参数、Gemini/即梦登录均未开放。本轮只补确认门槛、动作绑定、固定参数、互斥和接口路径契约测试，未实际触发登录。
+- Codex CLI Provider 新增“最小调用”预览与二次确认：固定使用当前默认模型、固定提示词、只读沙箱、临时目录和 2 分钟 deadline，不接受自定义参数且不自动重试。任务 ID 与用户、Provider、协议绑定，状态为 `running`、`succeeded`、`failed`、`cancelled` 或 `timed_out`，最终输出脱敏并限制为 4 KiB；运行中提供独立取消按钮。新增固定参数、任务越权、逐次授权和前端 start/status/cancel 契约测试，按项目约束尚未执行，也未实际调用模型。
 - RunningHub 应用/工作流提交、查询和累计读取预算已通过本地模拟服务测试；真实账号的一次账户检测与一次工作流任务已成功，任务状态为 `QUEUED → RUNNING → SUCCESS` 并返回 1 个 PNG。
 - Linux.do OAuth state 应带签名、时效并与 HttpOnly SameSite Cookie 匹配；回调 URL 只携带两分钟有效且只能使用一次的交换码，不再出现 JWT。

@@ -130,6 +130,15 @@ func New() *gin.Engine {
 	v1.POST("/providers/:id/cli/login", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.StartUserCLIProviderLogin(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/providers/:id/cli/model-probe", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.StartUserCLIModelProbe(c.Writer, c.Request, c.Param("id"))
+	})
+	v1.POST("/providers/:id/cli/model-probe/:taskId/status", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.QueryUserCLIModelProbe(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
+	})
+	v1.POST("/providers/:id/cli/model-probe/:taskId/cancel", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.CancelUserCLIModelProbe(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
+	})
 	v1.DELETE("/providers/:id", func(c *gin.Context) {
 		handler.DeleteUserProvider(c.Writer, c.Request, c.Param("id"))
 	})

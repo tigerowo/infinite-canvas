@@ -1,7 +1,7 @@
 import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { checkCLIProviderAuth, startCLIProviderLogin } from "@/services/api/providers";
+import { cancelCLIModelProbe, checkCLIProviderAuth, queryCLIModelProbe, startCLIModelProbe, startCLIProviderLogin } from "@/services/api/providers";
 
 describe("CLI provider auth status API contract", () => {
     afterEach(() => vi.restoreAllMocks());
@@ -37,6 +37,29 @@ describe("CLI provider auth status API contract", () => {
                 data: { confirmed: true },
                 headers: expect.objectContaining({ Authorization: "Bearer test-token" }),
             }),
+        );
+    });
+
+    it("starts, polls, and cancels a separately confirmed model probe", async () => {
+        const request = vi.spyOn(axios, "request").mockResolvedValue({
+            status: 200,
+            data: { code: 0, data: { available: true, protocol: "codex", taskId: "task/id", taskStatus: "running", message: "Codex 最小调用正在执行" }, msg: "" },
+        });
+
+        await expect(startCLIModelProbe("test-token", "provider/id")).resolves.toMatchObject({ taskStatus: "running" });
+        await queryCLIModelProbe("test-token", "provider/id", "task/id");
+        await cancelCLIModelProbe("test-token", "provider/id", "task/id");
+        expect(request).toHaveBeenNthCalledWith(
+            1,
+            expect.objectContaining({ url: "/api/v1/providers/provider%2Fid/cli/model-probe", method: "POST", data: { confirmed: true } }),
+        );
+        expect(request).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ url: "/api/v1/providers/provider%2Fid/cli/model-probe/task%2Fid/status", method: "POST", data: {} }),
+        );
+        expect(request).toHaveBeenNthCalledWith(
+            3,
+            expect.objectContaining({ url: "/api/v1/providers/provider%2Fid/cli/model-probe/task%2Fid/cancel", method: "POST", data: {} }),
         );
     });
 });

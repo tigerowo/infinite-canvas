@@ -99,6 +99,57 @@ func StartUserCLIProviderLogin(w http.ResponseWriter, r *http.Request, providerI
 	OK(w, result)
 }
 
+func StartUserCLIModelProbe(w http.ResponseWriter, r *http.Request, providerID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var input struct {
+		Confirmed bool `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	decodeErr := decoder.Decode(&input)
+	trailingErr := decoder.Decode(&struct{}{})
+	if decodeErr != nil || trailingErr != io.EOF || !input.Confirmed {
+		Fail(w, "请明确确认后再执行 Codex 最小调用")
+		return
+	}
+	result, err := service.StartCurrentUserCLIModelProbe(r.Context(), providerID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func QueryUserCLIModelProbe(w http.ResponseWriter, r *http.Request, providerID string, taskID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	result, err := service.QueryCurrentUserCLIModelProbe(r.Context(), providerID, taskID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func CancelUserCLIModelProbe(w http.ResponseWriter, r *http.Request, providerID string, taskID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	result, err := service.CancelCurrentUserCLIModelProbe(r.Context(), providerID, taskID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
 func isLoopbackWebRequest(r *http.Request) bool {
 	remoteHost, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
 	if err != nil {

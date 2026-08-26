@@ -41,6 +41,18 @@ export function startCLIProviderLogin(token: string, id: string) {
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/login`, { confirmed: true }, token);
 }
 
+export function startCLIModelProbe(token: string, id: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/model-probe`, { confirmed: true }, token);
+}
+
+export function queryCLIModelProbe(token: string, id: string, taskId: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/model-probe/${encodeURIComponent(taskId)}/status`, {}, token);
+}
+
+export function cancelCLIModelProbe(token: string, id: string, taskId: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/model-probe/${encodeURIComponent(taskId)}/cancel`, {}, token);
+}
+
 export function submitRunningHubTask(token: string, id: string, reference: string, nodeInfoList: RunningHubNodeInfo[]) {
     return apiPost<RunningHubTaskResult>(`/api/v1/providers/${encodeURIComponent(id)}/runninghub/tasks`, { reference, nodeInfoList }, token);
 }
