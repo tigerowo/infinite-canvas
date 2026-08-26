@@ -40,11 +40,12 @@ description: 当前版本已实现但仍需人工验证的变更项
 - `/api` 的写请求按普通 JSON 2 MiB、同步数据 64 MiB、AI/画布任务 128 MiB、参考媒体 81 MiB、匿名上传 129 MiB 和登录用户对象存储上传 257 MiB 限制；KIE/APIMart 单参考文件超过 32 MiB 时明确失败而不是截断。
 - 登录入口按 IP 限制 20 次/分钟、AI 生成按用户限制 60 次/分钟并发 4、上传和重型上游操作限制 30 次/分钟并发 2、下载限制 120 次/分钟并发 4；超限返回 HTTP 429 和 `Retry-After`。
 - 每个用户最近 30 分钟最多同时保留 8 个视频、画布图片和画布音频活动任务；并发创建时尚未落库的槽位也参与计算。
-- CLI Provider 默认显示 helper 未启用；旧同进程版本曾完成人工检测，改为独立伴随进程后需重新验证本机回环 Codex CLI、伴随进程未启动、Socket 权限错误、签名清单无效及 Gemini/即梦缺失状态。
+- 独立 CLI helper 已使用本机私有 Unix Socket、临时共享密钥和本机签名清单完成 UI 人工回归：Codex 版本检测成功，登录状态显示“已登录”，最小调用确认窗完整展示固定渠道、任务、提示词、deadline、输出限额和扣费提示。未点击最终“确认调用”，没有新增模型请求；伴随进程未启动、Socket 权限错误、无效清单及 Gemini/即梦缺失状态仍待人工回归。
+- Next API 代理现使用浏览器可见的原始 `Host` 生成 `X-Forwarded-Host`，不再把 `0.0.0.0` 监听地址误传给后端；后端的回环 Host、Origin 与转发地址检查保持不变。本机 CLI 检测和登录状态已通过该代理路径验证。
 - CLI helper 启用后还必须读取绝对路径的 Ed25519 签名清单；清单签名、过期时间、协议/候选名和解析后二进制 SHA-256 全部通过才执行固定 `--version`。新增有效、篡改、过期、哈希不匹配和可写文件契约测试，按项目约束尚未执行。
 - Web 后端的 CLI 检测改为调用独立 `cmd/infinite-canvas-cli-helper` Unix Socket 进程；每次动作授权绑定用户、Provider、协议和动作，使用 30 秒 HMAC、随机 nonce、两分钟防重放缓存和签名响应。新增有效授权、过期、正文篡改、nonce 重放及私有 Socket 客户端契约测试，按项目约束尚未执行。
 - CLI Provider 编辑页新增独立“检查登录状态”入口；仅 Codex 逐次授权执行固定 `codex login status`，只返回登录/未登录枚举，不返回账号或认证方式。Gemini 与即梦因没有已确认的非交互状态命令不显示入口，也不会触发交互登录；新增伴随进程动作绑定、固定参数及前端接口路径契约测试，按项目约束尚未执行。
 - Codex CLI Provider 新增“登录 Codex”二次确认入口；接口还要求 `confirmed=true`，确认后逐次授权启动固定无参数 `codex login` 浏览器 OAuth。登录全局互斥、最长 10 分钟、stdin 为空、输出全部丢弃，helper 退出时取消；API Key、Access Token、device code、自定义参数、Gemini/即梦登录均未开放。本轮只补确认门槛、动作绑定、固定参数、互斥和接口路径契约测试，未实际触发登录。
-- Codex CLI Provider 新增“最小调用”预览与二次确认：固定使用当前默认模型、固定提示词、只读沙箱、临时目录和 2 分钟 deadline，不接受自定义参数且不自动重试。任务 ID 与用户、Provider、协议绑定，状态为 `running`、`succeeded`、`failed`、`cancelled` 或 `timed_out`，最终输出脱敏并限制为 4 KiB；运行中提供独立取消按钮。新增固定参数、任务越权、逐次授权和前端 start/status/cancel 契约测试，按项目约束尚未执行，也未实际调用模型。
+- Codex CLI Provider 新增“最小调用”预览与二次确认：固定使用当前默认模型、固定提示词、只读沙箱、临时目录和 2 分钟 deadline，不接受自定义参数且不自动重试。任务 ID 与用户、Provider、协议绑定，状态为 `running`、`succeeded`、`failed`、`cancelled` 或 `timed_out`，最终输出脱敏并限制为 4 KiB；运行中提供独立取消按钮。确认窗已人工验证并在最终确认前取消；新增固定参数、任务越权、逐次授权和前端 start/status/cancel 契约测试按项目约束尚未执行，也未实际调用模型。
 - RunningHub 应用/工作流提交、查询和累计读取预算已通过本地模拟服务测试；真实账号的一次账户检测与一次工作流任务已成功，任务状态为 `QUEUED → RUNNING → SUCCESS` 并返回 1 个 PNG。
 - Linux.do OAuth state 应带签名、时效并与 HttpOnly SameSite Cookie 匹配；回调 URL 只携带两分钟有效且只能使用一次的交换码，不再出现 JWT。
