@@ -64,6 +64,7 @@ export type CLIHelperResult = {
     executable?: string;
     version?: string;
     authStatus?: "authenticated" | "unauthenticated" | "unsupported";
+    actionStatus?: "started" | "running" | "unsupported";
     message: string;
 };
 

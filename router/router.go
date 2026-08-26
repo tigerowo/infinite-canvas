@@ -127,6 +127,9 @@ func New() *gin.Engine {
 	v1.POST("/providers/:id/cli/auth-status", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.CheckUserCLIProviderAuth(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/providers/:id/cli/login", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.StartUserCLIProviderLogin(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.DELETE("/providers/:id", func(c *gin.Context) {
 		handler.DeleteUserProvider(c.Writer, c.Request, c.Param("id"))
 	})

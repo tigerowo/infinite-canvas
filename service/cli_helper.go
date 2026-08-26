@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/config"
@@ -27,10 +28,15 @@ const (
 	cliHelperOutputLimit   = 16 * 1024
 	cliHelperManifestLimit = 64 * 1024
 	cliHelperBinaryLimit   = int64(256 * 1024 * 1024)
+	cliHelperLoginTimeout  = 10 * time.Minute
 )
 
 var (
-	cliHelperSlots  = make(chan struct{}, 2)
+	cliHelperSlots = make(chan struct{}, 2)
+	cliLoginState  struct {
+		sync.Mutex
+		running bool
+	}
 	cliSecretLine   = regexp.MustCompile(`(?i)(api[_-]?key|authorization|bearer|token|secret|password)\s*[:=]\s*\S+`)
 	cliAllowedRoots = controlledCLIAllowedRoots
 	cliSpecs        = map[string]struct {
@@ -44,12 +50,13 @@ var (
 )
 
 type CLIHelperResult struct {
-	Available  bool   `json:"available"`
-	Protocol   string `json:"protocol"`
-	Executable string `json:"executable,omitempty"`
-	Version    string `json:"version,omitempty"`
-	AuthStatus string `json:"authStatus,omitempty"`
-	Message    string `json:"message"`
+	Available    bool   `json:"available"`
+	Protocol     string `json:"protocol"`
+	Executable   string `json:"executable,omitempty"`
+	Version      string `json:"version,omitempty"`
+	AuthStatus   string `json:"authStatus,omitempty"`
+	ActionStatus string `json:"actionStatus,omitempty"`
+	Message      string `json:"message"`
 }
 
 type cliHelperManifestEnvelope struct {
@@ -113,6 +120,30 @@ func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CL
 		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI helper 仅支持 macOS"}, nil
 	}
 	result, _, err := requestCLICompanionAction(ctx, item.OwnerUserID, item.ID, item.Protocol, cliCompanionActionAuthStatus)
+	if err != nil {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI 伴随进程未连接或授权失败"}, nil
+	}
+	return result, nil
+}
+
+func StartCurrentUserCLIProviderLogin(ctx context.Context, providerID string) (CLIHelperResult, error) {
+	_, item, err := currentUserProvider(ctx, providerID)
+	if err != nil {
+		return CLIHelperResult{}, err
+	}
+	if item.Kind != model.ProviderKindCLI || !item.Enabled {
+		return CLIHelperResult{}, safeMessageError{message: "CLI 渠道不可用"}
+	}
+	if item.Protocol != "codex" {
+		return CLIHelperResult{Protocol: item.Protocol, ActionStatus: "unsupported", Message: "该 CLI 暂不支持受控浏览器登录"}, nil
+	}
+	if !config.Cfg.CLIHelperEnabled {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "Mac CLI helper 未启用"}, nil
+	}
+	if runtime.GOOS != "darwin" {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI helper 仅支持 macOS"}, nil
+	}
+	result, _, err := requestCLICompanionAction(ctx, item.OwnerUserID, item.ID, item.Protocol, cliCompanionActionLoginStart)
 	if err != nil {
 		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI 伴随进程未连接或授权失败"}, nil
 	}
@@ -197,9 +228,61 @@ func executeCLICompanionAction(parent context.Context, action string, protocol s
 		return executeCLICompanionVersion(parent, protocol)
 	case cliCompanionActionAuthStatus:
 		return executeCLICompanionAuthStatus(parent, protocol)
+	case cliCompanionActionLoginStart:
+		return executeCLICompanionLoginStart(parent, protocol)
 	default:
 		return CLIHelperResult{Protocol: protocol, Message: "CLI 动作不受支持"}, model.ProviderStatusUnavailable
 	}
+}
+
+func executeCLICompanionLoginStart(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
+	result := CLIHelperResult{Protocol: protocol}
+	if protocol != "codex" {
+		result.ActionStatus = "unsupported"
+		result.Message = "该 CLI 暂不支持受控浏览器登录"
+		return result, model.ProviderStatusUnavailable
+	}
+	hashes, err := loadCLIHelperHashes(protocol, time.Now())
+	if err != nil {
+		result.Message = "CLI helper 可信清单未配置或无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	executable, err := findControlledCLIExecutable(cliSpecs[protocol].Candidates, hashes)
+	if err != nil {
+		result.Message = "未检测到受支持的 CLI"
+		return result, model.ProviderStatusUnavailable
+	}
+	result.Available = true
+	result.Executable = executable
+	cliLoginState.Lock()
+	defer cliLoginState.Unlock()
+	if cliLoginState.running {
+		result.ActionStatus = "running"
+		result.Message = "Codex 登录流程已在进行"
+		return result, model.ProviderStatusConnected
+	}
+	ctx, cancel := context.WithTimeout(parent, cliHelperLoginTimeout)
+	command := exec.CommandContext(ctx, executable, "login")
+	command.Env = controlledCLIEnvironment()
+	command.Stdin = nil
+	command.Stdout = io.Discard
+	command.Stderr = io.Discard
+	if err := command.Start(); err != nil {
+		cancel()
+		result.Message = "Codex 登录流程启动失败"
+		return result, model.ProviderStatusFailed
+	}
+	cliLoginState.running = true
+	go func() {
+		_ = command.Wait()
+		cancel()
+		cliLoginState.Lock()
+		cliLoginState.running = false
+		cliLoginState.Unlock()
+	}()
+	result.ActionStatus = "started"
+	result.Message = "Codex 登录已启动，请在浏览器完成授权"
+	return result, model.ProviderStatusConnected
 }
 
 func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {

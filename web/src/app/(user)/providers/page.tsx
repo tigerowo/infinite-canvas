@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { App, Alert, Button, Checkbox, Drawer, Dropdown, Empty, Form, Input, InputNumber, Modal, Select, Skeleton, Switch, Table, Tabs, Tag, Tooltip } from "antd";
 import type { MenuProps, TableProps } from "antd";
-import { ArrowRight, Cable, Check, CircleAlert, CircleDashed, Clock3, Copy, Ellipsis, Import, KeyRound, Plus, RefreshCw, Server, ShieldCheck, TerminalSquare, Unplug, WifiOff } from "lucide-react";
+import { ArrowRight, Cable, Check, CircleAlert, CircleDashed, Clock3, Copy, Ellipsis, Import, KeyRound, LogIn, Plus, RefreshCw, Server, ShieldCheck, TerminalSquare, Unplug, WifiOff } from "lucide-react";
 
 import { isRunningHubReference, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
 import { fetchProviderMigrationPreview } from "@/services/api/providers";
@@ -93,6 +93,7 @@ export default function ProvidersPage() {
     const test = useProviderStore((state) => state.test);
     const detectCLI = useProviderStore((state) => state.detectCLI);
     const checkCLIAuth = useProviderStore((state) => state.checkCLIAuth);
+    const startCLILogin = useProviderStore((state) => state.startCLILogin);
     const migrate = useProviderStore((state) => state.migrate);
     const [activeKind, setActiveKind] = useState<ProviderKind>("api");
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -100,6 +101,7 @@ export default function ProvidersPage() {
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [checkingAuth, setCheckingAuth] = useState(false);
+    const [startingLogin, setStartingLogin] = useState(false);
     const [migrationOpen, setMigrationOpen] = useState(false);
     const [migrationPreview, setMigrationPreview] = useState<ProviderMigrationPreview | null>(null);
     const [cleanupLegacy, setCleanupLegacy] = useState(false);
@@ -223,6 +225,35 @@ export default function ProvidersPage() {
         } finally {
             setCheckingAuth(false);
         }
+    }
+
+    function confirmCLILogin() {
+        if (!token || !editing || editing.protocol !== "codex" || startingLogin) return;
+        setStartingLogin(true);
+        modal.confirm({
+            title: "打开 Codex 登录？",
+            content: (
+                <div className="space-y-2 text-sm leading-6 text-stone-600 dark:text-stone-400">
+                    <p>伴随进程将执行固定的 codex login，并打开系统浏览器完成 ChatGPT OAuth。</p>
+                    <p>登录最长等待 10 分钟。系统不会接收 API Key、Token 或自定义参数，也不会保存或回传命令输出。</p>
+                </div>
+            ),
+            okText: "打开浏览器登录",
+            cancelText: "取消",
+            onCancel: () => setStartingLogin(false),
+            async onOk() {
+                try {
+                    const result = await startCLILogin(token, editing.id);
+                    if (result.actionStatus === "started") message.success(result.message);
+                    else message.info(result.message);
+                } catch (loginError) {
+                    message.error(loginError instanceof Error ? loginError.message : "Codex 登录启动失败");
+                    throw loginError;
+                } finally {
+                    setStartingLogin(false);
+                }
+            },
+        });
     }
 
     async function toggleProvider(item: Provider, enabled: boolean) {
@@ -464,9 +495,14 @@ export default function ProvidersPage() {
                                 </Button>
                             ) : null}
                             {editing?.kind === "cli" && editing.protocol === "codex" && formProtocol === "codex" ? (
-                                <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
-                                    检查登录状态
-                                </Button>
+                                <>
+                                    <Button icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>
+                                        登录 Codex
+                                    </Button>
+                                    <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
+                                        检查登录状态
+                                    </Button>
+                                </>
                             ) : null}
                         </div>
                         <div className="flex gap-2">
@@ -569,7 +605,7 @@ export default function ProvidersPage() {
                                 type="info"
                                 showIcon
                                 title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : "当前仅检测 CLI 安装与版本"}
-                                description={formProtocol === "codex" ? "保存后可逐次授权执行官方 codex login status；不会启动登录流程、浏览器或模型调用。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
+                                description={formProtocol === "codex" ? "保存后可逐次授权检查状态；点击登录并二次确认后，伴随进程才会打开官方浏览器 OAuth。不会接收 API Key、Token、自定义参数或执行模型调用。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
                             />
                             <Form.Item name="executable" label="检测到的可执行程序" extra="该字段由受控 helper 写入；页面输入不会决定执行目标。">
                                 <Input readOnly placeholder="保存后点击“检测 CLI”" />

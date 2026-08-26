@@ -146,6 +146,35 @@ func TestCLICompanionAuthStatusActionIsBoundToAuthorization(t *testing.T) {
 	}
 }
 
+func TestCLICompanionLoginStartActionIsBoundToAuthorization(t *testing.T) {
+	secret := bytes.Repeat([]byte{0x71}, 32)
+	current := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	handler := &cliCompanionHandler{
+		secret:   secret,
+		now:      func() time.Time { return current },
+		lifetime: context.Background(),
+		execute: func(_ context.Context, action string, protocol string) (CLIHelperResult, model.ProviderStatus) {
+			if action != cliCompanionActionLoginStart || protocol != "codex" {
+				t.Fatalf("action=%q protocol=%q", action, protocol)
+			}
+			return CLIHelperResult{Available: true, Protocol: protocol, ActionStatus: "started", Message: "Codex 登录已启动"}, model.ProviderStatusConnected
+		},
+		seen: map[string]time.Time{},
+	}
+	body, _ := json.Marshal(cliCompanionActionRequest{Action: cliCompanionActionLoginStart, UserID: "user-1", ProviderID: "provider-1", Protocol: "codex"})
+	nonce := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 24))
+	request := cliCompanionTestRequest(t, body, strconv.FormatInt(current.Unix(), 10), nonce, secret)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response cliCompanionActionResponse
+	if json.Unmarshal(recorder.Body.Bytes(), &response) != nil || response.Result.ActionStatus != "started" {
+		t.Fatalf("response=%#v", response)
+	}
+}
+
 func cliCompanionTestRequest(t *testing.T, body []byte, timestamp string, nonce string, secret []byte) *http.Request {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodPost, "http://unix"+cliCompanionActionPath, bytes.NewReader(body))

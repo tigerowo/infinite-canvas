@@ -164,6 +164,77 @@ func TestExecuteCLICompanionAuthStatusRunsOnlyCodexStatusProbe(t *testing.T) {
 	}
 }
 
+func TestExecuteCLICompanionLoginStartsOnlyFixedBrowserFlow(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Mac CLI helper only runs on macOS")
+	}
+	directory := t.TempDir()
+	resolvedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRoots := cliAllowedRoots
+	cliAllowedRoots = func() []string { return []string{directory, resolvedDirectory} }
+	t.Cleanup(func() { cliAllowedRoots = previousRoots })
+	path := filepath.Join(directory, "codex")
+	argsPath := filepath.Join(directory, "login-args")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '%s\\n%s\\n' \"$#\" \"$1\" > \"$HOME/login-args\"\nsleep 0.2\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("HOME", directory)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(directory, "manifest.json")
+	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "codex", "codex", cliTestFileHash(t, path)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousManifest := config.Cfg.CLIHelperManifest
+	previousPublicKey := config.Cfg.CLIHelperPublicKey
+	config.Cfg.CLIHelperManifest = manifestPath
+	config.Cfg.CLIHelperPublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	t.Cleanup(func() {
+		config.Cfg.CLIHelperManifest = previousManifest
+		config.Cfg.CLIHelperPublicKey = previousPublicKey
+	})
+	result, status := executeCLICompanionLoginStart(context.Background(), "codex")
+	if status != model.ProviderStatusConnected || !result.Available || result.ActionStatus != "started" || result.Version != "" || result.AuthStatus != "" {
+		t.Fatalf("result=%#v status=%s", result, status)
+	}
+	duplicate, duplicateStatus := executeCLICompanionLoginStart(context.Background(), "codex")
+	if duplicateStatus != model.ProviderStatusConnected || duplicate.ActionStatus != "running" {
+		t.Fatalf("result=%#v status=%s", duplicate, duplicateStatus)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		data, readErr := os.ReadFile(argsPath)
+		if readErr == nil {
+			if string(data) != "1\nlogin\n" {
+				t.Fatalf("args=%q", data)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("login command did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for {
+		cliLoginState.Lock()
+		running := cliLoginState.running
+		cliLoginState.Unlock()
+		if !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("login command did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func cliTestFileHash(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)

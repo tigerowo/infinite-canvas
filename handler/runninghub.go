@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -66,6 +67,31 @@ func CheckUserCLIProviderAuth(w http.ResponseWriter, r *http.Request, providerID
 		return
 	}
 	result, err := service.CheckCurrentUserCLIProviderAuth(r.Context(), providerID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func StartUserCLIProviderLogin(w http.ResponseWriter, r *http.Request, providerID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var input struct {
+		Confirmed bool `json:"confirmed"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	decodeErr := decoder.Decode(&input)
+	trailingErr := decoder.Decode(&struct{}{})
+	if decodeErr != nil || trailingErr != io.EOF || !input.Confirmed {
+		Fail(w, "请明确确认后再启动 Codex 登录")
+		return
+	}
+	result, err := service.StartCurrentUserCLIProviderLogin(r.Context(), providerID)
 	if err != nil {
 		FailError(w, err)
 		return

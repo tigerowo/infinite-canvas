@@ -37,6 +37,7 @@ const (
 const (
 	cliCompanionActionVersion    = "version"
 	cliCompanionActionAuthStatus = "auth-status"
+	cliCompanionActionLoginStart = "login-start"
 )
 
 const (
@@ -62,19 +63,23 @@ type cliCompanionActionResponse struct {
 }
 
 type cliCompanionHandler struct {
-	secret  []byte
-	now     func() time.Time
-	execute func(context.Context, string, string) (CLIHelperResult, model.ProviderStatus)
-	mu      sync.Mutex
-	seen    map[string]time.Time
+	secret   []byte
+	now      func() time.Time
+	lifetime context.Context
+	execute  func(context.Context, string, string) (CLIHelperResult, model.ProviderStatus)
+	mu       sync.Mutex
+	seen     map[string]time.Time
 }
 
-func NewCLICompanionHandler() (http.Handler, error) {
+func NewCLICompanionHandler(lifetime context.Context) (http.Handler, error) {
 	secret, err := cliCompanionSharedSecret()
 	if err != nil {
 		return nil, err
 	}
-	handler := &cliCompanionHandler{secret: secret, now: time.Now, execute: executeCLICompanionAction, seen: map[string]time.Time{}}
+	if lifetime == nil {
+		lifetime = context.Background()
+	}
+	handler := &cliCompanionHandler{secret: secret, now: time.Now, lifetime: lifetime, execute: executeCLICompanionAction, seen: map[string]time.Time{}}
 	mux := http.NewServeMux()
 	mux.Handle(cliCompanionActionPath, handler)
 	return mux, nil
@@ -103,7 +108,11 @@ func (handler *cliCompanionHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		handler.writeResponse(w, http.StatusBadRequest, r.Header.Get(cliCompanionNonceHeader), cliCompanionActionResponse{Error: "CLI 动作不受支持"})
 		return
 	}
-	result, status := handler.execute(r.Context(), input.Action, input.Protocol)
+	executionContext := r.Context()
+	if input.Action == cliCompanionActionLoginStart {
+		executionContext = handler.lifetime
+	}
+	result, status := handler.execute(executionContext, input.Action, input.Protocol)
 	handler.writeResponse(w, http.StatusOK, r.Header.Get(cliCompanionNonceHeader), cliCompanionActionResponse{Result: result, Status: status})
 }
 
@@ -217,13 +226,23 @@ func requestCLICompanionAction(parent context.Context, userID string, providerID
 func validCLICompanionResult(action string, result CLIHelperResult) bool {
 	switch action {
 	case cliCompanionActionVersion:
-		return result.AuthStatus == ""
+		return result.AuthStatus == "" && result.ActionStatus == ""
 	case cliCompanionActionAuthStatus:
-		if result.Version != "" {
+		if result.Version != "" || result.ActionStatus != "" {
 			return false
 		}
 		switch result.AuthStatus {
 		case "", "authenticated", "unauthenticated", "unsupported":
+			return true
+		default:
+			return false
+		}
+	case cliCompanionActionLoginStart:
+		if result.Version != "" || result.AuthStatus != "" {
+			return false
+		}
+		switch result.ActionStatus {
+		case "", "started", "running", "unsupported":
 			return true
 		default:
 			return false
@@ -235,7 +254,7 @@ func validCLICompanionResult(action string, result CLIHelperResult) bool {
 
 func validCLICompanionAction(action string) bool {
 	switch action {
-	case cliCompanionActionVersion, cliCompanionActionAuthStatus:
+	case cliCompanionActionVersion, cliCompanionActionAuthStatus, cliCompanionActionLoginStart:
 		return true
 	default:
 		return false

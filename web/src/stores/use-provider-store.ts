@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 
-import { checkCLIProviderAuth, deleteProvider, detectCLIProvider, fetchProviders, migrateLegacyProviders, saveProvider, setDefaultProvider, testProvider } from "@/services/api/providers";
+import { checkCLIProviderAuth, deleteProvider, detectCLIProvider, fetchProviders, migrateLegacyProviders, saveProvider, setDefaultProvider, startCLIProviderLogin, testProvider } from "@/services/api/providers";
 import { providerModelChannels, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderMigrationResult } from "@/lib/provider";
 import { useConfigStore, type AiConfig, type LocalModelChannel } from "@/stores/use-config-store";
 
@@ -18,6 +18,7 @@ type ProviderStore = {
     test: (token: string, id: string, refreshModels?: boolean) => Promise<void>;
     detectCLI: (token: string, id: string) => Promise<CLIHelperResult>;
     checkCLIAuth: (token: string, id: string) => Promise<CLIHelperResult>;
+    startCLILogin: (token: string, id: string) => Promise<CLIHelperResult>;
     migrate: (token: string, cleanupLegacy: boolean) => Promise<ProviderMigrationResult>;
     clear: () => void;
 };
@@ -76,6 +77,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
         }
     },
     checkCLIAuth: (token, id) => checkCLIProviderAuth(token, id),
+    startCLILogin: (token, id) => startCLIProviderLogin(token, id),
     migrate: async (token, cleanupLegacy) => {
         const result = await migrateLegacyProviders(token, cleanupLegacy);
         set({ items: result.providers, loadedToken: token, error: "" });

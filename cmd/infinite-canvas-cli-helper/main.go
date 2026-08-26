@@ -32,7 +32,9 @@ func main() {
 	if err := validateSocketDirectory(socketPath); err != nil {
 		log.Fatal(err)
 	}
-	handler, err := service.NewCLICompanionHandler()
+	lifetime, stopLoginProcesses := context.WithCancel(context.Background())
+	defer stopLoginProcesses()
+	handler, err := service.NewCLICompanionHandler(lifetime)
 	if err != nil {
 		log.Fatal("CLI helper 安全配置无效")
 	}
@@ -61,7 +63,7 @@ func main() {
 	select {
 	case err := <-serverError:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Fatal(err)
+			log.Print("CLI helper 服务异常退出")
 		}
 	case <-stop:
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
