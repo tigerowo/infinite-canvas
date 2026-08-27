@@ -76,11 +76,15 @@ func TestCLICompanionRejectsExpiredOrTamperedAuthorization(t *testing.T) {
 }
 
 func TestRequestCLICompanionUsesPrivateUnixSocket(t *testing.T) {
-	directory := t.TempDir()
+	directory, err := os.MkdirTemp("", "ic-cli-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	socketPath := filepath.Join(directory, "helper.sock")
+	socketPath := filepath.Join(directory, "h.sock")
 	listener, err := net.Listen("unix", socketPath)
 	if err != nil {
 		t.Fatal(err)

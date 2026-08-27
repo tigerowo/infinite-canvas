@@ -582,7 +582,7 @@ export function modelChannelForActiveModel(config: AiConfig) {
     return channels.find((channel) => (channel.id || "") === channelId && channel.models.includes(config.model)) || channels.find((channel) => channel.models.includes(config.model)) || channels.find((channel) => (channel.id || "") === channelId) || channels[0];
 }
 
-export function modelChannelHeaders(config: AiConfig) {
+export function modelChannelHeaders(config: AiConfig): Record<string, string> {
     const channelId = channelIdForActiveModel(config);
     if (!channelId) return {};
     const userChannel = config.channelMode === "local" || normalizeLocalChannels(config).some((channel) => channel.managed && channel.id === channelId);

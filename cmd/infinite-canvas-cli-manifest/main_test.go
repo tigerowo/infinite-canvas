@@ -13,6 +13,9 @@ import (
 
 func TestGenerateKeyAndSignManifest(t *testing.T) {
 	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	resolvedDirectory, err := filepath.EvalSymlinks(directory)
 	if err != nil {
 		t.Fatal(err)

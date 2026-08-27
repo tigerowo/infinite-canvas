@@ -7,9 +7,11 @@ description: STITCH 交付核对与代码侧视觉基线
 
 ## 当前结论
 
-截至 2026-08-24，API/CLI 参考仓库的 `preparation/stitch/` 只有交付说明 `README.md`，没有桌面稿、窄屏稿、HTML/CSS、设计 token 或版本说明；目标工程也没有 STITCH 导出物。因此不能把现有页面标记为“已按 STITCH 实稿确认”。
+连接中心正式 STITCH 设计版本已确认为 `provider-center-v1`。设计复用私有项目 `16311479161257811593` 的 `CanvasMind Creative Workspace` 设计系统，设计系统 ID 为 `assets/c6395985d33e4ea9b9788efd56caedc7`、版本为 `1`。
 
-本阶段采用 `preparation/03-stitch-design-brief.md` 作为代码侧临时视觉基线，内部标识为 `brief-fallback-2026-08-24`。该标识不是 STITCH 设计版本，也不替代正式设计审批。
+参考仓库 `preparation/stitch/` 已包含桌面主稿、390px 窄屏列表、窄屏编辑表单、状态规范页、对应 HTML、设计 token 与交付说明。代码侧已完成首轮布局对稿，仍待用户最终像素和交互确认。
+
+早期 `brief-fallback` 只保留为设计形成前的历史基线，不再作为当前正式设计版本。
 
 ## 已执行的代码侧基线
 
@@ -20,13 +22,23 @@ description: STITCH 交付核对与代码侧视觉基线
 - CLI 可执行程序改为 helper 检测结果只读字段，并明确不会执行用户填写路径。
 - 零个已连接时使用中性状态点，避免误显示为健康状态。
 
-## 正式 STITCH 仍需交付
+## 正式 STITCH 交付清单
 
-1. 桌面主页面及 API/CLI Tab。
-2. 新增和编辑抽屉。
-3. 加载、空、成功、失败、超时、禁用、密钥已保存和引用冲突状态。
-4. 窄屏响应式页面。
-5. 颜色、字号、间距、控件、图标和交互 token。
-6. 导出来源、生成日期和明确版本号。
+| 交付项 | STITCH Screen ID | 参考仓库文件 |
+| --- | --- | --- |
+| 桌面连接中心与编辑抽屉 | `0c0e8c354eea4f889046175de979daaa` | `provider-center-desktop-v1.*` |
+| 390px 窄屏渠道列表 | `2f885297d0e44eb4b6ae07c66cfa7243` | `provider-center-mobile-list-v1.*` |
+| 390px 窄屏编辑表单 | `53fad7d83ec24d648a85f9d8ed358779` | `provider-center-mobile-edit-v1.*` |
+| 状态与反馈规范 | `03d5a004619741768b7e88612a614f65` | `provider-center-states-v1.*` |
+| 设计 token | 不适用 | `provider-center-design-tokens-v1.json` |
+| 版本与实施说明 | 不适用 | `provider-center-delivery-v1.md` |
 
-收到这些文件后，应逐项做像素与交互核对；在此之前只接受设计任务书范围内的小幅视觉修正，不自行假设设计已经确认。
+## 下一步对稿范围
+
+1. 桌面表格行高、列宽、长模型名截断及 440px 右侧抽屉密度。
+2. 390px 独立卡片、两行模型信息、底部状态与开关、全屏编辑表单和无横向溢出。
+3. 加载、空、未测试、测试中、不可用、禁用及错误映射。
+4. Codex CLI 逐次确认与 Gemini/即梦只检测安装版本的能力边界。
+5. 深浅色主题与项目现有 Ant Design token 的映射。
+
+STITCH HTML 只用于视觉核对，不直接替换现有 Next.js、Ant Design 和 Tailwind 实现。

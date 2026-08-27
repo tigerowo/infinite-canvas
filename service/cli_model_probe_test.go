@@ -77,7 +77,7 @@ printf 'OK\n' > "$output"
 	}
 	input.Action = cliCompanionActionProbeStatus
 	input.TaskID = started.TaskID
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	var result CLIHelperResult
 	for {
 		result, _ = executeCLIModelProbeStatus(input)

@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { App, Alert, Button, Checkbox, Drawer, Dropdown, Empty, Form, Input, InputNumber, Modal, Select, Skeleton, Switch, Table, Tabs, Tag, Tooltip } from "antd";
+import { App, Alert, Button, Checkbox, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Switch, Table, Tabs, Tag, Tooltip } from "antd";
 import type { MenuProps, TableProps } from "antd";
-import { ArrowRight, Cable, Check, CircleAlert, CircleDashed, Clock3, Copy, Ellipsis, Import, KeyRound, LogIn, Play, Plus, RefreshCw, Server, ShieldCheck, Square, TerminalSquare, Unplug, WifiOff } from "lucide-react";
+import { ArrowRight, Cable, Copy, Ellipsis, Import, KeyRound, LogIn, Play, Plus, RefreshCw, Server, Square, TerminalSquare } from "lucide-react";
 
+import { ProviderListState, ProviderStatusTag, ProviderSummary } from "@/app/(user)/providers/components/provider-list-state";
 import { isRunningHubReference, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
 import { fetchProviderMigrationPreview } from "@/services/api/providers";
 import { useConfigStore } from "@/stores/use-config-store";
@@ -59,15 +60,6 @@ const capabilityOptions = [
     { label: "视频", value: "video" },
     { label: "音频", value: "audio" },
 ];
-
-const statusMeta: Record<ProviderStatus, { label: string; color: string; icon: typeof Check }> = {
-    connected: { label: "已连接", color: "success", icon: Check },
-    failed: { label: "连接失败", color: "error", icon: CircleAlert },
-    timeout: { label: "请求超时", color: "warning", icon: Clock3 },
-    disabled: { label: "已禁用", color: "default", icon: Unplug },
-    unavailable: { label: "不可用", color: "default", icon: WifiOff },
-    untested: { label: "未测试", color: "processing", icon: CircleDashed },
-};
 
 const probeStatusMeta = {
     running: { label: "运行中", color: "processing" },
@@ -175,6 +167,7 @@ export default function ProvidersPage() {
 
     const visibleItems = useMemo(() => items.filter((item) => item.kind === activeKind), [activeKind, items]);
     const connectedCount = visibleItems.filter((item) => item.connectionStatus === "connected").length;
+    const countsPending = (loading || Boolean(error)) && !items.length;
 
     function openCreate(kind = activeKind) {
         setEditing(null);
@@ -378,6 +371,21 @@ export default function ProvidersPage() {
         }
     }
 
+    function confirmToggleProvider(item: Provider, enabled: boolean) {
+        if (enabled) {
+            void toggleProvider(item, true);
+            return;
+        }
+        modal.confirm({
+            title: `停用「${item.name}」？`,
+            content: "停用后，画布与创作台将不再选择此连接。连接配置和已加密凭据会保留，可随时重新启用。",
+            okText: "确认停用",
+            okButtonProps: { danger: true },
+            cancelText: "取消",
+            onOk: () => toggleProvider(item, false),
+        });
+    }
+
     function confirmDelete(item: Provider) {
         modal.confirm({
             title: `删除「${item.name}」？`,
@@ -459,8 +467,8 @@ export default function ProvidersPage() {
             ),
         },
         { title: "默认模型", dataIndex: "defaultModel", ellipsis: true, render: (value: string) => value || <span className="text-stone-400">未设置</span> },
-        { title: "状态", dataIndex: "connectionStatus", render: (value: ProviderStatus, item) => <ProviderStatusTag status={value} message={item.statusMessage} /> },
-        { title: "启用", dataIndex: "enabled", width: 76, render: (enabled: boolean, item) => <Switch size="small" checked={enabled} onChange={(checked) => void toggleProvider(item, checked)} /> },
+        { title: "状态", dataIndex: "connectionStatus", render: (value: ProviderStatus, item) => <ProviderStatusTag status={testing && editing?.id === item.id ? "testing" : value} message={testing && editing?.id === item.id ? "正在检测连接，请稍候" : item.statusMessage} /> },
+        { title: "启用", dataIndex: "enabled", width: 76, render: (enabled: boolean, item) => <Switch size="small" checked={enabled} onChange={(checked) => confirmToggleProvider(item, checked)} /> },
         { title: "", key: "actions", width: 48, render: (_, item) => <ProviderActions item={item} onEdit={() => openEdit(item)} onCopy={() => openEdit(item, true)} onDefault={() => void setAsDefault(item)} onDelete={() => confirmDelete(item)} /> },
     ];
 
@@ -476,34 +484,15 @@ export default function ProvidersPage() {
                         <h1 className="text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">连接中心</h1>
                         <p className="mt-1.5 max-w-2xl text-sm leading-6 text-stone-600 dark:text-stone-400">统一管理创作链路使用的 API 与本机 CLI。密钥只在后端加密保存，页面不会读取明文。</p>
                     </div>
-                    <Button type="primary" icon={<Plus className="size-4" />} onClick={() => openCreate()}>
+                    <Button className="w-full md:w-auto" type="primary" icon={<Plus className="size-4" />} onClick={() => openCreate()}>
                         新增{activeKind === "api" ? " API" : " CLI"}
                     </Button>
                 </div>
 
-                <div className="mt-5 grid gap-2 sm:grid-cols-3">
-                    <div className="rounded-xl border border-stone-200 bg-background px-4 py-3 dark:border-stone-800">
-                        <div className="text-xs text-stone-500 dark:text-stone-400">当前连接</div>
-                        <div className="mt-1 text-lg font-semibold text-stone-950 dark:text-stone-100">{visibleItems.length}</div>
-                    </div>
-                    <div className="rounded-xl border border-stone-200 bg-background px-4 py-3 dark:border-stone-800">
-                        <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-stone-400">
-                            <span className={`size-1.5 rounded-full ${connectedCount ? "bg-emerald-500" : "bg-stone-300 dark:bg-stone-700"}`} />
-                            已连接
-                        </div>
-                        <div className="mt-1 text-lg font-semibold text-stone-950 dark:text-stone-100">{connectedCount}</div>
-                    </div>
-                    <div className="rounded-xl border border-stone-200 bg-background px-4 py-3 dark:border-stone-800">
-                        <div className="flex items-center gap-1.5 text-xs text-stone-500 dark:text-stone-400">
-                            <ShieldCheck className="size-3.5" />
-                            请求防护
-                        </div>
-                        <div className="mt-1 text-sm font-medium text-stone-950 dark:text-stone-100">SSRF 与响应限额已启用</div>
-                    </div>
-                </div>
+                <ProviderSummary count={visibleItems.length} connectedCount={connectedCount} pending={countsPending} />
 
                 <Tabs
-                    className="mt-4"
+                    className="mt-2"
                     activeKey={activeKind}
                     onChange={(key) => setActiveKind(key as ProviderKind)}
                     items={[
@@ -544,7 +533,7 @@ export default function ProvidersPage() {
                 ) : null}
 
                 {activeKind === "cli" ? <Alert className="mb-4" type="info" showIcon title="受控 Mac CLI helper" description="仅在本机回环地址且显式启用时执行固定版本检测；Codex 登录和最小调用都需要逐次确认，不接受用户填写的命令、参数、提示词或执行路径。" /> : null}
-                {error ? (
+                {error && visibleItems.length ? (
                     <Alert
                         className="mb-4"
                         type="error"
@@ -559,79 +548,55 @@ export default function ProvidersPage() {
                     />
                 ) : null}
 
-                <section className="overflow-hidden rounded-xl border border-stone-200 bg-background shadow-sm dark:border-stone-800">
-                    {loading && !visibleItems.length ? (
-                        <div className="p-6">
-                            <Skeleton active paragraph={{ rows: 5 }} />
+                {!visibleItems.length ? (
+                    <ProviderListState kind={activeKind} loading={loading} error={error} onCreate={() => openCreate()} onRetry={() => token && void load(token, true)} />
+                ) : (
+                    <section className="overflow-hidden rounded-lg lg:border lg:border-stone-200 lg:bg-background dark:lg:border-stone-800" aria-busy={loading}>
+                        <div className="hidden lg:block">
+                            <Table size="middle" rowKey="id" columns={columns} dataSource={visibleItems} pagination={false} scroll={{ x: 880 }} />
                         </div>
-                    ) : null}
-                    {!loading && !visibleItems.length ? (
-                        <Empty className="py-16" image={Empty.PRESENTED_IMAGE_SIMPLE} description={activeKind === "api" ? "还没有 API 渠道" : "还没有 CLI 渠道"}>
-                            <Button icon={<Plus className="size-4" />} onClick={() => openCreate()}>
-                                {activeKind === "api" ? "添加第一个 API" : "登记 CLI"}
-                            </Button>
-                        </Empty>
-                    ) : null}
-                    {visibleItems.length > 0 ? (
-                        <div className="hidden md:block">
-                            <Table rowKey="id" columns={columns} dataSource={visibleItems} pagination={false} scroll={{ x: 880 }} />
-                        </div>
-                    ) : null}
-                    {visibleItems.length > 0 ? (
-                        <div className="divide-y divide-stone-200 md:hidden dark:divide-stone-800">
+                        <div className="space-y-3 lg:hidden">
                             {visibleItems.map((item) => (
                                 <ProviderCard
                                     key={item.id}
                                     item={item}
+                                    testing={testing && editing?.id === item.id}
                                     onEdit={() => openEdit(item)}
-                                    onToggle={(checked) => void toggleProvider(item, checked)}
+                                    onToggle={(checked) => confirmToggleProvider(item, checked)}
                                     actions={<ProviderActions item={item} onEdit={() => openEdit(item)} onCopy={() => openEdit(item, true)} onDefault={() => void setAsDefault(item)} onDelete={() => confirmDelete(item)} />}
                                 />
                             ))}
                         </div>
-                    ) : null}
-                </section>
+                    </section>
+                )}
             </div>
 
             <Drawer
                 title={editing ? "编辑连接" : "新增连接"}
-                width="min(560px, 100vw)"
+                size="min(440px, 100vw)"
                 open={drawerOpen}
                 onClose={() => setDrawerOpen(false)}
                 footer={
-                    <div className="flex items-center justify-between gap-3">
-                        <div className="flex flex-wrap gap-2">
-                            {editing ? (
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap">
+                            {editing?.kind === "api" ? (
                                 <Button icon={<RefreshCw className="size-4" />} loading={testing} onClick={() => void runTest(formKind === "api")}>
-                                    {formKind === "cli" ? "检测 CLI" : formProtocol === "runninghub" ? "检测 OpenAPI" : "测试并拉取模型"}
+                                    {formProtocol === "runninghub" ? "检测 OpenAPI" : "测试并拉取模型"}
                                 </Button>
                             ) : null}
-                            {editing?.kind === "cli" && editing.protocol === "codex" && formProtocol === "codex" ? (
-                                <>
-                                    <Button icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>
-                                        登录 Codex
-                                    </Button>
-                                    <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
-                                        检查登录状态
-                                    </Button>
-                                    <Button icon={<Play className="size-4" />} loading={startingProbe} onClick={confirmCLIModelProbe}>
-                                        最小调用
-                                    </Button>
-                                </>
-                            ) : null}
                         </div>
-                        <div className="flex gap-2">
-                            <Button onClick={() => setDrawerOpen(false)}>取消</Button>
-                            <Button type="primary" loading={saving} onClick={() => form.submit()}>
+                        <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
+                            <Button className="w-full" onClick={() => setDrawerOpen(false)}>取消</Button>
+                            <Button className="w-full" type="primary" loading={saving} onClick={() => form.submit()}>
                                 保存
                             </Button>
                         </div>
                     </div>
                 }
             >
-                <Form form={form} layout="vertical" initialValues={initialForm} onFinish={(values) => void submit(values)} requiredMark="optional">
+                <Form form={form} layout="vertical" initialValues={initialForm} onFinish={(values) => void submit(values)} requiredMark="optional" scrollToFirstError={{ block: "center" }}>
                     <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
-                        <Form.Item name="kind" label="连接类型" rules={[{ required: true }]}>
+                        <Form.Item name="kind" label="连接类型" rules={[{ required: true, message: "请选择连接类型" }]}>
                             <Select
                                 disabled={Boolean(editing)}
                                 options={[
@@ -640,7 +605,7 @@ export default function ProvidersPage() {
                                 ]}
                             />
                         </Form.Item>
-                        <Form.Item name="protocol" label={formKind === "api" ? "协议类型" : "CLI 类型"} rules={[{ required: true }]}>
+                        <Form.Item name="protocol" label={formKind === "api" ? "协议类型" : "CLI 类型"} rules={[{ required: true, message: `请选择${formKind === "api" ? "协议" : " CLI 类型"}` }]}>
                             <Select
                                 options={formKind === "api" ? apiProtocolOptions : cliProtocolOptions}
                                 onChange={(protocol: ProviderProtocol) => {
@@ -653,7 +618,7 @@ export default function ProvidersPage() {
                             />
                         </Form.Item>
                     </div>
-                    <Form.Item name="name" label="连接名称" rules={[{ required: true, message: "请输入连接名称" }, { max: 80 }]}>
+                    <Form.Item name="name" label="连接名称" rules={[{ required: true, message: "请输入连接名称" }, { max: 80, message: "连接名称不能超过 80 个字符" }]}>
                         <Input placeholder="例如：主力生图 API" />
                     </Form.Item>
 
@@ -722,10 +687,34 @@ export default function ProvidersPage() {
                                 title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : "当前仅检测 CLI 安装与版本"}
                                 description={formProtocol === "codex" ? "保存后可逐次授权检查状态；登录和最小模型调用均需二次确认。最小调用使用固定提示词、只读沙箱和当前默认模型，不接受 API Key、Token 或自定义参数。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
                             />
+                            {editing?.kind === "cli" && editing.protocol === formProtocol ? (
+                                <div className="mb-5 rounded-lg border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-800 dark:bg-stone-900/40">
+                                    <div className="font-medium text-stone-950 dark:text-stone-100">受控本机操作</div>
+                                    <div className="mt-1 text-xs leading-5 text-stone-500 dark:text-stone-400">每项操作都使用固定参数并单独授权，不会读取或执行页面填写的命令。</div>
+                                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                        <Button icon={<RefreshCw className="size-4" />} loading={testing} onClick={() => void runTest(false)}>
+                                            检测 CLI
+                                        </Button>
+                                        {formProtocol === "codex" ? (
+                                            <>
+                                                <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
+                                                    检查登录状态
+                                                </Button>
+                                                <Button type="primary" icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>
+                                                    登录 Codex
+                                                </Button>
+                                                <Button icon={<Play className="size-4" />} loading={startingProbe} onClick={confirmCLIModelProbe}>
+                                                    最小调用
+                                                </Button>
+                                            </>
+                                        ) : null}
+                                    </div>
+                                </div>
+                            ) : null}
                             <Form.Item name="executable" label="检测到的可执行程序" extra="该字段由受控 helper 写入；页面输入不会决定执行目标。">
                                 <Input readOnly placeholder="保存后点击“检测 CLI”" />
                             </Form.Item>
-                            <Form.Item name="workingDirectory" label="默认工作目录">
+                            <Form.Item name="workingDirectory" label="默认工作目录" rules={[{ pattern: /^\//, message: "请输入以 / 开头的绝对路径" }]}>
                                 <Input placeholder="例如 /Users/name/projects" />
                             </Form.Item>
                         </>
@@ -757,11 +746,11 @@ export default function ProvidersPage() {
                             <InputNumber className="w-full" min={1} max={600} />
                         </Form.Item>
                     </div>
-                    <div className="grid grid-cols-2 gap-4 rounded-lg border border-stone-200 p-4 dark:border-stone-800">
-                        <Form.Item name="enabled" valuePropName="checked" label="启用连接" className="mb-0">
+                    <div className="grid grid-cols-1 gap-4 rounded-lg border border-stone-200 p-4 sm:grid-cols-2 dark:border-stone-800">
+                        <Form.Item name="enabled" valuePropName="checked" label="启用连接" extra="停用后工作区不再选择此连接" className="mb-0">
                             <Switch />
                         </Form.Item>
-                        <Form.Item name="isDefault" valuePropName="checked" label="设为默认" className="mb-0">
+                        <Form.Item name="isDefault" valuePropName="checked" label="设为默认" extra="仅对已启用连接生效" className="mb-0">
                             <Switch />
                         </Form.Item>
                     </div>
@@ -773,7 +762,7 @@ export default function ProvidersPage() {
                 open={probeOpen}
                 closable={probe?.result.taskStatus !== "running"}
                 keyboard={probe?.result.taskStatus !== "running"}
-                maskClosable={probe?.result.taskStatus !== "running"}
+                mask={{ closable: probe?.result.taskStatus !== "running" }}
                 onCancel={() => probe?.result.taskStatus !== "running" && setProbeOpen(false)}
                 footer={
                     probe?.result.taskStatus === "running"
@@ -863,21 +852,10 @@ export default function ProvidersPage() {
                         <span className="mt-1 block text-xs leading-5 text-stone-500">清除成功迁移渠道及顶层旧配置中的明文密钥，并把渠道选择 ID 更新为连接中心 ID。无效条目会原样保留，便于修正后再次迁移。</span>
                     </span>
                 </label>
-                {cleanupLegacy && migrationPreview?.plaintextSecrets ? <Alert className="mt-3" type="info" showIcon message={`预计清理最多 ${migrationPreview.plaintextSecrets} 个渠道中的旧明文密钥；此操作不会删除已加密导入的凭据。`} /> : null}
+                {cleanupLegacy && migrationPreview?.plaintextSecrets ? <Alert className="mt-3" type="info" showIcon title={`预计清理最多 ${migrationPreview.plaintextSecrets} 个渠道中的旧明文密钥；此操作不会删除已加密导入的凭据。`} /> : null}
             </Modal>
         </main>
     );
-}
-
-function ProviderStatusTag({ status, message }: { status: ProviderStatus; message?: string }) {
-    const meta = statusMeta[status];
-    const Icon = meta.icon;
-    const tag = (
-        <Tag color={meta.color} icon={<Icon className="size-3" />}>
-            {meta.label}
-        </Tag>
-    );
-    return message ? <Tooltip title={message}>{tag}</Tooltip> : tag;
 }
 
 function ProviderActions({ item, onEdit, onCopy, onDefault, onDelete }: { item: Provider; onEdit: () => void; onCopy: () => void; onDefault: () => void; onDelete: () => void }) {
@@ -897,9 +875,9 @@ function ProviderActions({ item, onEdit, onCopy, onDefault, onDelete }: { item: 
     );
 }
 
-function ProviderCard({ item, onEdit, onToggle, actions }: { item: Provider; onEdit: () => void; onToggle: (checked: boolean) => void; actions: ReactNode }) {
+function ProviderCard({ item, testing, onEdit, onToggle, actions }: { item: Provider; testing: boolean; onEdit: () => void; onToggle: (checked: boolean) => void; actions: ReactNode }) {
     return (
-        <div className="p-4">
+        <div className="rounded-lg border border-stone-200 bg-background p-4 dark:border-stone-800">
             <div className="flex items-start justify-between gap-3">
                 <button type="button" className="min-w-0 text-left" onClick={onEdit}>
                     <div className="flex items-center gap-2 font-medium text-stone-950 dark:text-stone-100">
@@ -908,18 +886,19 @@ function ProviderCard({ item, onEdit, onToggle, actions }: { item: Provider; onE
                     </div>
                     <div className="mt-1 text-xs uppercase text-stone-500">{item.protocol}</div>
                 </button>
-                <div className="flex items-center gap-1">
-                    <Switch size="small" checked={item.enabled} onChange={onToggle} />
-                    {actions}
-                </div>
+                {actions}
             </div>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-                <ProviderStatusTag status={item.connectionStatus} message={item.statusMessage} />
+            <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 {item.capabilities.map((capability) => (
                     <Tag key={capability}>{capabilityOptions.find((option) => option.value === capability)?.label}</Tag>
                 ))}
             </div>
-            <div className="mt-3 truncate text-sm text-stone-500 dark:text-stone-400">{item.defaultModel || item.baseUrl || "未设置默认模型"}</div>
+            <div className="mt-4 text-xs text-stone-400 dark:text-stone-500">默认模型</div>
+            <div className="mt-1 line-clamp-2 break-all text-sm leading-5 text-stone-600 dark:text-stone-300">{item.defaultModel || item.baseUrl || "未设置默认模型"}</div>
+            <div className="mt-4 flex items-center justify-between gap-3 border-t border-stone-100 pt-3 dark:border-stone-800">
+                <ProviderStatusTag status={testing ? "testing" : item.connectionStatus} message={testing ? "正在检测连接，请稍候" : item.statusMessage} />
+                <Switch size="small" checked={item.enabled} onChange={onToggle} aria-label={`${item.enabled ? "停用" : "启用"}${item.name}`} />
+            </div>
         </div>
     );
 }

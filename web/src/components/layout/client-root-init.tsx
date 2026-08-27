@@ -31,7 +31,23 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [loadPublicSettings]);
 
     useEffect(() => {
-        if (!isLoginPage) void hydrateUser();
+        if (isLoginPage) return;
+
+        if (useUserStore.persist.hasHydrated()) {
+            void hydrateUser();
+            return;
+        }
+
+        let unsubscribe = () => {};
+        unsubscribe = useUserStore.persist.onFinishHydration(() => {
+            unsubscribe();
+            void hydrateUser();
+        });
+        if (useUserStore.persist.hasHydrated()) {
+            unsubscribe();
+            void hydrateUser();
+        }
+        return unsubscribe;
     }, [hydrateUser, isLoginPage]);
 
     useEffect(() => {
