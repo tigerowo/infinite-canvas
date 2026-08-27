@@ -66,7 +66,9 @@ async function seedSession(page: Page) {
 
 async function openProvidersFromHydratedLoginPage(page: Page) {
     await page.goto("/login");
-    await page.getByRole("link", { name: "连接中心" }).click();
+    const providerLink = page.getByRole("link", { name: "连接中心" });
+    if (!(await providerLink.isVisible())) await page.getByRole("button", { name: "打开导航菜单" }).click();
+    await providerLink.click();
     await expect(page.getByRole("heading", { name: "连接中心" })).toBeVisible({ timeout: 15_000 });
 }
 
@@ -183,7 +185,7 @@ test("连接列表读取失败后可通过重试恢复空状态", async ({ page 
     await expect.poll(() => providerRequests).toBeGreaterThan(requestsBeforeRetry);
 });
 
-test("窄屏使用卡片并在确认后停用连接", async ({ page }) => {
+test("390px 使用卡片、无横向溢出并在确认后停用连接", async ({ page }) => {
     let activeProvider = { ...connectedProvider };
     let updateEnabled: boolean | undefined;
     const disabledProvider = { ...connectedProvider, id: "mock-disabled", name: "Mock 已禁用", enabled: false, isDefault: false, connectionStatus: "disabled" };
@@ -199,13 +201,14 @@ test("窄屏使用卡片并在确认后停用连接", async ({ page }) => {
         }
         await respond(route, [activeProvider, disabledProvider, unavailableProvider]);
     });
-    await page.setViewportSize({ width: 800, height: 900 });
+    await page.setViewportSize({ width: 390, height: 884 });
 
     await openProvidersFromHydratedLoginPage(page);
     await expect(page.getByRole("switch", { name: "停用Mock OpenAI" })).toBeVisible();
     await expect(page.locator(".ant-table-wrapper")).toBeHidden();
-    await expect(page.getByRole("switch", { name: "启用Mock 已禁用" }).locator("..").getByText("已禁用", { exact: true })).toBeVisible();
-    await expect(page.getByRole("switch", { name: "停用Mock 不可用" }).locator("..").getByText("不可用", { exact: true })).toBeVisible();
+    await expect(page.locator("article").filter({ has: page.getByRole("switch", { name: "启用Mock 已禁用" }) }).getByText("已禁用", { exact: true })).toBeVisible();
+    await expect(page.locator("article").filter({ has: page.getByRole("switch", { name: "停用Mock 不可用" }) }).getByText("不可用", { exact: true })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await page.getByRole("switch", { name: "停用Mock OpenAI" }).click();
     await expect(page.getByRole("dialog", { name: "停用「Mock OpenAI」？" })).toBeVisible();

@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { App, Alert, Button, Checkbox, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Switch, Table, Tabs, Tag, Tooltip } from "antd";
+import { App, Alert, Button, Checkbox, ConfigProvider, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Switch, Table, Tabs, Tag, Tooltip } from "antd";
 import type { MenuProps, TableProps } from "antd";
 import { ArrowRight, Cable, Copy, Ellipsis, Import, KeyRound, LogIn, Play, Plus, RefreshCw, Server, Square, TerminalSquare } from "lucide-react";
 
 import { ProviderListState, ProviderStatusTag, ProviderSummary } from "@/app/(user)/providers/components/provider-list-state";
+import { getProviderCenterThemeConfig } from "@/lib/app-theme";
 import { isRunningHubReference, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
 import { fetchProviderMigrationPreview } from "@/services/api/providers";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useProviderStore } from "@/stores/use-provider-store";
+import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type ProviderForm = {
@@ -88,6 +90,7 @@ const initialForm: ProviderForm = {
 
 export default function ProvidersPage() {
     const { message, modal } = App.useApp();
+    const dark = useThemeStore((state) => state.theme === "dark");
     const token = useUserStore((state) => state.token);
     const items = useProviderStore((state) => state.items);
     const loading = useProviderStore((state) => state.loading);
@@ -437,20 +440,26 @@ export default function ProvidersPage() {
         {
             title: "连接",
             dataIndex: "name",
+            width: "33%",
             render: (_, item) => (
-                <div className="min-w-0">
-                    <div className="flex items-center gap-2 font-medium text-stone-950 dark:text-stone-100">
-                        <span className="truncate">{item.name}</span>
-                        {item.isDefault ? <Tag color="blue">默认</Tag> : null}
+                <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border border-black/10 bg-black/[0.04] text-[#00a1c2] dark:border-white/[0.06] dark:bg-[#2f3637] dark:text-[#00cae0]">
+                        <Server className="size-5" />
                     </div>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
-                        <span className="uppercase">{item.protocol}</span>
-                        {item.hasApiKey ? (
-                            <span className="inline-flex items-center gap-1">
-                                <KeyRound className="size-3" />
-                                密钥已保存
-                            </span>
-                        ) : null}
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2 font-medium text-[#0f1419] dark:text-[#f5fbff]">
+                            <span className="truncate">{item.name}</span>
+                            {item.isDefault ? <Tag color="cyan">默认</Tag> : null}
+                        </div>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-black/60 dark:text-[rgba(224,245,255,0.60)]">
+                            <span className="uppercase">{item.protocol}</span>
+                            {item.hasApiKey ? (
+                                <span className="inline-flex items-center gap-1">
+                                    <KeyRound className="size-3" />
+                                    密钥已保存
+                                </span>
+                            ) : null}
+                        </div>
                     </div>
                 </div>
             ),
@@ -458,6 +467,7 @@ export default function ProvidersPage() {
         {
             title: "能力",
             dataIndex: "capabilities",
+            width: "17%",
             render: (values: ProviderCapability[]) => (
                 <div className="flex flex-wrap gap-1">
                     {values.map((value) => (
@@ -466,25 +476,26 @@ export default function ProvidersPage() {
                 </div>
             ),
         },
-        { title: "默认模型", dataIndex: "defaultModel", ellipsis: true, render: (value: string) => value || <span className="text-stone-400">未设置</span> },
-        { title: "状态", dataIndex: "connectionStatus", render: (value: ProviderStatus, item) => <ProviderStatusTag status={testing && editing?.id === item.id ? "testing" : value} message={testing && editing?.id === item.id ? "正在检测连接，请稍候" : item.statusMessage} /> },
+        { title: "默认模型", dataIndex: "defaultModel", width: "20%", ellipsis: true, render: (value: string) => value || <span className="text-stone-400">未设置</span> },
+        { title: "状态", dataIndex: "connectionStatus", width: "16%", render: (value: ProviderStatus, item) => <ProviderStatusTag status={testing && editing?.id === item.id ? "testing" : value} message={testing && editing?.id === item.id ? "正在检测连接，请稍候" : item.statusMessage} /> },
         { title: "启用", dataIndex: "enabled", width: 76, render: (enabled: boolean, item) => <Switch size="small" checked={enabled} onChange={(checked) => confirmToggleProvider(item, checked)} /> },
         { title: "", key: "actions", width: 48, render: (_, item) => <ProviderActions item={item} onEdit={() => openEdit(item)} onCopy={() => openEdit(item, true)} onDefault={() => void setAsDefault(item)} onDelete={() => confirmDelete(item)} /> },
     ];
 
     return (
-        <main className="h-full overflow-y-auto bg-stone-50/50 dark:bg-stone-950/20">
-            <div className="mx-auto w-full max-w-7xl px-5 py-7 md:px-8 md:py-9">
+        <ConfigProvider theme={getProviderCenterThemeConfig(dark)}>
+            <main className="h-full overflow-x-hidden overflow-y-auto bg-[#f8f9fa] text-[#0f1419] dark:bg-[#0f0f12] dark:text-[#f5fbff]">
+            <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-9">
                 <div className="flex flex-col gap-5 border-b border-stone-200 pb-5 md:flex-row md:items-end md:justify-between dark:border-stone-800">
                     <div>
                         <div className="mb-2 flex items-center gap-2 text-xs font-medium tracking-[0.18em] text-stone-500 dark:text-stone-400">
                             <Cable className="size-3.5" />
                             连接调度台
                         </div>
-                        <h1 className="text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">连接中心</h1>
-                        <p className="mt-1.5 max-w-2xl text-sm leading-6 text-stone-600 dark:text-stone-400">统一管理创作链路使用的 API 与本机 CLI。密钥只在后端加密保存，页面不会读取明文。</p>
+                        <h1 className="text-2xl font-bold leading-8 tracking-tight text-[#0f1419] dark:text-[#f5fbff]">连接中心</h1>
+                        <p className="mt-1.5 max-w-2xl text-sm leading-[22px] text-black/60 dark:text-[rgba(224,245,255,0.60)]">统一管理创作链路使用的 API 与本机 CLI。密钥只在后端加密保存，页面不会读取明文。</p>
                     </div>
-                    <Button className="w-full md:w-auto" type="primary" icon={<Plus className="size-4" />} onClick={() => openCreate()}>
+                    <Button className="h-10 w-full rounded-xl px-6 md:w-auto" type="primary" icon={<Plus className="size-4" />} onClick={() => openCreate()}>
                         新增{activeKind === "api" ? " API" : " CLI"}
                     </Button>
                 </div>
@@ -492,7 +503,7 @@ export default function ProvidersPage() {
                 <ProviderSummary count={visibleItems.length} connectedCount={connectedCount} pending={countsPending} />
 
                 <Tabs
-                    className="mt-2"
+                    className="mt-2 [&_.ant-tabs-nav-list]:w-full [&_.ant-tabs-tab]:flex-1 [&_.ant-tabs-tab]:justify-center md:[&_.ant-tabs-nav-list]:w-auto md:[&_.ant-tabs-tab]:flex-none"
                     activeKey={activeKind}
                     onChange={(key) => setActiveKind(key as ProviderKind)}
                     items={[
@@ -551,11 +562,11 @@ export default function ProvidersPage() {
                 {!visibleItems.length ? (
                     <ProviderListState kind={activeKind} loading={loading} error={error} onCreate={() => openCreate()} onRetry={() => token && void load(token, true)} />
                 ) : (
-                    <section className="overflow-hidden rounded-lg lg:border lg:border-stone-200 lg:bg-background dark:lg:border-stone-800" aria-busy={loading}>
+                    <section className="overflow-hidden rounded-xl lg:border lg:border-black/10 lg:bg-white dark:lg:border-white/[0.06] dark:lg:bg-[#0e1416]" aria-busy={loading}>
                         <div className="hidden lg:block">
                             <Table size="middle" rowKey="id" columns={columns} dataSource={visibleItems} pagination={false} scroll={{ x: 880 }} />
                         </div>
-                        <div className="space-y-3 lg:hidden">
+                        <div className="space-y-4 lg:hidden">
                             {visibleItems.map((item) => (
                                 <ProviderCard
                                     key={item.id}
@@ -574,6 +585,7 @@ export default function ProvidersPage() {
             <Drawer
                 title={editing ? "编辑连接" : "新增连接"}
                 size="min(440px, 100vw)"
+                classNames={{ body: "!px-4 py-5 sm:!px-6", footer: "!px-4 py-4 sm:!px-6", header: "!px-4 py-4 sm:!px-6" }}
                 open={drawerOpen}
                 onClose={() => setDrawerOpen(false)}
                 footer={
@@ -594,7 +606,7 @@ export default function ProvidersPage() {
                     </div>
                 }
             >
-                <Form form={form} layout="vertical" initialValues={initialForm} onFinish={(values) => void submit(values)} requiredMark="optional" scrollToFirstError={{ block: "center" }}>
+                <Form className="[&_.ant-form-item]:mb-4" form={form} layout="vertical" initialValues={initialForm} onFinish={(values) => void submit(values)} requiredMark="optional" scrollToFirstError={{ block: "center" }}>
                     <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
                         <Form.Item name="kind" label="连接类型" rules={[{ required: true, message: "请选择连接类型" }]}>
                             <Select
@@ -854,7 +866,8 @@ export default function ProvidersPage() {
                 </label>
                 {cleanupLegacy && migrationPreview?.plaintextSecrets ? <Alert className="mt-3" type="info" showIcon title={`预计清理最多 ${migrationPreview.plaintextSecrets} 个渠道中的旧明文密钥；此操作不会删除已加密导入的凭据。`} /> : null}
             </Modal>
-        </main>
+            </main>
+        </ConfigProvider>
     );
 }
 
@@ -877,29 +890,37 @@ function ProviderActions({ item, onEdit, onCopy, onDefault, onDelete }: { item: 
 
 function ProviderCard({ item, testing, onEdit, onToggle, actions }: { item: Provider; testing: boolean; onEdit: () => void; onToggle: (checked: boolean) => void; actions: ReactNode }) {
     return (
-        <div className="rounded-lg border border-stone-200 bg-background p-4 dark:border-stone-800">
+        <article className={`min-w-0 rounded-[12px] border border-black/10 p-4 dark:border-white/[0.06] ${item.enabled ? "bg-white dark:bg-[#1a2122]" : "bg-[#f1f2f3] opacity-70 dark:bg-[#090f10]"}`}>
             <div className="flex items-start justify-between gap-3">
-                <button type="button" className="min-w-0 text-left" onClick={onEdit}>
-                    <div className="flex items-center gap-2 font-medium text-stone-950 dark:text-stone-100">
-                        <span className="truncate">{item.name}</span>
-                        {item.isDefault ? <Tag color="blue">默认</Tag> : null}
-                    </div>
-                    <div className="mt-1 text-xs uppercase text-stone-500">{item.protocol}</div>
+                <button type="button" className="flex min-w-0 flex-1 items-start gap-2 text-left" onClick={onEdit}>
+                    <span className="flex size-8 shrink-0 items-center justify-center rounded border border-black/10 bg-black/[0.04] text-[#00a1c2] dark:border-white/[0.06] dark:bg-[#2f3637] dark:text-[#00cae0]">
+                        <Server className="size-[18px]" />
+                    </span>
+                    <span className="min-w-0">
+                        <span className="flex min-w-0 items-center gap-2 text-lg font-semibold leading-6 text-[#0f1419] dark:text-[#f5fbff]">
+                            <span className="truncate">{item.name}</span>
+                            {item.isDefault ? <Tag color="cyan">默认</Tag> : null}
+                        </span>
+                        <span className="mt-1 flex min-w-0 items-center gap-1 text-xs leading-[18px] text-black/60 dark:text-[rgba(224,245,255,0.60)]">
+                            <span className="shrink-0 rounded-sm bg-black/[0.05] px-1.5 py-0.5 uppercase dark:bg-white/[0.08]">{item.protocol}</span>
+                            <span className="shrink-0 opacity-50">·</span>
+                            <span className="truncate">{item.capabilities.map((capability) => capabilityOptions.find((option) => option.value === capability)?.label).filter(Boolean).join("、")}</span>
+                        </span>
+                    </span>
                 </button>
-                {actions}
+                <div className="flex shrink-0 items-center gap-1">
+                    <Switch size="small" checked={item.enabled} onChange={onToggle} aria-label={`${item.enabled ? "停用" : "启用"}${item.name}`} />
+                    {actions}
+                </div>
             </div>
-            <div className="mt-3 flex flex-wrap items-center gap-1.5">
-                {item.capabilities.map((capability) => (
-                    <Tag key={capability}>{capabilityOptions.find((option) => option.value === capability)?.label}</Tag>
-                ))}
-            </div>
-            <div className="mt-4 text-xs text-stone-400 dark:text-stone-500">默认模型</div>
-            <div className="mt-1 line-clamp-2 break-all text-sm leading-5 text-stone-600 dark:text-stone-300">{item.defaultModel || item.baseUrl || "未设置默认模型"}</div>
-            <div className="mt-4 flex items-center justify-between gap-3 border-t border-stone-100 pt-3 dark:border-stone-800">
+            <div className="mt-4 flex min-w-0 items-end justify-between gap-3 border-t border-black/10 pt-3 dark:border-white/[0.06]">
+                <div className="min-w-0 max-w-[180px]">
+                    <div className="text-xs leading-[18px] text-black/45 dark:text-[rgba(224,245,255,0.48)]">Model</div>
+                    <div className="mt-1 truncate text-sm font-medium leading-5 text-black/60 dark:text-[rgba(224,245,255,0.60)]" title={item.defaultModel || item.baseUrl || "未设置默认模型"}>{item.defaultModel || item.baseUrl || "未设置默认模型"}</div>
+                </div>
                 <ProviderStatusTag status={testing ? "testing" : item.connectionStatus} message={testing ? "正在检测连接，请稍候" : item.statusMessage} />
-                <Switch size="small" checked={item.enabled} onChange={onToggle} aria-label={`${item.enabled ? "停用" : "启用"}${item.name}`} />
             </div>
-        </div>
+        </article>
     );
 }
 
