@@ -9,7 +9,7 @@ description: 运行时调用链、任务安全预算、Mock 与真实 API 验证
 
 第四阶段的非计费可靠性工作已经完成。开始时目标分支为 `codex/provider-center-mac`，HEAD 为 `809f7116cc472f18aa507e0856a32bf6f7ec7eb5`，工作区干净，阶段三 Git bundle `/Users/danchen/infinite-canvas-provider-stage3-pre-api-809f711.bundle` 存在。
 
-阶段开始时本机没有已配置 Provider 或 provider 类环境变量。后续用户在连接中心安全配置 RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 渠道后，RunningHub 完成一次账户检测和一次真实工作流任务，`gpt-image-2` 与 OpenOx 的 Gemini 图片兼容模型分别完成一次最低成本生图，Gemini 原生与通用 HTTP 分别完成最低成本文本生成。每个真实请求均只提交一次，没有自动重试；需要更换模型或提高输出预算时均再次取得用户明确确认。没有读取未知钥匙串项，也没有在终端、浏览器、报告或 Git 中输出密钥。全量自动化验收提交为 `dd34c95`；其后的 STITCH 最终视觉收敛使用登录后的真实 Provider 数据完成桌面、390px、深浅色与编辑抽屉人工复核。外部条件收尾又补充了正式浅色 STITCH 变体、内联图片本地持久化、MiniMax H3 排队任务取消、可选 Redis 共享预算和第三批浏览器 Mock 回归，并重新通过六项全量验收。
+阶段开始时本机没有已配置 Provider 或 provider 类环境变量。后续用户在连接中心安全配置 RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 渠道后，RunningHub 完成一次账户检测和一次真实工作流任务，`gpt-image-2` 与 OpenOx 的 Gemini 图片兼容模型分别完成一次最低成本生图，Gemini 原生与通用 HTTP 分别完成最低成本文本生成。每个真实请求均只提交一次，没有自动重试；需要更换模型或提高输出预算时均再次取得用户明确确认。没有读取未知钥匙串项，也没有在终端、浏览器、报告或 Git 中输出密钥。全量自动化验收提交为 `dd34c95`；其后的 STITCH 最终视觉收敛使用登录后的真实 Provider 数据完成桌面、390px、深浅色与编辑抽屉人工复核。外部条件收尾又补充了正式浅色 STITCH 变体、内联图片本地持久化、MiniMax H3 排队任务取消、可选 Redis 共享预算和浏览器 Mock 回归。最新功能性提交 `de29ac8` 进一步覆盖连接中心图片模型进入无限画布配置节点选择器，并再次通过六项全量验收。
 
 ## 本地环境与启动
 
@@ -107,7 +107,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 | --- | --- |
 | `go test ./...` | 通过；`config`、`handler`、`middleware`、`router`、`service` 及 CLI helper/签名清单契约均通过。Mac 测试夹具显式使用 `0700` 私钥目录和短 Unix Socket 路径，异步模型探测等待窗口调整为 5 秒；生产权限、签名和任务 deadline 未放宽。 |
 | `vitest run` | 通过；9 个测试文件、29 个测试全部通过，其中连接中心组件状态测试 5 个用例、生图内联结果持久化测试 2 个用例通过。 |
-| `playwright test` | 通过；8 个 Chromium Mock 浏览器用例全部通过，总耗时 1.3 分钟；新增编辑、模型拉取、复制不继承密钥和删除确认。 |
+| `playwright test` | 通过；9 个 Chromium Mock 浏览器用例全部通过，总耗时 1.6 分钟；覆盖编辑、模型拉取、复制不继承密钥、删除确认，以及连接中心模型进入生图台、视频台和无限画布。 |
 | `tsc --noEmit` | 通过；统一渠道请求头返回类型收敛为 `Record<string, string>`，修复 `fetch` 的 `HeadersInit` 类型阻断。 |
 | `eslint .` | 通过；0 error、117 个既有 warning，未做无关历史清理。 |
 | `next build` | 通过；首次因隔离运行时未把 Node 加入子进程 PATH 而失败，补入同一受控 Node 目录后 Next.js 16.2.9 Turbopack 编译、TypeScript、20 个静态页面生成及路由优化全部完成。 |
@@ -143,10 +143,10 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 
 ## Git 收尾检查
 
-- `git diff --check` 通过；提交候选包含 MiniMax H3 取消、Redis 共享请求预算、生图内联结果持久化、Playwright 回归及对应配置和阶段文档，不包含无关业务改动。
+- `git diff --check` 通过；阶段分支包含 MiniMax H3 取消、Redis 共享请求预算、生图内联结果持久化、Playwright 回归及对应配置和阶段文档，不包含无关业务改动。
 - Git 跟踪的环境变量文件只有无密钥模板 `.env.example`；本地 `.env`、SQLite `data/infinite-canvas.db`、AI 调用日志和 `web/test-results/` 均由 `.gitignore` 排除。
 - 没有 Git 跟踪的 SQLite、用户素材、Playwright 报告、测试截图、trace 或本地日志；常见 OpenAI、Gemini、GitHub、AWS 和私钥格式的跟踪文件扫描结果为 0。
-- 第四阶段收尾 bundle 输出到仓库外的 `/Users/danchen/infinite-canvas-provider-phase4-final.bundle`，不包含工作区未跟踪或被忽略的本地数据。
+- 第四阶段完整 bundle 输出到仓库外的 `/Users/danchen/infinite-canvas-provider-phase4-complete.bundle`，保留此前 bundle 且不包含工作区未跟踪或被忽略的本地数据。
 
 ## 旧配置回退
 
@@ -165,7 +165,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 - 通用视频上游没有统一取消协议。现已为火山方舟 Seedance、MiniMax H3 排队任务和 RunningHub ComfyUI 任务接入各自官方取消端点；Gemini Veo、KIE、APIMart、OpenAI/grok2api、CogVideoX/Agnes、其他 MiniMax 协议和通用 HTTP 尚无可确认的运行中取消契约，取消仍只能停止本地轮询和当前网络读取，已提交的异步上游任务可能继续运行。
 - 画布图片、视频和音频运行节点，以及生图台、视频台运行任务卡已提供独立“取消任务”按钮；取消后保留记录并明确显示“已取消”，删除任务/记录仍沿用先取消再删除的既有行为。
 - 生成前确认框已经接入画布、生图台、视频台及重试入口；正式有渠道后需人工确认渠道名称、模型和任务类型与实际请求一致。
-- 连接中心 Playwright 浏览器 Mock 回归已覆盖登录会话持久化、加载转空、错误重试、禁用与不可用、停用确认、响应式断点、API 抽屉必填校验与协议切换、模型保存、旧配置迁移风险与确认参数、编辑、模型拉取、复制、删除，以及连接中心模型进入生图台和视频台的跨页面链路；完整 8 个用例已在独占 Next 测试服务下全部通过。全部流程均拦截 API，不点击生成、不调用真实渠道、不修改数据库；迁移提示已改用 Ant Design 6 的 `Alert.title`，复跑不再出现该废弃警告。
+- 连接中心 Playwright 浏览器 Mock 回归已覆盖登录会话持久化、加载转空、错误重试、禁用与不可用、停用确认、响应式断点、API 抽屉必填校验与协议切换、模型保存、旧配置迁移风险与确认参数、编辑、模型拉取、复制、删除，以及连接中心模型进入生图台、视频台和无限画布的跨页面链路；完整 9 个用例已在独占 Next 测试服务下全部通过。全部流程均拦截 API，不点击生成、不调用真实渠道、不修改数据库；迁移提示已改用 Ant Design 6 的 `Alert.title`，复跑不再出现该废弃警告。
 - 多实例共享预算实现与跨实例 Mock 契约已完成，但本机没有配置真实 Redis，也没有启动两个后端实例做生产拓扑演练；正式部署前仍需提供受控 Redis、隔离前缀和可观测性并执行运行时验收。
 - 生图台浮动工作流按钮已统一服务端与浏览器首次渲染坐标，并在客户端恢复保存位置后再显示，避免原有位置差异触发 hydration warning 或首屏闪跳。
 - 不开始 Tauri，不修改线上部署。阶段分支已在用户授权后推送到个人 fork；本报告收尾不执行线上部署。
