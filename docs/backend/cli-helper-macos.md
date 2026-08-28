@@ -14,6 +14,37 @@ Mac CLI helper 使用两套独立信任机制：
 
 安装器不会安装 Codex，也不会读取 shell profile。它只安装已签名 helper、可信清单和公钥，创建本机随机共享密钥文件，并注册当前用户的 LaunchAgent。
 
+## 本机开发安装（个人自用）
+
+仅在自己的 Mac 上开发和使用时，不需要购买 Apple Developer Program。运行独立开发安装器：
+
+```bash
+scripts/macos/install-cli-helper-dev.sh
+```
+
+开发安装器只接受零参数，使用当前仓库源码和当前 `PATH` 中的 `go`、`codex`：
+
+- 只构建当前 Mac 架构，并使用本机 ad-hoc 签名；不会伪造 Developer ID、Team ID、Gatekeeper 或 Apple 公证通过。
+- 在安装期间生成临时 Ed25519 私钥和 30 天有效清单，只允许当前解析到的 Codex 二进制 SHA-256；私钥不会保留，公钥和清单使用 `0600` 权限安装。
+- 使用独立目录 `~/Library/Application Support/Infinite Canvas/cli-helper-dev`、独立 LaunchAgent `com.tigerowo.infinite-canvas.cli-helper.dev` 和独立日志，不覆盖正式安装；Unix Socket 位于权限为 `0700` 的短路径 `~/.infinite-canvas/cli-helper-dev/helper.sock`，避免触及 macOS Socket 路径长度上限。
+- 首次安装生成随机共享密钥，重复安装保留该密钥；Socket、公钥、清单、共享密钥、环境文件和 LaunchAgent 均只允许当前用户访问。
+- Codex CLI 更新或清单到期后必须重新运行安装器，重新计算二进制哈希并生成新清单。
+
+开发安装完成后，按脚本提示加载：
+
+```bash
+set -a
+source "$HOME/Library/Application Support/Infinite Canvas/cli-helper-dev/backend.env"
+set +a
+go run .
+```
+
+开发模式仅限本机个人使用，不能作为发布包发送给其他用户。独立卸载不会删除正式 helper 或 Codex 登录凭据：
+
+```bash
+scripts/macos/uninstall-cli-helper-dev.sh --confirm
+```
+
 ## 1. 离线生成清单签名密钥
 
 在不属于项目目录的私有目录中执行一次：
@@ -80,7 +111,7 @@ scripts/macos/release-cli-helper.sh \
 
 ## 5. 启动 Web 后端
 
-安装器生成的 `backend.env` 只有开关和受保护文件路径，不包含密钥正文。启动本机 Go 后端前加载它：
+正式安装器生成的 `backend.env` 只有开关和受保护文件路径，不包含密钥正文。启动本机 Go 后端前加载它：
 
 ```bash
 set -a

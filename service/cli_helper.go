@@ -485,6 +485,16 @@ func controlledCLIAllowedRoots() []string {
 	return roots
 }
 
+func controlledCLIPathDirectories() []string {
+	directories := []string{"/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/Applications/ChatGPT.app/Contents/Resources"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		for _, relative := range []string{".local/bin", ".npm/bin", ".bun/bin", ".codex/bin"} {
+			directories = append(directories, filepath.Join(home, relative))
+		}
+	}
+	return directories
+}
+
 func pathWithinControlledRoots(path string, roots []string) bool {
 	path = filepath.Clean(path)
 	for _, root := range roots {
@@ -497,7 +507,7 @@ func pathWithinControlledRoots(path string, roots []string) bool {
 }
 
 func controlledCLIEnvironment() []string {
-	paths := controlledCLIAllowedRoots()
+	paths := controlledCLIPathDirectories()
 	result := []string{"LANG=C", "LC_ALL=C", "PATH=" + strings.Join(paths, string(os.PathListSeparator))}
 	for _, name := range []string{"HOME", "TMPDIR"} {
 		if value := os.Getenv(name); value != "" {

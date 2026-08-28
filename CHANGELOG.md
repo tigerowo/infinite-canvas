@@ -9,6 +9,7 @@
 - API JSON、AI/画布请求及媒体上传增加按路由分类的入站请求体预算，并消除协议参考文件的静默截断。
 - 登录、生成、上传、下载及重型上游操作增加按用户/IP 的速率与并发预算，并限制每用户活动生成任务总数。
 - 连接中心新增 RunningHub 应用/工作流 adapter，以及默认关闭、仅本机回环可触发的受控 Mac CLI 版本检测。
+- Mac CLI helper 新增与正式 Developer ID 发布隔离的本机开发安装模式，继续校验短期 Ed25519 清单、Codex 二进制哈希和私有进程授权。
 - 前端新增正式 ESLint、TypeScript typecheck 和 Vitest 脚本，并恢复 Next.js 构建期类型错误检查。
 - 修复普通用户登录/注册后的目标页跳转被首页跳转覆盖，以及 CLI Provider 表单提交未挂载字段时报错的问题。
 

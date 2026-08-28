@@ -50,6 +50,13 @@ func TestFindControlledCLIExecutableUsesFixedNameAndRejectsWritableBinary(t *tes
 	}
 }
 
+func TestControlledCLIEnvironmentIncludesChatGPTCodexDirectory(t *testing.T) {
+	environment := strings.Join(controlledCLIEnvironment(), "\n")
+	if !strings.Contains(environment, "/Applications/ChatGPT.app/Contents/Resources") {
+		t.Fatalf("environment=%q", environment)
+	}
+}
+
 func TestCLIHelperManifestRequiresValidSignatureAndExpiry(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
