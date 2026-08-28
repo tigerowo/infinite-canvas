@@ -33,4 +33,13 @@ describe("provider helpers", () => {
         } as Provider;
         expect(providerModelChannels([provider])).toEqual([expect.objectContaining({ id: "provider-http", protocol: "http", apiKey: "", hasHeaders: true, capabilities: ["image"], models: ["custom-render"] })]);
     });
+
+    it("keeps detection-only CLI providers out of canvas generation channels", () => {
+        const providers = [
+            { id: "provider-gemini-cli", kind: "cli", protocol: "gemini-cli", name: "Gemini CLI", capabilities: ["text", "image"], models: ["gemini-cli-image"], enabled: true },
+            { id: "provider-jimeng-cli", kind: "cli", protocol: "jimeng", name: "即梦 CLI", capabilities: ["image", "video"], models: ["jimeng-cli-image"], enabled: true },
+        ] as Provider[];
+
+        expect(providerModelChannels(providers)).toEqual([]);
+    });
 });

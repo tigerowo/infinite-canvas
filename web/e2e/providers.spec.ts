@@ -446,3 +446,93 @@ test("连接中心图片模型进入无限画布配置节点选择器", async ({
     await canvasPicker.click();
     await expect(page.getByRole("option", { name: /mock-canvas-image.*Mock 画布渠道/ })).toBeVisible();
 });
+
+test("Gemini 与即梦 CLI 只执行版本检测且不会误入无限画布生成模型", async ({ page }) => {
+    test.setTimeout(60_000);
+    const canvasProvider = {
+        ...connectedProvider,
+        id: "mock-canvas-api",
+        name: "Mock 画布 API",
+        capabilities: ["image"],
+        models: ["mock-canvas-api-image"],
+        defaultModel: "mock-canvas-api-image",
+    };
+    const geminiCLIProvider = {
+        ...connectedProvider,
+        id: "mock-gemini-cli",
+        kind: "cli",
+        protocol: "gemini-cli",
+        name: "Mock Gemini CLI",
+        baseUrl: "",
+        hasApiKey: false,
+        capabilities: ["text", "image"],
+        models: ["mock-gemini-cli-image"],
+        defaultModel: "mock-gemini-cli-image",
+        executable: "/mock/agy",
+        version: "agy 1.2.3",
+        isDefault: false,
+    };
+    const jimengCLIProvider = {
+        ...connectedProvider,
+        id: "mock-jimeng-cli",
+        kind: "cli",
+        protocol: "jimeng",
+        name: "Mock 即梦 CLI",
+        baseUrl: "",
+        hasApiKey: false,
+        capabilities: ["image", "video"],
+        models: ["mock-jimeng-cli-image"],
+        defaultModel: "mock-jimeng-cli-image",
+        executable: "/mock/dreamina",
+        version: "dreamina 1.4.2",
+        isDefault: false,
+    };
+    const providers = [canvasProvider, geminiCLIProvider, jimengCLIProvider];
+    const detectedProtocols: string[] = [];
+    await seedSession(page);
+    await installApiMocks(page, (route) => respond(route, providers), {
+        userConfig: (route) => respond(route, { modelConfig: { channelMode: "remote" }, syncCapabilities: { userData: false, workflows: false, assets: false } }),
+        providerAction: async (route) => {
+            const path = new URL(route.request().url()).pathname;
+            const provider = providers.find((item) => path === `/api/v1/providers/${item.id}/cli/detect`);
+            if (!provider || provider.kind !== "cli") throw new Error(`未 Mock 的 CLI 操作：${route.request().method()} ${path}`);
+            detectedProtocols.push(provider.protocol);
+            await respond(route, { available: true, protocol: provider.protocol, executable: provider.executable, version: provider.version, message: "CLI 检测成功" });
+        },
+    });
+
+    await openProvidersFromHydratedLoginPage(page);
+    await page.getByRole("tab", { name: "CLI 渠道" }).click();
+    for (const provider of [geminiCLIProvider, jimengCLIProvider]) {
+        await page.getByRole("button", { name: `${provider.name} 操作` }).click();
+        await page.getByRole("menuitem", { name: "编辑" }).click();
+        const drawer = page.getByRole("dialog", { name: "编辑连接" });
+        await expect(drawer.getByText("当前仅检测 CLI 安装与版本")).toBeVisible();
+        await expect(drawer.getByRole("button", { name: "检查登录状态" })).toHaveCount(0);
+        await expect(drawer.getByRole("button", { name: "最小调用" })).toHaveCount(0);
+        await drawer.getByRole("button", { name: "检测 CLI" }).click();
+        await expect.poll(() => detectedProtocols.filter((protocol) => protocol === provider.protocol).length).toBe(1);
+        await drawer.getByRole("button", { name: /取\s*消/ }).click();
+    }
+
+    expect(detectedProtocols).toEqual(["gemini-cli", "jimeng"]);
+    await page.goto("/canvas");
+    await expect(page.getByRole("heading", { name: "无限画布" })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "新建画布" }).last().click();
+    const enteredDirectly = await Promise.race([
+        page.waitForURL(/\/canvas\/[^/]+$/, { timeout: 30_000 }).then(() => true).catch(() => false),
+        page.getByRole("button", { name: /无限画布 1.*0 个节点/ }).waitFor({ state: "visible" }).then(() => false),
+    ]);
+    if (!enteredDirectly) {
+        await page.getByRole("button", { name: /无限画布 1.*0 个节点/ }).click();
+        await expect(page).toHaveURL(/\/canvas\/[^/]+$/, { timeout: 30_000 });
+    }
+    await page.getByRole("button", { name: "生成配置" }).click();
+
+    const canvasPicker = page.locator('[data-slot="select-trigger"]').filter({ hasText: "mock-canvas-api-image" }).first();
+    await expect(canvasPicker).toBeVisible({ timeout: 15_000 });
+    await canvasPicker.click();
+    await expect(page.getByRole("option", { name: /mock-canvas-api-image.*Mock 画布 API/ })).toBeVisible();
+    await expect(page.getByRole("option", { name: /mock-gemini-cli-image/ })).toHaveCount(0);
+    await expect(page.getByRole("option", { name: /mock-jimeng-cli-image/ })).toHaveCount(0);
+});

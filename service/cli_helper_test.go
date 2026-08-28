@@ -154,6 +154,63 @@ func TestExecuteCLICompanionVersionRunsOnlyVersionProbe(t *testing.T) {
 	}
 }
 
+func TestExecuteCLICompanionVersionDetectsGeminiAndJimengWithoutModelCalls(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Mac CLI helper only runs on macOS")
+	}
+	for _, testCase := range []struct {
+		protocol  string
+		candidate string
+		version   string
+	}{
+		{protocol: "gemini-cli", candidate: "agy", version: "agy 1.2.3"},
+		{protocol: "jimeng", candidate: "dreamina", version: "dreamina 1.4.2"},
+	} {
+		t.Run(testCase.protocol, func(t *testing.T) {
+			directory := t.TempDir()
+			resolvedDirectory, err := filepath.EvalSymlinks(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousRoots := cliAllowedRoots
+			cliAllowedRoots = func() []string { return []string{directory, resolvedDirectory} }
+			t.Cleanup(func() { cliAllowedRoots = previousRoots })
+			path := filepath.Join(directory, testCase.candidate)
+			argsPath := filepath.Join(directory, "args")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/args\"\nprintf '" + testCase.version + "\\n'\n"
+			if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", directory)
+			t.Setenv("HOME", directory)
+			publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifestPath := filepath.Join(directory, "manifest.json")
+			if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), testCase.protocol, testCase.candidate, cliTestFileHash(t, path)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			previousManifest := config.Cfg.CLIHelperManifest
+			previousPublicKey := config.Cfg.CLIHelperPublicKey
+			config.Cfg.CLIHelperManifest = manifestPath
+			config.Cfg.CLIHelperPublicKey = base64.StdEncoding.EncodeToString(publicKey)
+			t.Cleanup(func() {
+				config.Cfg.CLIHelperManifest = previousManifest
+				config.Cfg.CLIHelperPublicKey = previousPublicKey
+			})
+			result, status := executeCLICompanionVersion(context.Background(), testCase.protocol)
+			if status != model.ProviderStatusConnected || !result.Available || result.Version != testCase.version {
+				t.Fatalf("result=%#v status=%s", result, status)
+			}
+			args, err := os.ReadFile(argsPath)
+			if err != nil || string(args) != "--version\n" {
+				t.Fatalf("args=%q error=%v", args, err)
+			}
+		})
+	}
+}
+
 func TestExecuteCLICompanionAuthStatusRunsOnlyCodexStatusProbe(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Mac CLI helper only runs on macOS")
@@ -201,9 +258,11 @@ func TestExecuteCLICompanionAuthStatusRunsOnlyCodexStatusProbe(t *testing.T) {
 	if loggedOutStatus != model.ProviderStatusUnavailable || !loggedOut.Available || loggedOut.AuthStatus != "unauthenticated" || strings.Contains(loggedOut.Message, "user@example.com") {
 		t.Fatalf("result=%#v status=%s", loggedOut, loggedOutStatus)
 	}
-	unsupported, unsupportedStatus := executeCLICompanionAuthStatus(context.Background(), "gemini-cli")
-	if unsupportedStatus != model.ProviderStatusUnavailable || unsupported.AuthStatus != "unsupported" {
-		t.Fatalf("result=%#v status=%s", unsupported, unsupportedStatus)
+	for _, protocol := range []string{"gemini-cli", "jimeng"} {
+		unsupported, unsupportedStatus := executeCLICompanionAuthStatus(context.Background(), protocol)
+		if unsupportedStatus != model.ProviderStatusUnavailable || unsupported.AuthStatus != "unsupported" {
+			t.Fatalf("protocol=%s result=%#v status=%s", protocol, unsupported, unsupportedStatus)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/config"
+	"github.com/tigerowo/infinite-canvas/model"
 )
 
 func TestExecuteCLIModelProbeUsesFixedReadOnlyCommand(t *testing.T) {
@@ -116,5 +117,16 @@ printf 'OK\n' > "$output"
 	cancelResult, _ := executeCLIModelProbeCancel(cancelInput)
 	if cancelResult.TaskStatus != "cancelled" || !cancelled {
 		t.Fatalf("cancel result=%#v cancelled=%v", cancelResult, cancelled)
+	}
+}
+
+func TestExecuteCLIModelProbeRejectsDetectionOnlyProtocols(t *testing.T) {
+	for _, protocol := range []string{"gemini-cli", "jimeng"} {
+		result, status := executeCLIModelProbeStart(context.Background(), cliCompanionActionRequest{
+			Action: cliCompanionActionProbeStart, UserID: "user-1", ProviderID: "provider-1", Protocol: protocol,
+		})
+		if status != model.ProviderStatusUnavailable || result.Available || result.TaskID != "" || result.TaskStatus != "" || result.Output != "" || result.Message != "仅 Codex CLI 支持受控最小调用" {
+			t.Fatalf("protocol=%s result=%#v status=%s", protocol, result, status)
+		}
 	}
 }
