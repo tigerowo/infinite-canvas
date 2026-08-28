@@ -34,12 +34,14 @@ describe("provider helpers", () => {
         expect(providerModelChannels([provider])).toEqual([expect.objectContaining({ id: "provider-http", protocol: "http", apiKey: "", hasHeaders: true, capabilities: ["image"], models: ["custom-render"] })]);
     });
 
-    it("keeps detection-only CLI providers out of canvas generation channels", () => {
+    it("adds connected Antigravity text models to canvas while keeping detection-only CLI providers out", () => {
         const providers = [
-            { id: "provider-gemini-cli", kind: "cli", protocol: "gemini-cli", name: "Gemini CLI", capabilities: ["text", "image"], models: ["gemini-cli-image"], enabled: true },
+            { id: "provider-gemini-cli", kind: "cli", protocol: "gemini-cli", name: "Antigravity CLI", capabilities: ["text"], models: ["gemini-3.5-flash-low"], defaultModel: "gemini-3.5-flash-low", connectionStatus: "connected", enabled: true },
             { id: "provider-jimeng-cli", kind: "cli", protocol: "jimeng", name: "即梦 CLI", capabilities: ["image", "video"], models: ["jimeng-cli-image"], enabled: true },
         ] as Provider[];
 
-        expect(providerModelChannels(providers)).toEqual([]);
+        expect(providerModelChannels(providers)).toEqual([
+            expect.objectContaining({ id: "provider-gemini-cli", protocol: "gemini-cli", models: ["gemini-3.5-flash-low"], capabilities: ["text"] }),
+        ]);
     });
 });

@@ -34,6 +34,8 @@ type ProviderForm = {
 type CLIProbeState = {
     providerId: string;
     providerName: string;
+    protocol: ProviderProtocol;
+    model: string;
     result: CLIHelperResult;
 };
 
@@ -52,7 +54,7 @@ const apiProtocolOptions = [
 
 const cliProtocolOptions = [
     { label: "Codex CLI", value: "codex" },
-    { label: "Gemini CLI", value: "gemini-cli" },
+    { label: "Antigravity CLI（Google）", value: "gemini-cli" },
     { label: "即梦 CLI", value: "jimeng" },
 ];
 
@@ -249,7 +251,7 @@ export default function ProvidersPage() {
             }
             const testedItem = useProviderStore.getState().items.find((item) => item.id === editing.id) || editing;
             setEditing(testedItem);
-            if (refreshModels && testedItem.kind === "api" && testedItem.protocol !== "runninghub") {
+            if ((refreshModels && testedItem.kind === "api" && testedItem.protocol !== "runninghub") || testedItem.protocol === "gemini-cli") {
                 form.setFieldsValue({ models: testedItem.models, defaultModel: testedItem.defaultModel });
             }
         } catch (testError) {
@@ -260,10 +262,13 @@ export default function ProvidersPage() {
     }
 
     async function checkLoginStatus() {
-        if (!token || !editing || editing.protocol !== "codex") return;
+        if (!token || !editing || !["codex", "gemini-cli"].includes(editing.protocol)) return;
         setCheckingAuth(true);
         try {
             const result = await checkCLIAuth(token, editing.id);
+            const checkedItem = useProviderStore.getState().items.find((item) => item.id === editing.id) || editing;
+            setEditing(checkedItem);
+            if (checkedItem.protocol === "gemini-cli") form.setFieldsValue({ models: checkedItem.models, defaultModel: checkedItem.defaultModel });
             if (result.authStatus === "authenticated") message.success(result.message);
             else if (result.authStatus === "unauthenticated") message.warning(result.message);
             else message.info(result.message);
@@ -304,12 +309,14 @@ export default function ProvidersPage() {
     }
 
     function confirmCLIModelProbe() {
-        if (!token || !editing || editing.protocol !== "codex" || startingProbe) return;
+        if (!token || !editing || !["codex", "gemini-cli"].includes(editing.protocol) || startingProbe) return;
         const providerId = editing.id;
         const providerName = editing.name;
+        const protocol = editing.protocol;
+        const modelName = protocol === "gemini-cli" ? editing.defaultModel : "Codex CLI 当前默认模型";
         setStartingProbe(true);
         modal.confirm({
-            title: "确认执行 Codex 最小调用？",
+            title: `确认执行${protocol === "gemini-cli" ? " Antigravity" : " Codex"} 最小调用？`,
             width: 560,
             content: (
                 <div className="space-y-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
@@ -317,13 +324,13 @@ export default function ProvidersPage() {
                         <span>调用渠道</span>
                         <span className="font-medium text-stone-950 dark:text-stone-100">{providerName}</span>
                         <span>模型</span>
-                        <span className="font-medium text-stone-950 dark:text-stone-100">Codex CLI 当前默认模型</span>
+                        <span className="font-medium text-stone-950 dark:text-stone-100">{modelName || "请先检测并选择默认模型"}</span>
                         <span>任务类型</span>
                         <span className="font-medium text-stone-950 dark:text-stone-100">固定最小文本验证</span>
                         <span>固定提示词</span>
                         <code className="break-all text-xs">Reply with exactly OK. Do not inspect files, run commands, or use tools.</code>
                     </div>
-                    <p>伴随进程只会在临时目录和只读沙箱中执行一次非交互调用，最长 2 分钟，最终输出最多读取 4 KiB；不会接收自定义提示词、参数或工作目录。</p>
+                    <p>伴随进程只会在临时目录和沙箱中执行一次非交互调用，最长 2 分钟，最终输出最多读取 4 KiB；不会接收页面自定义命令、参数或工作目录。</p>
                     <Alert type="warning" showIcon title="此操作可能产生少量模型调用费用，不会自动重试。" />
                 </div>
             ),
@@ -337,7 +344,7 @@ export default function ProvidersPage() {
                         message.warning(result.message);
                         return;
                     }
-                    setProbe({ providerId, providerName, result });
+                    setProbe({ providerId, providerName, protocol, model: modelName, result });
                     setProbeOpen(true);
                 } catch (probeError) {
                     message.error(probeError instanceof Error ? probeError.message : "Codex 最小调用启动失败");
@@ -543,7 +550,7 @@ export default function ProvidersPage() {
                     />
                 ) : null}
 
-                {activeKind === "cli" ? <Alert className="mb-4" type="info" showIcon title="受控 Mac CLI helper" description="仅在本机回环地址且显式启用时执行固定版本检测；Codex 登录和最小调用都需要逐次确认，不接受用户填写的命令、参数、提示词或执行路径。" /> : null}
+                {activeKind === "cli" ? <Alert className="mb-4" type="info" showIcon title="受控 Mac CLI helper" description="仅在本机回环地址且显式启用时执行固定动作；Codex 与 Antigravity 的模型调用都需要逐次确认，不接受用户填写的命令、参数或执行路径。即梦当前仅检测版本。" /> : null}
                 {error && visibleItems.length ? (
                     <Alert
                         className="mb-4"
@@ -696,8 +703,8 @@ export default function ProvidersPage() {
                                 className="mb-5"
                                 type="info"
                                 showIcon
-                                title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : "当前仅检测 CLI 安装与版本"}
-                                description={formProtocol === "codex" ? "保存后可逐次授权检查状态；登录和最小模型调用均需二次确认。最小调用使用固定提示词、只读沙箱和当前默认模型，不接受 API Key、Token 或自定义参数。" : "Gemini 与即梦尚无已确认的非交互登录状态命令，系统不会猜测或执行交互式登录。"}
+                                title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : formProtocol === "gemini-cli" ? "Antigravity CLI 受控接入" : "当前仅检测 CLI 安装与版本"}
+                                description={formProtocol === "codex" ? "保存后可逐次授权检查状态；登录和最小模型调用均需二次确认。最小调用使用固定提示词、只读沙箱和当前默认模型，不接受 API Key、Token 或自定义参数。" : formProtocol === "gemini-cli" ? "检测时只读执行 agy models 拉取已登录账号可用模型；固定最小调用需二次确认，文本模型可供无限画布助手选择。" : "即梦尚无已确认的非交互登录状态和模型调用协议，系统不会猜测或执行交互式登录。"}
                             />
                             {editing?.kind === "cli" && editing.protocol === formProtocol ? (
                                 <div className="mb-5 rounded-lg border border-stone-200 bg-stone-50/60 p-4 dark:border-stone-800 dark:bg-stone-900/40">
@@ -707,15 +714,13 @@ export default function ProvidersPage() {
                                         <Button icon={<RefreshCw className="size-4" />} loading={testing} onClick={() => void runTest(false)}>
                                             检测 CLI
                                         </Button>
-                                        {formProtocol === "codex" ? (
+                                        {["codex", "gemini-cli"].includes(formProtocol) ? (
                                             <>
                                                 <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
                                                     检查登录状态
                                                 </Button>
-                                                <Button type="primary" icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>
-                                                    登录 Codex
-                                                </Button>
-                                                <Button icon={<Play className="size-4" />} loading={startingProbe} onClick={confirmCLIModelProbe}>
+                                                {formProtocol === "codex" ? <Button type="primary" icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>登录 Codex</Button> : null}
+                                                <Button icon={<Play className="size-4" />} loading={startingProbe} disabled={formProtocol === "gemini-cli" && !editing.defaultModel} onClick={confirmCLIModelProbe}>
                                                     最小调用
                                                 </Button>
                                             </>
@@ -748,7 +753,13 @@ export default function ProvidersPage() {
                                 : undefined
                         }
                     >
-                        <Select mode="tags" tokenSeparators={[","]} placeholder={formProtocol === "runninghub" ? "例如 workflow:2058824859437850625" : "输入模型名后回车"} />
+                        <Select
+                            mode={formKind === "cli" ? "multiple" : "tags"}
+                            tokenSeparators={formKind === "cli" ? undefined : [","]}
+                            options={formKind === "cli" ? models.map((model) => ({ label: model, value: model })) : undefined}
+                            placeholder={formProtocol === "runninghub" ? "例如 workflow:2058824859437850625" : formKind === "cli" ? "检测 CLI 后自动同步" : "输入模型名后回车"}
+                            disabled={formKind === "cli"}
+                        />
                     </Form.Item>
                     <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
                         <Form.Item name="defaultModel" label="默认模型">
@@ -769,7 +780,7 @@ export default function ProvidersPage() {
                 </Form>
             </Drawer>
             <Modal
-                title="Codex 最小调用"
+                title={`${probe?.protocol === "gemini-cli" ? "Antigravity" : "Codex"} 最小调用`}
                 width={560}
                 open={probeOpen}
                 closable={probe?.result.taskStatus !== "running"}
@@ -795,7 +806,7 @@ export default function ProvidersPage() {
                         <div className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-4 py-3 dark:border-stone-800">
                             <div>
                                 <div className="font-medium text-stone-950 dark:text-stone-100">{probe.providerName}</div>
-                                <div className="mt-1 text-xs text-stone-500">Codex CLI 当前默认模型 · 固定最小文本验证</div>
+                                <div className="mt-1 text-xs text-stone-500">{probe.model} · 固定最小文本验证</div>
                             </div>
                             {probe.result.taskStatus ? <Tag color={probeStatusMeta[probe.result.taskStatus].color}>{probeStatusMeta[probe.result.taskStatus].label}</Tag> : null}
                         </div>

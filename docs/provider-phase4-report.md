@@ -9,7 +9,7 @@ description: 运行时调用链、任务安全预算、Mock 与真实 API 验证
 
 第四阶段的非计费可靠性工作已经完成。开始时目标分支为 `codex/provider-center-mac`，HEAD 为 `809f7116cc472f18aa507e0856a32bf6f7ec7eb5`，工作区干净，阶段三 Git bundle `/Users/danchen/infinite-canvas-provider-stage3-pre-api-809f711.bundle` 存在。
 
-阶段开始时本机没有已配置 Provider 或 provider 类环境变量。后续用户在连接中心安全配置 RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 渠道后，RunningHub 完成一次账户检测和一次真实工作流任务，`gpt-image-2` 与 OpenOx 的 Gemini 图片兼容模型分别完成一次最低成本生图，Gemini 原生与通用 HTTP 分别完成最低成本文本生成。每个真实请求均只提交一次，没有自动重试；需要更换模型或提高输出预算时均再次取得用户明确确认。没有读取未知钥匙串项，也没有在终端、浏览器、报告或 Git 中输出密钥。全量自动化验收提交为 `dd34c95`；其后的 STITCH 最终视觉收敛使用登录后的真实 Provider 数据完成桌面、390px、深浅色与编辑抽屉人工复核。外部条件收尾又补充了正式浅色 STITCH 变体、内联图片本地持久化、MiniMax H3 排队任务取消、可选 Redis 共享预算和浏览器 Mock 回归。最新功能性提交 `de29ac8` 进一步覆盖连接中心图片模型进入无限画布配置节点选择器，并再次通过六项全量验收。随后已用临时 Redis 和两个隔离后端实例完成共享请求预算运行时演练，并在仓库外备份 SQLite 后完成当前账号剩余旧渠道的真实迁移与明文凭据清理；两项操作均未调用模型或修改线上部署。
+阶段开始时本机没有已配置 Provider 或 provider 类环境变量。后续用户在连接中心安全配置 RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 渠道后，RunningHub 完成一次账户检测和一次真实工作流任务，`gpt-image-2` 与 OpenOx 的 Gemini 图片兼容模型分别完成一次最低成本生图，Gemini 原生与通用 HTTP 分别完成最低成本文本生成。每个真实请求均只提交一次，没有自动重试；需要更换模型或提高输出预算时均再次取得用户明确确认。没有读取未知钥匙串项，也没有在终端、浏览器、报告或 Git 中输出密钥。全量自动化验收提交为 `dd34c95`；其后的 STITCH 最终视觉收敛使用登录后的真实 Provider 数据完成桌面、390px、深浅色与编辑抽屉人工复核。外部条件收尾又补充了正式浅色 STITCH 变体、内联图片本地持久化、MiniMax H3 排队任务取消、可选 Redis 共享预算和浏览器 Mock 回归。最新功能性提交 `de29ac8` 进一步覆盖连接中心图片模型进入无限画布配置节点选择器，并再次通过六项全量验收。随后已用临时 Redis 和两个隔离后端实例完成共享请求预算运行时演练，并在仓库外备份 SQLite 后完成当前账号剩余旧渠道的真实迁移与明文凭据清理；两项操作均未调用模型或修改线上部署。其后 Antigravity `agy` 通过本机开发 helper 同步 14 个受控文本模型；普通文本节点首次验证在本机旧聊天渠道选择阶段失败、未到达模型，修复专用 CLI 分流后，用户确认的唯一一次 `gemini-3.5-flash-low` “只回复 OK”请求成功回写 `OK`。画布创作 Agent 随后修复为优先继承当前画布文本配置节点，并正确识别“不要执行”类请求；用户确认的同一最小请求在右侧 Agent 面板显示 `OK`，未执行画布操作。
 
 ## 本地环境与启动
 
@@ -45,6 +45,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 5. Go handler 调用 `selectAIRequestChannel`，优先解析 Provider；Provider 不存在时继续兼容读取旧用户配置。
 6. OpenAI 兼容、Gemini、通用 HTTP、RunningHub 及已有生成协议 adapter 使用现有请求转换、鉴权、响应解析和 AI 调用日志链。
 7. 用户 Provider 使用 SSRF 安全 transport；DNS 解析后的回环、私网、链路本地、CGNAT 等地址被拒绝，携带凭据的重定向只允许同源。
+8. 已连接的 Antigravity CLI 文本模型不进入旧聊天代理：画布 Agent 与普通文本节点均经 `/api/v1/providers/:id/cli/completions` 启动受控任务，再读取绑定任务状态；Agent 优先使用当前画布文本配置节点的模型和渠道；helper 负责固定参数、2 分钟 deadline、单任务并发、4 KiB 脱敏输出和取消传播。
 
 ## 页面与接口验证
 
@@ -52,6 +53,8 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 | --- | --- | --- |
 | 登录 | 通过 | 使用本地忽略 `.env` 中的管理员凭据，经 Next.js 代理登录成功，`/api/auth/me` 返回管理员角色；未输出用户名、密码或 JWT。 |
 | 无限画布 | 通过 | `/canvas` 正常渲染画布库。 |
+| 无限画布 Antigravity 文本节点 | 通过 | 选择 `gemini-3.5-flash-low` 后，用户确认的一次“只回复 OK”请求经受控 CLI task 回写 `OK`；第一次旧路径失败未到达模型，修复后没有自动重试。 |
+| 无限画布 Antigravity 创作 Agent | 通过 | 当前画布文本配置节点的 `gemini-3.5-flash-low` 经受控 CLI task 返回 `OK`；明确“不执行任何画布操作”不会再被误判为工具调用，右侧面板显示结果且未改动画布。 |
 | 生图工作台 | 通过 | `/image` 正常渲染模型、接口模式、参考图、质量、尺寸和生成数量。 |
 | 视频创作台 | 通过 | `/video` 正常渲染模型、参考媒体、分辨率、尺寸和任务数量。 |
 | 提示词库 | 通过 | `/prompts` 正常渲染现有提示词和筛选入口。 |
@@ -108,7 +111,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 | 命令 | 结果 |
 | --- | --- |
 | `go test ./...` | 通过；`config`、`handler`、`middleware`、`router`、`service` 及 CLI helper/签名清单契约均通过。Mac 测试夹具显式使用 `0700` 私钥目录和短 Unix Socket 路径，异步模型探测等待窗口调整为 5 秒；生产权限、签名和任务 deadline 未放宽。 |
-| `vitest run` | 通过；9 个测试文件、29 个测试全部通过，其中连接中心组件状态测试 5 个用例、生图内联结果持久化测试 2 个用例通过。 |
+| `vitest run` | 通过；此前 9 个测试文件、29 个测试通过；本次 Antigravity 画布增量复跑为 11 个测试文件、35 个测试全部通过，覆盖 CLI adapter 与“不执行任何画布操作”否定语义回归。 |
 | `playwright test` | 通过；9 个 Chromium Mock 浏览器用例全部通过，总耗时 1.6 分钟；覆盖编辑、模型拉取、复制不继承密钥、删除确认，以及连接中心模型进入生图台、视频台和无限画布。 |
 | `tsc --noEmit` | 通过；统一渠道请求头返回类型收敛为 `Record<string, string>`，修复 `fetch` 的 `HeadersInit` 类型阻断。 |
 | `eslint .` | 通过；0 error、117 个既有 warning，未做无关历史清理。 |
@@ -173,7 +176,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 - 多实例共享预算实现、跨实例 Mock 契约和本机双后端真实 Redis 运行时演练均已完成。正式多实例部署仍需配置持久受控 Redis、独立前缀、容量与可用性监控、告警和故障演练；本机临时容器结果不替代生产环境验收。
 - 生图台浮动工作流按钮已统一服务端与浏览器首次渲染坐标，并在客户端恢复保存位置后再显示，避免原有位置差异触发 hydration warning 或首屏闪跳。
 - 不开始 Tauri，不修改线上部署。阶段分支已在用户授权后推送到个人 fork；本报告收尾不执行线上部署。
-- Mac CLI helper 的版本探测已移入独立 Unix Socket 伴随进程，并增加逐次 HMAC/nonce 防重放授权、签名响应、Ed25519 清单、过期时间和二进制 SHA-256 强校验。Codex 支持独立只读登录状态、用户二次确认后的固定浏览器 OAuth，以及逐次确认的固定最小模型调用；调用使用只读沙箱、临时目录、2 分钟 deadline、4 KiB 脱敏最终输出、单任务并发与独立取消，不接受自定义模型、提示词、参数或工作目录，也不自动重试。本机签名清单、CLI 版本检测、登录状态与最小调用确认窗已完成 UI 人工回归；伴随进程未启动、Socket 不可访问和篡改签名清单也均安全失败，恢复后检测重新成功。Next 代理同时修正为转发浏览器原始 Host，避免把 `0.0.0.0` 监听地址误判为非回环。仓库现已提供离线 Ed25519 清单工具、Developer ID universal 发布脚本、Team ID 校验安装器、LaunchAgent、共享密钥文件和显式卸载器，并新增与正式发布隔离的本机开发安装模式：当前架构 ad-hoc 签名、30 天短期 Ed25519 清单、当前 Codex SHA-256、独立目录和 `.dev` LaunchAgent。当前 Mac 已完成开发 helper 重复安装、LaunchAgent 运行、私有 Socket 与配置权限、后端环境加载、CLI 检测和 OAuth 登录状态检查；随后经用户明确确认，通过 `连接中心 → Go 后端 → 私有 Socket → Codex CLI` 执行一次单次真实最小调用，任务状态为 `succeeded`，最终输出严格为 `OK`，没有自动重试。Gemini CLI 与即梦 CLI 已补签名清单固定 `--version`、拒绝 Codex 专属模型探测和无限画布模型目录隔离的 Go/Vitest/Playwright Mock 测试；本机没有对应 CLI，参考资料也没有稳定的非交互登录、生成命令和结构化结果协议，因此不伪造真实画布调用。本轮没有 Apple 签名身份，因此没有生成或安装正式发布包。
+- Mac CLI helper 的版本探测已移入独立 Unix Socket 伴随进程，并增加逐次 HMAC/nonce 防重放授权、签名响应、Ed25519 清单、过期时间和二进制 SHA-256 强校验。Codex 已完成开发 helper 安装、OAuth 登录和一次用户确认的真实最小调用。官方 Antigravity `agy 1.1.22` 已完成安装和 Google OAuth，模型列表只读检查返回可用 Gemini、Claude 与 GPT OSS 模型；本轮新增签名清单绑定、`agy models` 模型同步、headless JSON 固定最小调用和无限画布文本 completion adapter，沿用禁用斜杠命令、plan 模式、私有临时目录、沙箱、2 分钟 deadline、单任务并发、4 KiB 脱敏输出、状态轮询与取消传播。普通文本节点原先误走旧聊天代理并被拒绝，现已改用同一受控 CLI task；画布 Agent 也会优先继承文本配置节点，明确不执行操作时可展示纯文本回复。用户确认的 `gemini-3.5-flash-low` “只回复 OK”分别在普通节点和 Agent 面板成功返回 `OK`，没有自动重试。相关前端 Vitest 已增量复跑通过 11 个文件、35 个用例；Go 与 Playwright 未因本次增量改动重跑。即梦仍只允许固定版本检测。本轮没有 Apple 签名身份，因此没有生成或安装正式发布包。
 
 ### 视频供应商远端取消审计
 

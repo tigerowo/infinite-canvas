@@ -19,10 +19,11 @@ description: Provider 数据边界、接口和现有 AI 调用链接入说明
 | `POST` | `/providers/migrate` | 显式导入旧渠道；可选 `cleanupLegacy` 清理旧明文配置 |
 | `POST` | `/providers/:id/default` | 设为同类型默认 Provider |
 | `POST` | `/providers/:id/test` | 测试连接；`refreshModels=true` 时保存模型列表 |
-| `POST` | `/providers/:id/cli/detect` | 仅本机回环请求可触发受控 CLI 版本检测 |
+| `POST` | `/providers/:id/cli/detect` | 仅本机回环请求可触发受控 CLI 检测；Antigravity 同时只读拉取模型 |
 | `POST` | `/providers/:id/cli/auth-status` | 仅本机回环请求可逐次授权检查受支持 CLI 的登录状态 |
 | `POST` | `/providers/:id/cli/login` | 仅本机回环请求且请求体 `confirmed=true` 时可启动 Codex 浏览器 OAuth |
-| `POST` | `/providers/:id/cli/model-probe` | 仅本机回环请求且请求体 `confirmed=true` 时可启动一次 Codex 最小调用 |
+| `POST` | `/providers/:id/cli/model-probe` | 仅本机回环请求且请求体 `confirmed=true` 时可启动一次 Codex/Antigravity 固定最小调用 |
+| `POST` | `/providers/:id/cli/completions` | 仅本机回环请求可为无限画布启动一次受控 Antigravity 文本任务 |
 | `POST` | `/providers/:id/cli/model-probe/:taskId/status` | 读取当前用户与 Provider 绑定的最小调用状态 |
 | `POST` | `/providers/:id/cli/model-probe/:taskId/cancel` | 取消当前用户与 Provider 绑定的最小调用 |
 | `POST` | `/providers/:id/runninghub/tasks` | 提交 RunningHub 应用或工作流任务 |
@@ -59,7 +60,7 @@ RunningHub 使用独立协议，不会作为 OpenAI 兼容模型渠道同步。�
 
 ## CLI 边界
 
-受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST`、绝对路径 `CLI_HELPER_SOCKET`，以及公钥和共享密钥。开发环境可直接使用 `CLI_HELPER_PUBLIC_KEY` 与 `CLI_HELPER_SHARED_SECRET`；正式安装优先使用权限为 `0600` 的 `CLI_HELPER_PUBLIC_KEY_FILE` 与 `CLI_HELPER_SHARED_SECRET_FILE`，避免把凭据正文放进 LaunchAgent、命令行或环境文件。它只在固定候选名中检测 Codex、Gemini 或即梦 CLI，并执行 allowlist 中的固定参数；用户保存的可执行程序字段不参与命令选择。
+受控 Mac CLI helper 默认关闭，仅当 `CLI_HELPER_ENABLED=true`、请求来自本机回环地址且运行于 macOS 时可用。启用时还必须配置绝对路径 `CLI_HELPER_MANIFEST`、绝对路径 `CLI_HELPER_SOCKET`，以及公钥和共享密钥。开发环境可直接使用 `CLI_HELPER_PUBLIC_KEY` 与 `CLI_HELPER_SHARED_SECRET`；正式安装优先使用权限为 `0600` 的 `CLI_HELPER_PUBLIC_KEY_FILE` 与 `CLI_HELPER_SHARED_SECRET_FILE`，避免把凭据正文放进 LaunchAgent、命令行或环境文件。它只在固定候选名中检测 Codex、官方 Antigravity `agy` 或即梦 CLI，并执行 allowlist 中的固定参数；用户保存的可执行程序字段不参与命令选择。
 
 Web 后端不再直接启动本机 CLI。独立伴随进程入口为 `cmd/infinite-canvas-cli-helper`，只监听本机 Unix Socket；Socket 所在目录必须已存在且权限不向组或其他用户开放，Socket 启动后固定为 `0600`。先启动伴随进程，再启动 Go Web 后端：
 
@@ -68,11 +69,11 @@ go run ./cmd/infinite-canvas-cli-helper
 go run .
 ```
 
-helper 不安装 CLI、不读取 shell profile，也不接受任意参数。伴随进程允许固定 `--version` 检测、Codex 官方的固定 `login status` 只读检测、用户二次确认后的固定无参数 `codex login`，以及逐次确认后的最小模型调用。版本与状态检测具有 5 秒超时、2 个并发槽位和 16 KiB 输出上限；浏览器登录最长运行 10 分钟，全局只允许一个登录进程，命令 stdin 为空且 stdout/stderr 全部丢弃。登录检测只返回 `authenticated` / `unauthenticated`，登录启动只返回 `started` / `running`，不会把 CLI 原始输出、账号、认证方式或 OAuth 数据返回前端。可执行文件必须位于受控目录，解析后的普通文件不得允许组或其他用户写入，文件大小不得超过 256 MiB，并且 SHA-256 必须与签名清单一致。工作目录当前只作为元数据保存，不用于命令执行。
+helper 不安装 CLI、不读取 shell profile，也不接受任意命令。伴随进程允许固定 `--version` 检测、Codex `login status`、用户确认后的固定 `codex login`，以及受控模型调用；Antigravity 额外允许只读 `agy models`，其成功结果同时作为非交互登录状态并保存最多 64 个受校验模型名。可执行文件必须位于受控目录，解析后的普通文件不得允许组或其他用户写入，文件大小不得超过 256 MiB，并且 SHA-256 必须与签名清单一致。工作目录字段只作为元数据保存，模型调用始终进入新建私有临时目录。
 
-每次 Web 请求只生成一个 `version`、`auth-status`、`login-start`、`model-probe-start`、`model-probe-status` 或 `model-probe-cancel` 动作授权，授权正文绑定用户 ID、Provider ID、协议、动作及必要的任务 ID。Web 后端使用共享密钥对“Unix 时间戳、随机 nonce、请求体 SHA-256”生成 HMAC-SHA256；伴随进程要求时间偏差不超过 30 秒，并在内存中保留已使用 nonce 两分钟，最多保留 4096 项。授权验证通过后立即标记 nonce 已使用，即使动作本身失败也不能重放。响应体同样绑定请求 nonce 并使用 HMAC-SHA256 签名，Web 后端验证后才读取结果。请求与响应均限制为 32 KiB，单次客户端总超时为 7 秒。`login-start` 和 `model-probe-start` 只负责启动受控后台进程，进程由伴随进程生命周期托管。
+每次 Web 请求只生成一个 `version`、`auth-status`、`login-start`、`model-probe-start`、`completion-start`、`model-probe-status` 或 `model-probe-cancel` 动作授权，授权正文绑定用户 ID、Provider ID、协议、动作及必要的任务 ID；completion 还绑定受校验模型名和最多 24 KiB 的画布提示词。Web 后端使用共享密钥对“Unix 时间戳、随机 nonce、请求体 SHA-256”生成 HMAC-SHA256；伴随进程要求时间偏差不超过 30 秒，并在内存中保留已使用 nonce 两分钟。响应体同样绑定请求 nonce 并使用 HMAC-SHA256 签名，Web 后端验证后才读取结果。请求与响应均限制为 32 KiB，启动动作只负责启动受控后台进程，进程由伴随进程生命周期托管。
 
-最小调用固定执行 `codex exec --sandbox read-only --skip-git-repo-check --ephemeral --output-last-message <临时文件> <固定提示词>`，模型由本机 Codex 当前默认配置决定。提示词要求只返回 `OK` 且禁止检查文件、运行命令或使用工具；命令只能在新建的私有临时目录内运行，stdin、stdout 与 stderr 均不进入 Web 进程。全局只允许一个活动调用，deadline 为 2 分钟，最终输出仅从普通文件累计读取最多 4 KiB，经过凭据脱敏后才返回；完成状态保留 10 分钟。前端启动前必须展示渠道、默认模型、任务类型和可能扣费提示，运行中提供独立取消按钮，不自动重试。
+Codex 最小调用固定执行 `codex exec --sandbox read-only --skip-git-repo-check --ephemeral --output-last-message <临时文件> <固定提示词>`。Antigravity 最小调用和画布文本任务固定使用 `agy --print <提示词> --output-format json --model <已拉取模型> --effort low --print-timeout 90s --disable-slash-commands --mode plan --sandbox`；仅画布入口接受受限的结构化画布上下文，不接受命令、执行路径或额外 CLI 参数。全局只允许一个活动调用，deadline 为 2 分钟，最终输出脱敏并限制为 4 KiB；完成状态保留 10 分钟，取消会终止本地 CLI 子进程。
 
 可信清单是一个不超过 64 KiB 的 JSON envelope：
 
@@ -99,7 +100,7 @@ helper 不安装 CLI、不读取 shell profile，也不接受任意参数。伴�
 
 仓库提供离线清单工具 `cmd/infinite-canvas-cli-manifest`，以及 `scripts/macos/` 下的 Developer ID 发布、当前用户安装和显式卸载脚本。安装器验证 Apple 代码签名与 Team ID，注册 LaunchAgent，并生成只包含配置路径的 `backend.env`。完整流程见 [Mac CLI helper 安装与签名发布](cli-helper-macos.md)。
 
-共享密钥属于本机进程凭据，只能保存在权限为 `0600` 的共享密钥文件、被忽略的本地 `.env`、受保护的启动环境或系统钥匙串中，不得写入文档、日志或 Git。动作 allowlist 与固定参数依据 [OpenAI 官方 Codex CLI 命令参考](https://developers.openai.com/codex/cli/reference)约束。安装只通过用户从可信发布包中显式运行的本机脚本完成，Web UI 和 helper API 不开放安装动作。API Key、Access Token、device code、自定义模型与自定义提示词均不开放。Gemini 官方当前只确认交互式 `/auth`，即梦参考脚本会直接执行 `dreamina login`，因此两者不开放登录或模型调用动作。以后增加其他写操作时，必须分别增加动作、请求字段限制、用户确认界面、输出预算和审计记录。
+共享密钥属于本机进程凭据，只能保存在权限为 `0600` 的共享密钥文件、被忽略的本地 `.env`、受保护的启动环境或系统钥匙串中，不得写入文档、日志或 Git。安装只通过用户显式运行的本机脚本完成，Web UI 和 helper API 不开放安装动作。页面不接收 API Key、Access Token 或 OAuth 授权码。Antigravity 登录仍由用户直接在官方 CLI 完成；无限画布只能选择 `agy models` 返回并保存的模型。即梦缺少稳定结果协议，因此不开放登录或模型调用动作。
 
 ## 旧配置
 

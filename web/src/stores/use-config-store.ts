@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
+    protocol: "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine" | "gemini-cli";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -386,7 +386,7 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = localChannelForActiveModel({ ...config, model });
-    return Boolean(model.trim()) && (config.channelMode === "remote" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey || channel?.hasHeaders)));
+    return Boolean(model.trim()) && (config.channelMode === "remote" || channel?.protocol === "gemini-cli" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey || channel?.hasHeaders)));
 }
 
 export const useConfigStore = create<ConfigStore>()(

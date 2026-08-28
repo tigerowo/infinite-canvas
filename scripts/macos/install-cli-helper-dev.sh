@@ -16,6 +16,11 @@ repo_root="$(cd "$(dirname "$0")/../.." && pwd -P)"
 go_path="$(command -v go)"
 codex_path="$(command -v codex)"
 [[ "$codex_path" = /* ]] || { echo "Codex CLI 必须使用绝对路径" >&2; exit 1; }
+agy_path="$(command -v agy || true)"
+if [[ -n "$agy_path" && "$agy_path" != /* ]]; then
+    echo "Antigravity CLI 必须使用绝对路径" >&2
+    exit 1
+fi
 
 label="com.tigerowo.infinite-canvas.cli-helper.dev"
 install_root="$HOME/Library/Application Support/Infinite Canvas/cli-helper-dev"
@@ -71,11 +76,15 @@ CGO_ENABLED=0 GOOS=darwin GOARCH="$architecture" "$go_path" build -trimpath -ldf
     -private-key "$work_dir/signing/private-key.pem" \
     -public-key "$work_dir/public-key.txt" >/dev/null
 expires_at="$(/bin/date -u -v+30d '+%Y-%m-%dT%H:%M:%SZ')"
+manifest_entries=(-entry "codex=codex=$codex_path")
+if [[ -n "$agy_path" ]]; then
+    manifest_entries+=(-entry "gemini-cli=agy=$agy_path")
+fi
 "$go_path" run ./cmd/infinite-canvas-cli-manifest \
     -private-key "$work_dir/signing/private-key.pem" \
     -output "$work_dir/manifest.json" \
     -expires-at "$expires_at" \
-    -entry "codex=codex=$codex_path" >/dev/null
+    "${manifest_entries[@]}" >/dev/null
 
 if [[ -e "$secret_path" || -L "$secret_path" ]]; then
     [[ -f "$secret_path" && ! -L "$secret_path" ]] || { echo "现有开发共享密钥文件类型不安全" >&2; exit 1; }

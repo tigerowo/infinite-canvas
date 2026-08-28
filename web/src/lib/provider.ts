@@ -68,6 +68,7 @@ export type CLIHelperResult = {
     taskId?: string;
     taskStatus?: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
     output?: string;
+    models?: string[];
     message: string;
 };
 
@@ -119,10 +120,10 @@ export const managedProviderProtocols = new Set<ProviderProtocol>(["openai", "ge
 
 export function providerModelChannels(providers: Provider[]) {
     return providers
-        .filter((provider) => provider.kind === "api" && managedProviderProtocols.has(provider.protocol))
+        .filter((provider) => (provider.kind === "api" && managedProviderProtocols.has(provider.protocol)) || (provider.kind === "cli" && provider.protocol === "gemini-cli" && provider.connectionStatus === "connected" && provider.models.length > 0))
         .map((provider) => ({
             id: provider.id,
-            protocol: provider.protocol as ManagedProviderProtocol,
+            protocol: provider.protocol as ManagedProviderProtocol | "gemini-cli",
             name: provider.name,
             baseUrl: provider.baseUrl,
             apiKey: "",

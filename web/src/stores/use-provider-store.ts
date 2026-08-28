@@ -79,7 +79,13 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
             await get().load(token, true);
         }
     },
-    checkCLIAuth: (token, id) => checkCLIProviderAuth(token, id),
+    checkCLIAuth: async (token, id) => {
+        try {
+            return await checkCLIProviderAuth(token, id);
+        } finally {
+            await get().load(token, true);
+        }
+    },
     startCLILogin: (token, id) => startCLIProviderLogin(token, id),
     startCLIProbe: (token, id) => startCLIModelProbe(token, id),
     queryCLIProbe: (token, id, taskId) => queryCLIModelProbe(token, id, taskId),

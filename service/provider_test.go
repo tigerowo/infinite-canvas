@@ -121,6 +121,24 @@ func TestValidateProviderInputRejectsUnsafeURLShape(t *testing.T) {
 	}
 }
 
+func TestApplyTrustedCLIProviderModelsRejectsUserSuppliedCatalog(t *testing.T) {
+	saved := model.Provider{Kind: model.ProviderKindCLI, Protocol: "gemini-cli", Models: []string{"gemini-3.5-flash-low"}}
+	input := ProviderInput{ID: "provider-antigravity", Kind: model.ProviderKindCLI, Protocol: "gemini-cli", Capabilities: []string{"image"}, Models: []string{"user-supplied-model"}, DefaultModel: "gemini-3.5-flash-low"}
+	if err := applyTrustedCLIProviderModels(saved, &input); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(input.Models, saved.Models) {
+		t.Fatalf("models = %#v", input.Models)
+	}
+	if !reflect.DeepEqual(input.Capabilities, []string{"text"}) {
+		t.Fatalf("capabilities = %#v", input.Capabilities)
+	}
+	input.DefaultModel = "user-supplied-model"
+	if err := applyTrustedCLIProviderModels(saved, &input); err == nil {
+		t.Fatal("CLI default model must come from the detected catalog")
+	}
+}
+
 func TestNormalizeProviderHeadersRejectsHeaderInjection(t *testing.T) {
 	headers := normalizeProviderHeaders(map[string]string{
 		"X-Safe": "configured",

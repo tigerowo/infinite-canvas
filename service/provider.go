@@ -151,6 +151,11 @@ func SaveCurrentUserProvider(ctx context.Context, input ProviderInput) (Provider
 			input.IsDefault = true
 		}
 	}
+	if input.Kind == model.ProviderKindCLI {
+		if err := applyTrustedCLIProviderModels(item, &input); err != nil {
+			return ProviderView{}, err
+		}
+	}
 
 	if input.ClearAPIKey {
 		credentials.APIKey = ""
@@ -441,6 +446,27 @@ func validateProviderInput(input ProviderInput) error {
 				return safeMessageError{message: "RunningHub 默认引用格式无效"}
 			}
 		}
+	}
+	return nil
+}
+
+func applyTrustedCLIProviderModels(saved model.Provider, input *ProviderInput) error {
+	input.Capabilities = trustedCLIProviderCapabilities(input.Protocol)
+	if input.ID == "" || saved.Kind != model.ProviderKindCLI || saved.Protocol != input.Protocol {
+		input.Models = nil
+		input.DefaultModel = ""
+		return nil
+	}
+	input.Models = append([]string(nil), saved.Models...)
+	if input.DefaultModel != "" && !userLocalChannelHasModel(input.Models, input.DefaultModel) {
+		return safeMessageError{message: "CLI 默认模型必须来自受控检测结果"}
+	}
+	return nil
+}
+
+func trustedCLIProviderCapabilities(protocol string) []string {
+	if protocol == "gemini-cli" {
+		return []string{"text"}
 	}
 	return nil
 }

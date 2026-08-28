@@ -399,18 +399,37 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [isNodeDragging, setIsNodeDragging] = useState(false);
     const [dropTargetGroupId, setDropTargetGroupId] = useState<string | null>(null);
     const [canvasNow, setCanvasNow] = useState(Date.now());
+    const agentTextConfig = useMemo(() => {
+        const configNodes = nodes.filter((node) => node.type === CanvasNodeType.Config && node.metadata?.generationMode === "text" && node.metadata.model && node.metadata.channelId);
+        const selected = configNodes.find((node) => selectedNodeIds.has(node.id));
+        const source = selected || configNodes[0];
+        return { model: source?.metadata?.model || "", channelId: source?.metadata?.channelId || "" };
+    }, [nodes, selectedNodeIds]);
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(
-        () =>
-            agentConfig || {
-                imageQuality: effectiveConfig.quality,
-                imageSize: effectiveConfig.size,
-                videoQuality: effectiveConfig.vquality,
-                videoSize: effectiveConfig.videoSize,
-            },
-        [agentConfig, effectiveConfig.quality, effectiveConfig.size, effectiveConfig.videoSize, effectiveConfig.vquality],
+        () => ({
+            imageQuality: agentConfig?.imageQuality || effectiveConfig.quality,
+            imageSize: agentConfig?.imageSize || effectiveConfig.size,
+            videoQuality: agentConfig?.videoQuality || effectiveConfig.vquality,
+            videoSize: agentConfig?.videoSize || effectiveConfig.videoSize,
+            textModel: agentConfig?.textModel || agentTextConfig.model || effectiveConfig.textModel,
+            textChannelId: agentConfig?.textChannelId || agentTextConfig.channelId || effectiveConfig.textChannelId,
+        }),
+        [agentConfig, agentTextConfig, effectiveConfig.quality, effectiveConfig.size, effectiveConfig.textChannelId, effectiveConfig.textModel, effectiveConfig.videoSize, effectiveConfig.vquality],
     );
     const agentEffectiveConfig = useMemo(
-        () => ({ ...effectiveConfig, quality: resolvedAgentConfig.imageQuality, size: resolvedAgentConfig.imageSize, vquality: resolvedAgentConfig.videoQuality, videoSize: resolvedAgentConfig.videoSize, count: "1", canvasImageCount: "1" }),
+        () => ({
+            ...effectiveConfig,
+            model: resolvedAgentConfig.textModel || effectiveConfig.textModel || effectiveConfig.model,
+            textModel: resolvedAgentConfig.textModel || effectiveConfig.textModel,
+            activeChannelId: resolvedAgentConfig.textChannelId || effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
+            textChannelId: resolvedAgentConfig.textChannelId || effectiveConfig.textChannelId,
+            quality: resolvedAgentConfig.imageQuality,
+            size: resolvedAgentConfig.imageSize,
+            vquality: resolvedAgentConfig.videoQuality,
+            videoSize: resolvedAgentConfig.videoSize,
+            count: "1",
+            canvasImageCount: "1",
+        }),
         [effectiveConfig, resolvedAgentConfig],
     );
 

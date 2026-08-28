@@ -113,10 +113,33 @@ func StartUserCLIModelProbe(w http.ResponseWriter, r *http.Request, providerID s
 	decodeErr := decoder.Decode(&input)
 	trailingErr := decoder.Decode(&struct{}{})
 	if decodeErr != nil || trailingErr != io.EOF || !input.Confirmed {
-		Fail(w, "请明确确认后再执行 Codex 最小调用")
+		Fail(w, "请明确确认后再执行 CLI 最小调用")
 		return
 	}
 	result, err := service.StartCurrentUserCLIModelProbe(r.Context(), providerID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func StartUserCLICompletion(w http.ResponseWriter, r *http.Request, providerID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 32*1024)
+	var input service.CLICompletionInput
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	decodeErr := decoder.Decode(&input)
+	trailingErr := decoder.Decode(&struct{}{})
+	if decodeErr != nil || trailingErr != io.EOF {
+		Fail(w, "画布助手参数格式错误或内容过大")
+		return
+	}
+	result, err := service.StartCurrentUserCLICompletion(r.Context(), providerID, input)
 	if err != nil {
 		FailError(w, err)
 		return

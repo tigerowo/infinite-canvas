@@ -6,6 +6,7 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
+import { requestAntigravityCLICompletion } from "@/services/api/cli-completion";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, modelChannelHeaders, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -1173,6 +1174,11 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+    if (channelProtocolForConfig(config) === "gemini-cli") {
+        const answer = await requestAntigravityCLICompletion(config, formatCLITextPrompt(withSystemMessage(config, messages)));
+        onDelta(answer);
+        return answer;
+    }
     if (isGeminiConfig(config)) return requestGeminiText(config, messages, onDelta);
     let buffer = "";
     let answer = "";
@@ -1234,6 +1240,12 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
     }
     refreshRemoteUser(config);
     return answer || "没有返回内容";
+}
+
+function formatCLITextPrompt(messages: ChatCompletionMessage[]) {
+    return messages
+        .map((message) => `${message.role}: ${typeof message.content === "string" ? message.content : message.content.map((part) => (part.type === "text" ? part.text : "[图片引用]")).join("\n")}`)
+        .join("\n\n");
 }
 
 export async function fetchImageModels(config: AiConfig) {

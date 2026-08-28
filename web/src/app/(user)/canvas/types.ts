@@ -197,6 +197,8 @@ export type CanvasAgentConfig = {
     imageSize: string;
     videoQuality: string;
     videoSize: string;
+    textModel?: string;
+    textChannelId?: string;
 };
 
 export type CanvasAgentState = {

@@ -101,7 +101,7 @@ description: 当前后端主要数据表与字段说明
 | `connection_status` | string | `untested`、`connected`、`failed`、`timeout`、`disabled`、`unavailable` |
 | `status_message` | text | 最近状态说明，不保存响应正文或密钥 |
 | `last_checked_at` | string | 最近检测时间 |
-| `executable` | string | CLI 可执行程序元数据；当前版本不执行 |
+| `executable` | string | 最近检测到的 CLI 可执行程序元数据；实际执行只认签名清单和固定候选名，不信任该字段 |
 | `working_directory` | string | CLI 默认工作目录元数据 |
 | `version` | string | CLI 版本元数据 |
 | `created_at` | string | 创建时间 |

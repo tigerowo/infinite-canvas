@@ -154,7 +154,7 @@ func TestExecuteCLICompanionVersionRunsOnlyVersionProbe(t *testing.T) {
 	}
 }
 
-func TestExecuteCLICompanionVersionDetectsGeminiAndJimengWithoutModelCalls(t *testing.T) {
+func TestExecuteCLICompanionVersionFetchesAntigravityModelsAndKeepsJimengDetectionOnly(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("Mac CLI helper only runs on macOS")
 	}
@@ -177,7 +177,7 @@ func TestExecuteCLICompanionVersionDetectsGeminiAndJimengWithoutModelCalls(t *te
 			t.Cleanup(func() { cliAllowedRoots = previousRoots })
 			path := filepath.Join(directory, testCase.candidate)
 			argsPath := filepath.Join(directory, "args")
-			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/args\"\nprintf '" + testCase.version + "\\n'\n"
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$HOME/args\"\nif [ \"$1\" = models ]; then printf 'gemini-3.5-flash-low\\tFast\\ngemini-3.1-pro-high\\tPro\\n'; else printf '" + testCase.version + "\\n'; fi\n"
 			if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -204,7 +204,14 @@ func TestExecuteCLICompanionVersionDetectsGeminiAndJimengWithoutModelCalls(t *te
 				t.Fatalf("result=%#v status=%s", result, status)
 			}
 			args, err := os.ReadFile(argsPath)
-			if err != nil || string(args) != "--version\n" {
+			expectedArgs := "--version\n"
+			if testCase.protocol == "gemini-cli" {
+				expectedArgs += "models\n"
+				if strings.Join(result.Models, ",") != "gemini-3.5-flash-low,gemini-3.1-pro-high" {
+					t.Fatalf("models=%q", result.Models)
+				}
+			}
+			if err != nil || string(args) != expectedArgs {
 				t.Fatalf("args=%q error=%v", args, err)
 			}
 		})
@@ -258,7 +265,7 @@ func TestExecuteCLICompanionAuthStatusRunsOnlyCodexStatusProbe(t *testing.T) {
 	if loggedOutStatus != model.ProviderStatusUnavailable || !loggedOut.Available || loggedOut.AuthStatus != "unauthenticated" || strings.Contains(loggedOut.Message, "user@example.com") {
 		t.Fatalf("result=%#v status=%s", loggedOut, loggedOutStatus)
 	}
-	for _, protocol := range []string{"gemini-cli", "jimeng"} {
+	for _, protocol := range []string{"jimeng"} {
 		unsupported, unsupportedStatus := executeCLICompanionAuthStatus(context.Background(), protocol)
 		if unsupportedStatus != model.ProviderStatusUnavailable || unsupported.AuthStatus != "unsupported" {
 			t.Fatalf("protocol=%s result=%#v status=%s", protocol, unsupported, unsupportedStatus)

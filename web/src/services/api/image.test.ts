@@ -1,13 +1,45 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { parseChatImagesPayload } from "@/services/api/image";
+import { parseChatImagesPayload, requestImageQuestion } from "@/services/api/image";
+import { defaultConfig } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 describe("Chat image responses", () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        useUserStore.setState({ token: "", user: null });
+    });
+
     it("extracts a Markdown-embedded image Data URL", () => {
         const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
         const images = parseChatImagesPayload({ choices: [{ message: { content: `![generated image](${dataUrl})` } }] });
 
         expect(images).toHaveLength(1);
         expect(images[0].dataUrl).toBe(dataUrl);
+    });
+
+    it("routes a canvas text node through the selected Antigravity CLI connection", async () => {
+        vi.useFakeTimers();
+        useUserStore.setState({ token: "test-token" });
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-123", taskStatus: "running", message: "running" } }))
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-123", taskStatus: "succeeded", output: "OK", message: "success" } }));
+        const config = {
+            ...defaultConfig,
+            model: "gemini-3.5-flash-low",
+            textModel: "gemini-3.5-flash-low",
+            textChannelId: "provider-antigravity",
+            localChannels: [{ id: "provider-antigravity", protocol: "gemini-cli" as const, name: "Antigravity CLI", baseUrl: "", apiKey: "", models: ["gemini-3.5-flash-low"], capabilities: ["text" as const], managed: true, enabled: true }],
+        };
+        const onDelta = vi.fn();
+
+        const pending = requestImageQuestion(config, [{ role: "user", content: "只回复 OK" }], onDelta);
+        await vi.advanceTimersByTimeAsync(2500);
+        await expect(pending).resolves.toBe("OK");
+        expect(onDelta).toHaveBeenCalledWith("OK");
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-antigravity/cli/completions");
+        expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ model: "gemini-3.5-flash-low", prompt: "user: 只回复 OK" });
     });
 });

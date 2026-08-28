@@ -133,6 +133,9 @@ func New() *gin.Engine {
 	v1.POST("/providers/:id/cli/model-probe", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.StartUserCLIModelProbe(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/providers/:id/cli/completions", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.StartUserCLICompletion(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/providers/:id/cli/model-probe/:taskId/status", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.QueryUserCLIModelProbe(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
 	})

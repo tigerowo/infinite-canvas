@@ -226,9 +226,10 @@ export function CanvasAssistantPanel({
 
         const requestConfig = {
             ...effectiveConfig,
-            model: effectiveConfig.textModel || effectiveConfig.model,
-            activeChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
-            textChannelId: effectiveConfig.textChannelId,
+            model: agentConfig.textModel || effectiveConfig.textModel || effectiveConfig.model,
+            activeChannelId: agentConfig.textChannelId || effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
+            textModel: agentConfig.textModel || effectiveConfig.textModel,
+            textChannelId: agentConfig.textChannelId || effectiveConfig.textChannelId,
         };
         if (!isAiConfigReady(requestConfig, requestConfig.model)) {
             updateMessage(session.id, assistantId, {

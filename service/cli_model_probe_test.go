@@ -120,13 +120,79 @@ printf 'OK\n' > "$output"
 	}
 }
 
-func TestExecuteCLIModelProbeRejectsDetectionOnlyProtocols(t *testing.T) {
-	for _, protocol := range []string{"gemini-cli", "jimeng"} {
-		result, status := executeCLIModelProbeStart(context.Background(), cliCompanionActionRequest{
-			Action: cliCompanionActionProbeStart, UserID: "user-1", ProviderID: "provider-1", Protocol: protocol,
-		})
-		if status != model.ProviderStatusUnavailable || result.Available || result.TaskID != "" || result.TaskStatus != "" || result.Output != "" || result.Message != "仅 Codex CLI 支持受控最小调用" {
-			t.Fatalf("protocol=%s result=%#v status=%s", protocol, result, status)
+func TestExecuteCLIModelProbeRejectsJimengDetectionOnlyProtocol(t *testing.T) {
+	result, status := executeCLIModelProbeStart(context.Background(), cliCompanionActionRequest{
+		Action: cliCompanionActionProbeStart, UserID: "user-1", ProviderID: "provider-1", Protocol: "jimeng",
+	})
+	if status != model.ProviderStatusUnavailable || result.Available || result.TaskID != "" || result.TaskStatus != "" || result.Output != "" || result.Message != "该 CLI 尚不支持受控最小调用" {
+		t.Fatalf("result=%#v status=%s", result, status)
+	}
+}
+
+func TestExecuteAntigravityCompletionUsesFixedHeadlessArguments(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Mac CLI helper only runs on macOS")
+	}
+	directory := t.TempDir()
+	resolvedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRoots := cliAllowedRoots
+	cliAllowedRoots = func() []string { return []string{directory, resolvedDirectory} }
+	t.Cleanup(func() { cliAllowedRoots = previousRoots })
+	executable := filepath.Join(directory, "agy")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/agy-args\"\nprintf '{\"status\":\"SUCCESS\",\"response\":\"canvas ok\"}'\n"
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("HOME", directory)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(directory, "manifest.json")
+	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "gemini-cli", "agy", cliTestFileHash(t, executable)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousManifest, previousPublicKey := config.Cfg.CLIHelperManifest, config.Cfg.CLIHelperPublicKey
+	config.Cfg.CLIHelperManifest = manifestPath
+	config.Cfg.CLIHelperPublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	cliModelProbeState.Lock()
+	previousTasks, previousActiveID := cliModelProbeState.Tasks, cliModelProbeState.ActiveID
+	cliModelProbeState.Tasks, cliModelProbeState.ActiveID = map[string]*cliModelProbeTask{}, ""
+	cliModelProbeState.Unlock()
+	t.Cleanup(func() {
+		config.Cfg.CLIHelperManifest, config.Cfg.CLIHelperPublicKey = previousManifest, previousPublicKey
+		cliModelProbeState.Lock()
+		cliModelProbeState.Tasks, cliModelProbeState.ActiveID = previousTasks, previousActiveID
+		cliModelProbeState.Unlock()
+	})
+	input := cliCompanionActionRequest{Action: cliCompanionActionCompletionStart, UserID: "user-1", ProviderID: "provider-1", Protocol: "gemini-cli", Model: "gemini-3.5-flash-low", Prompt: "只回复 OK"}
+	started, _ := executeAntigravityCompletionStart(context.Background(), input)
+	input.Action, input.TaskID, input.Model, input.Prompt = cliCompanionActionProbeStatus, started.TaskID, "", ""
+	deadline := time.Now().Add(5 * time.Second)
+	var result CLIHelperResult
+	for {
+		result, _ = executeCLIModelProbeStatus(input)
+		if result.TaskStatus != "running" {
+			break
 		}
+		if time.Now().After(deadline) {
+			t.Fatal("Antigravity completion did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if result.TaskStatus != "succeeded" || result.Output != "canvas ok" {
+		t.Fatalf("result=%#v", result)
+	}
+	args, err := os.ReadFile(filepath.Join(directory, "agy-args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--print", "只回复 OK", "--output-format", "json", "--model", "gemini-3.5-flash-low", "--effort", "low", "--print-timeout", "90s", "--disable-slash-commands", "--mode", "plan", "--sandbox"}
+	if strings.Join(strings.Fields(string(args)), "|") != strings.Join(want, "|") {
+		t.Fatalf("args=%q", args)
 	}
 }

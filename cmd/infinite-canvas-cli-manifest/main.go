@@ -24,7 +24,7 @@ const executableLimit = int64(256 * 1024 * 1024)
 
 var allowedCandidates = map[string]map[string]bool{
 	"codex":      {"codex": true},
-	"gemini-cli": {"gemini": true, "agy": true},
+	"gemini-cli": {"agy": true},
 	"jimeng":     {"dreamina": true},
 }
 

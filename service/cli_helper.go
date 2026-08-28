@@ -44,22 +44,24 @@ var (
 		Version    []string
 	}{
 		"codex":      {Candidates: []string{"codex"}, Version: []string{"--version"}},
-		"gemini-cli": {Candidates: []string{"gemini", "agy"}, Version: []string{"--version"}},
+		"gemini-cli": {Candidates: []string{"agy"}, Version: []string{"--version"}},
 		"jimeng":     {Candidates: []string{"dreamina"}, Version: []string{"--version"}},
 	}
+	cliModelNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 )
 
 type CLIHelperResult struct {
-	Available    bool   `json:"available"`
-	Protocol     string `json:"protocol"`
-	Executable   string `json:"executable,omitempty"`
-	Version      string `json:"version,omitempty"`
-	AuthStatus   string `json:"authStatus,omitempty"`
-	ActionStatus string `json:"actionStatus,omitempty"`
-	TaskID       string `json:"taskId,omitempty"`
-	TaskStatus   string `json:"taskStatus,omitempty"`
-	Output       string `json:"output,omitempty"`
-	Message      string `json:"message"`
+	Available    bool     `json:"available"`
+	Protocol     string   `json:"protocol"`
+	Executable   string   `json:"executable,omitempty"`
+	Version      string   `json:"version,omitempty"`
+	AuthStatus   string   `json:"authStatus,omitempty"`
+	ActionStatus string   `json:"actionStatus,omitempty"`
+	TaskID       string   `json:"taskId,omitempty"`
+	TaskStatus   string   `json:"taskStatus,omitempty"`
+	Output       string   `json:"output,omitempty"`
+	Models       []string `json:"models,omitempty"`
+	Message      string   `json:"message"`
 }
 
 type cliHelperManifestEnvelope struct {
@@ -96,6 +98,13 @@ func DetectCurrentUserCLIProvider(ctx context.Context, providerID string) (CLIHe
 		item.Executable = result.Executable
 		item.Version = result.Version
 	}
+	if len(result.Models) > 0 {
+		item.Models = result.Models
+		item.Capabilities = trustedCLIProviderCapabilities(item.Protocol)
+		if !userLocalChannelHasModel(item.Models, item.DefaultModel) {
+			item.DefaultModel = item.Models[0]
+		}
+	}
 	if _, err := repository.SaveProvider(item); err != nil {
 		return CLIHelperResult{}, err
 	}
@@ -113,7 +122,7 @@ func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CL
 	if _, ok := cliSpecs[item.Protocol]; !ok {
 		return CLIHelperResult{Protocol: item.Protocol, AuthStatus: "unsupported", Message: "CLI 类型不受支持"}, nil
 	}
-	if item.Protocol != "codex" {
+	if item.Protocol != "codex" && item.Protocol != "gemini-cli" {
 		return CLIHelperResult{Protocol: item.Protocol, AuthStatus: "unsupported", Message: "该 CLI 暂无已确认的非交互登录状态命令"}, nil
 	}
 	if !config.Cfg.CLIHelperEnabled {
@@ -122,9 +131,27 @@ func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CL
 	if runtime.GOOS != "darwin" {
 		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI helper 仅支持 macOS"}, nil
 	}
-	result, _, err := requestCLICompanionAction(ctx, item.OwnerUserID, item.ID, item.Protocol, cliCompanionActionAuthStatus)
+	result, status, err := requestCLICompanionAction(ctx, item.OwnerUserID, item.ID, item.Protocol, cliCompanionActionAuthStatus)
 	if err != nil {
 		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI 伴随进程未连接或授权失败"}, nil
+	}
+	if result.AuthStatus != "" {
+		item.ConnectionStatus = status
+		item.StatusMessage = result.Message
+		item.LastCheckedAt = now()
+		item.UpdatedAt = item.LastCheckedAt
+	}
+	if len(result.Models) > 0 {
+		item.Models = result.Models
+		item.Capabilities = trustedCLIProviderCapabilities(item.Protocol)
+		if !userLocalChannelHasModel(item.Models, item.DefaultModel) {
+			item.DefaultModel = item.Models[0]
+		}
+	}
+	if result.AuthStatus != "" {
+		if _, saveErr := repository.SaveProvider(item); saveErr != nil {
+			return CLIHelperResult{}, saveErr
+		}
 	}
 	return result, nil
 }
@@ -221,6 +248,16 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 	result.Available = true
 	result.Executable = executable
 	result.Version = version
+	if protocol == "gemini-cli" {
+		models, modelErr := executeAntigravityModelList(parent, executable)
+		if modelErr != nil {
+			result.Message = "Antigravity CLI 已安装，但登录状态或模型列表不可用"
+			return result, model.ProviderStatusUnavailable
+		}
+		result.Models = models
+		result.Message = "Antigravity CLI 检测成功，已读取模型列表"
+		return result, model.ProviderStatusConnected
+	}
 	result.Message = "CLI 检测成功"
 	return result, model.ProviderStatusConnected
 }
@@ -239,6 +276,8 @@ func executeCLICompanionAction(parent context.Context, input cliCompanionActionR
 		return executeCLIModelProbeStatus(input)
 	case cliCompanionActionProbeCancel:
 		return executeCLIModelProbeCancel(input)
+	case cliCompanionActionCompletionStart:
+		return executeAntigravityCompletionStart(parent, input)
 	default:
 		return CLIHelperResult{Protocol: input.Protocol, Message: "CLI 动作不受支持"}, model.ProviderStatusUnavailable
 	}
@@ -296,7 +335,7 @@ func executeCLICompanionLoginStart(parent context.Context, protocol string) (CLI
 
 func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
 	result := CLIHelperResult{Protocol: protocol}
-	if protocol != "codex" {
+	if protocol != "codex" && protocol != "gemini-cli" {
 		result.AuthStatus = "unsupported"
 		result.Message = "该 CLI 暂无已确认的非交互登录状态命令"
 		return result, model.ProviderStatusUnavailable
@@ -320,6 +359,18 @@ func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLI
 	}
 	result.Available = true
 	result.Executable = executable
+	if protocol == "gemini-cli" {
+		models, err := executeAntigravityModelList(parent, executable)
+		if err != nil {
+			result.AuthStatus = "unauthenticated"
+			result.Message = "Antigravity CLI 未登录或模型列表不可用"
+			return result, model.ProviderStatusUnavailable
+		}
+		result.AuthStatus = "authenticated"
+		result.Models = models
+		result.Message = "Antigravity CLI 已登录"
+		return result, model.ProviderStatusConnected
+	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "login", "status")
@@ -339,6 +390,36 @@ func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLI
 	result.AuthStatus = "authenticated"
 	result.Message = "Codex CLI 已登录"
 	return result, model.ProviderStatusConnected
+}
+
+func executeAntigravityModelList(parent context.Context, executable string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "models")
+	command.Env = controlledCLIEnvironment()
+	var output cappedCLIOutput
+	command.Stdout = &output
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return nil, err
+	}
+	models := make([]string, 0, 16)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(output.String(), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 || !cliModelNamePattern.MatchString(fields[0]) || seen[fields[0]] {
+			continue
+		}
+		models = append(models, fields[0])
+		seen[fields[0]] = true
+		if len(models) == 64 {
+			break
+		}
+	}
+	if len(models) == 0 {
+		return nil, errors.New("Antigravity model list is empty")
+	}
+	return models, nil
 }
 
 func loadCLIHelperHashes(protocol string, current time.Time) (map[string]string, error) {
