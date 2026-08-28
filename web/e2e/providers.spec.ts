@@ -47,6 +47,7 @@ type ApiMockHandlers = {
     migrationPreview?: ProviderHandler;
     migrate?: ProviderHandler;
     userConfig?: ProviderHandler;
+    providerAction?: ProviderHandler;
 };
 
 async function respond(route: Route, data: unknown, status = 200, msg = "") {
@@ -105,6 +106,10 @@ async function installApiMocks(page: Page, providerHandler: ProviderHandler = (r
         }
         if (path === "/api/v1/providers") {
             await providerHandler(route);
+            return;
+        }
+        if (path.startsWith("/api/v1/providers/") && handlers.providerAction) {
+            await handlers.providerAction(route);
             return;
         }
         if (path === "/api/v1/user-data/assets") {
@@ -284,6 +289,56 @@ test("新增 API 抽屉校验模型配置并保存连接", async ({ page }) => {
         models: ["mock-image"],
         defaultModel: "mock-image",
     });
+});
+
+test("编辑、测试、复制并删除已有连接", async ({ page }) => {
+    let deleted = false;
+    let testRequests = 0;
+    await seedSession(page);
+    await installApiMocks(page, (route) => respond(route, deleted ? [] : [connectedProvider]), {
+        providerAction: async (route) => {
+            const request = route.request();
+            const path = new URL(request.url()).pathname;
+            if (path === "/api/v1/providers/mock-openai/test") {
+                testRequests += 1;
+                await respond(route, { status: "connected", message: "Mock 连接成功", models: ["mock-text"], checkedAt: timestamp });
+                return;
+            }
+            if (path === "/api/v1/providers/mock-openai" && request.method() === "DELETE") {
+                deleted = true;
+                await respond(route, true);
+                return;
+            }
+            throw new Error(`未 Mock 的连接操作：${request.method()} ${path}`);
+        },
+    });
+
+    await openProvidersFromHydratedLoginPage(page);
+    await page.getByRole("button", { name: "Mock OpenAI 操作" }).click();
+    await page.getByRole("menuitem", { name: "编辑" }).click();
+    const editDrawer = page.getByRole("dialog", { name: "编辑连接" });
+    await expect(editDrawer).toBeVisible();
+    await expect(editDrawer.getByLabel("连接名称")).toHaveValue("Mock OpenAI");
+    await expect(editDrawer.getByLabel("API Key")).toHaveValue("");
+    await editDrawer.getByRole("button", { name: "测试并拉取模型" }).click();
+    await expect.poll(() => testRequests).toBe(1);
+    await editDrawer.getByRole("button", { name: /取\s*消/ }).click();
+
+    await page.getByRole("button", { name: "Mock OpenAI 操作" }).click();
+    await page.getByRole("menuitem", { name: "复制" }).click();
+    const copyDrawer = page.getByRole("dialog", { name: "新增连接" });
+    await expect(copyDrawer.getByLabel("连接名称")).toHaveValue("Mock OpenAI 副本");
+    await expect(copyDrawer.getByLabel("API Key")).toHaveValue("");
+    await copyDrawer.getByRole("button", { name: /取\s*消/ }).click();
+
+    await page.getByRole("button", { name: "Mock OpenAI 操作" }).click();
+    await page.getByRole("menuitem", { name: "删除" }).click();
+    const deleteDialog = page.getByRole("dialog", { name: "删除「Mock OpenAI」？" });
+    await expect(deleteDialog.getByText("密钥删除后无法恢复", { exact: false })).toBeVisible();
+    await deleteDialog.getByRole("button", { name: /删\s*除/ }).click();
+
+    await expect.poll(() => deleted).toBe(true);
+    await expect(page.getByText("还没有 API 渠道")).toBeVisible();
 });
 
 test("迁移预览展示风险并按确认选项提交", async ({ page }) => {

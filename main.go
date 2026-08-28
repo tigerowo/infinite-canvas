@@ -5,12 +5,16 @@ import (
 
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/handler"
+	"github.com/tigerowo/infinite-canvas/middleware"
 	"github.com/tigerowo/infinite-canvas/router"
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
 func main() {
 	if err := config.Load(); err != nil {
+		log.Fatal(err)
+	}
+	if err := middleware.ConfigureSharedRequestBudget(config.Cfg.RequestBudgetRedisURL, config.Cfg.RequestBudgetRedisPrefix); err != nil {
 		log.Fatal(err)
 	}
 	if err := service.EnsureDefaultAdmin(); err != nil {

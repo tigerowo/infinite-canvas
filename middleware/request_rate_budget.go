@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -29,6 +30,7 @@ type requestConcurrencyLimiter struct {
 }
 
 type requestBudget struct {
+	name        string
 	rate        requestRateLimiter
 	concurrent  requestConcurrencyLimiter
 	requests    int
@@ -37,16 +39,21 @@ type requestBudget struct {
 }
 
 var (
-	authRequestBudget       = newRequestBudget(20, time.Minute, 4)
-	generationRequestBudget = newRequestBudget(60, time.Minute, 4)
-	heavyRequestBudget      = newRequestBudget(30, time.Minute, 2)
-	uploadRequestBudget     = newRequestBudget(30, time.Minute, 2)
-	proxyRequestBudget      = newRequestBudget(60, time.Minute, 4)
-	downloadRequestBudget   = newRequestBudget(120, time.Minute, 4)
+	authRequestBudget       = newNamedRequestBudget("auth", 20, time.Minute, 4)
+	generationRequestBudget = newNamedRequestBudget("generation", 60, time.Minute, 4)
+	heavyRequestBudget      = newNamedRequestBudget("heavy", 30, time.Minute, 2)
+	uploadRequestBudget     = newNamedRequestBudget("upload", 30, time.Minute, 2)
+	proxyRequestBudget      = newNamedRequestBudget("proxy", 60, time.Minute, 4)
+	downloadRequestBudget   = newNamedRequestBudget("download", 120, time.Minute, 4)
 )
 
 func newRequestBudget(requests int, window time.Duration, concurrency int) *requestBudget {
+	return newNamedRequestBudget("test", requests, window, concurrency)
+}
+
+func newNamedRequestBudget(name string, requests int, window time.Duration, concurrency int) *requestBudget {
 	return &requestBudget{
+		name:        name,
 		rate:        requestRateLimiter{entries: map[string]requestRateEntry{}},
 		concurrent:  requestConcurrencyLimiter{entries: map[string]int{}},
 		requests:    requests,
@@ -80,6 +87,37 @@ func DownloadRequestBudget(c *gin.Context) {
 }
 
 func applyRequestBudget(c *gin.Context, budget *requestBudget, key string) {
+	if shared := currentSharedRequestBudget(); shared != nil {
+		allowed, retryAfter, err := shared.allow(c.Request.Context(), budget.name, key, budget.requests, budget.window)
+		if err != nil {
+			log.Printf("shared request budget unavailable: %s", service.RedactSensitiveText(err.Error()))
+			handler.FailWithStatus(c.Writer, http.StatusServiceUnavailable, "请求预算服务暂不可用，请稍后重试")
+			c.Abort()
+			return
+		}
+		if !allowed {
+			c.Header("Retry-After", strconv.Itoa(max(1, int(retryAfter.Seconds()+0.999))))
+			handler.FailWithStatus(c.Writer, http.StatusTooManyRequests, "请求过于频繁，请稍后重试")
+			c.Abort()
+			return
+		}
+		release, ok, err := shared.acquire(c.Request.Context(), budget.name, key, budget.concurrency)
+		if err != nil {
+			log.Printf("shared request concurrency budget unavailable: %s", service.RedactSensitiveText(err.Error()))
+			handler.FailWithStatus(c.Writer, http.StatusServiceUnavailable, "请求预算服务暂不可用，请稍后重试")
+			c.Abort()
+			return
+		}
+		if !ok {
+			c.Header("Retry-After", "1")
+			handler.FailWithStatus(c.Writer, http.StatusTooManyRequests, "并发请求过多，请稍后重试")
+			c.Abort()
+			return
+		}
+		defer release()
+		c.Next()
+		return
+	}
 	allowed, retryAfter := budget.rate.allow(key, time.Now(), budget.requests, budget.window)
 	if !allowed {
 		c.Header("Retry-After", strconv.Itoa(max(1, int(retryAfter.Seconds()+0.999))))

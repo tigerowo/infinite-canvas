@@ -144,7 +144,7 @@ func cancelUpstreamVideoTask(parent context.Context, task model.VideoTask, chann
 	startedAt := time.Now()
 	logContext := aiLogContext{
 		StartedAt:       startedAt,
-		Endpoint:        "/videos/" + taskID + "/cancel",
+		Endpoint:        request.URL.Path,
 		Method:          http.MethodDelete,
 		Model:           task.Model,
 		Channel:         channel,
@@ -172,14 +172,22 @@ func cancelUpstreamVideoTask(parent context.Context, task model.VideoTask, chann
 }
 
 func newUpstreamVideoCancelRequest(ctx context.Context, task model.VideoTask, channel model.ModelChannel) (*http.Request, bool, error) {
-	if service.NormalizeVideoTaskStatus(task.Status) != "queued" || !strings.EqualFold(strings.TrimSpace(channel.Protocol), "volcengine") || !isArkSeedanceVideo(channel.BaseURL, task.Model) {
+	if service.NormalizeVideoTaskStatus(task.Status) != "queued" {
 		return nil, false, nil
 	}
 	taskID := firstNonEmpty(task.UpstreamTaskID, task.UpstreamVideoID)
 	if taskID == "" {
 		return nil, false, nil
 	}
-	endpoint := "/contents/generations/tasks/" + url.PathEscape(taskID)
+	endpoint := ""
+	switch {
+	case strings.EqualFold(strings.TrimSpace(channel.Protocol), "volcengine") && isArkSeedanceVideo(channel.BaseURL, task.Model):
+		endpoint = "/contents/generations/tasks/" + url.PathEscape(taskID)
+	case isMiniMaxH3Channel(channel, task.Model):
+		endpoint = "/v2/video_generation/" + url.PathEscape(taskID)
+	default:
+		return nil, false, nil
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodDelete, service.BuildModelChannelURL(channel, endpoint), nil)
 	if err != nil {
 		return nil, true, err

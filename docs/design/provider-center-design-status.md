@@ -11,7 +11,7 @@ description: STITCH 交付核对与代码侧视觉基线
 
 参考仓库 `preparation/stitch/` 的交付清单包含桌面主稿、390px 窄屏列表、窄屏编辑表单、状态规范页、对应 HTML、设计 token 与交付说明。代码侧已完成第二轮布局和 token 对稿，并已使用登录后的真实 Provider 数据完成桌面、390px、深浅色和编辑抽屉的最终视觉复核。
 
-STITCH 桌面屏幕把“连接中心”标题应用为 48px `display-hero`，但版本 1 设计 token 明确定义页面标题为 24/32、700；代码以设计 token 为准，避免把连接中心做成独立于其他工作台的营销式 Hero。正式屏幕只提供深色版本，浅色模式按同一设计系统的浅色 token 适配，不宣称已有浅色逐像素母稿。
+STITCH 桌面屏幕把“连接中心”标题应用为 48px `display-hero`，但版本 1 设计 token 明确定义页面标题为 24/32、700；代码以设计 token 为准，避免把连接中心做成独立于其他工作台的营销式 Hero。深色正式屏幕之外，现已在同一设计系统下生成桌面、390px 列表和 390px 编辑表单的正式浅色变体；浅色稿只改变语义色映射，不改变已确认的信息架构和密度。
 
 早期 `brief-fallback` 只保留为设计形成前的历史基线，不再作为当前正式设计版本。
 
@@ -36,8 +36,13 @@ STITCH 桌面屏幕把“连接中心”标题应用为 48px `display-hero`，�
 | 390px 窄屏渠道列表 | `2f885297d0e44eb4b6ae07c66cfa7243` | `provider-center-mobile-list-v1.*` |
 | 390px 窄屏编辑表单 | `53fad7d83ec24d648a85f9d8ed358779` | `provider-center-mobile-edit-v1.*` |
 | 状态与反馈规范 | `03d5a004619741768b7e88612a614f65` | `provider-center-states-v1.*` |
+| 桌面连接中心与编辑抽屉（浅色） | `3040a5f55a3041afa0db2fa1dae099cb` | `.stitch/designs/provider-center-desktop-light-v1.*` |
+| 390px 窄屏渠道列表（浅色） | `d7dca9d1ddcc43299c0ea53acbc8bcfa` | `.stitch/designs/provider-center-mobile-list-light-v1.*` |
+| 390px 窄屏编辑表单（浅色） | `dc5b4b3cbf43428f8ef4c239521da595` | `.stitch/designs/provider-center-mobile-edit-light-v1.*` |
 | 设计 token | 不适用 | `provider-center-design-tokens-v1.json` |
 | 版本与实施说明 | 不适用 | `provider-center-delivery-v1.md` |
+
+浅色变体生成会话为 `12504138825416016201`；参考仓库同时保存 HTML、PNG 和 SHA-256 元数据，未把 STITCH HTML 迁入生产代码。
 
 ## 最终验收范围
 

@@ -54,6 +54,7 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { useGenerationConfirm } from "@/hooks/use-generation-confirm";
+import { persistInlineLogImages } from "./image-log-persistence";
 
 type GeneratedImage = {
     id: string;
@@ -768,25 +769,16 @@ export default function ImagePage() {
         });
     };
 
-    const persistLoggedOutLogImages = async (log: GenerationLog): Promise<GenerationLog> => {
-        const images = log.images || [];
-        if (!images.some((image) => !image.storageKey && image.dataUrl?.startsWith("data:image/"))) return log;
-        const persistedImages = await Promise.all(
-            images.map(async (image) => {
-                if (image.storageKey || !image.dataUrl?.startsWith("data:image/")) return image;
-                try {
-                    const stored = await uploadImage(image.dataUrl, { localOnly: true });
-                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width || image.width, height: stored.height || image.height, bytes: stored.bytes || image.bytes, mimeType: stored.mimeType || image.mimeType };
-                } catch {
-                    return image;
-                }
-            }),
-        );
-        return { ...log, images: persistedImages };
+    const persistLogImages = async (log: GenerationLog): Promise<GenerationLog> => {
+        try {
+            return { ...log, images: await persistInlineLogImages(log.images || []) };
+        } catch {
+            return log;
+        }
     };
 
     const saveLog = async (log: GenerationLog) => {
-        const persistedLog = token ? log : await persistLoggedOutLogImages(log);
+        const persistedLog = await persistLogImages(log);
         const prevChain = saveLogChainRef.current;
         const nextChain = (async () => {
             try {
@@ -2894,7 +2886,6 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
 
 
 

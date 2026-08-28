@@ -9,7 +9,7 @@ description: 运行时调用链、任务安全预算、Mock 与真实 API 验证
 
 第四阶段的非计费可靠性工作已经完成。开始时目标分支为 `codex/provider-center-mac`，HEAD 为 `809f7116cc472f18aa507e0856a32bf6f7ec7eb5`，工作区干净，阶段三 Git bundle `/Users/danchen/infinite-canvas-provider-stage3-pre-api-809f711.bundle` 存在。
 
-阶段开始时本机没有已配置 Provider、旧 `localChannels` 或 provider 类环境变量。后续用户在连接中心安全配置 RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 渠道后，RunningHub 完成一次账户检测和一次真实工作流任务，`gpt-image-2` 与 OpenOx 的 Gemini 图片兼容模型分别完成一次最低成本生图，Gemini 原生与通用 HTTP 分别完成最低成本文本生成。每个真实请求均只提交一次，没有自动重试；需要更换模型或提高输出预算时均再次取得用户明确确认。没有读取未知钥匙串项，也没有在终端、浏览器、报告或 Git 中输出密钥。全量自动化验收提交为 `dd34c95`；其后的 STITCH 最终视觉收敛使用登录后的真实 Provider 数据完成桌面、390px、深浅色与编辑抽屉人工复核，并在收尾工作树上再次通过 Go、Vitest、Playwright、typecheck、lint 和生产 build。
+阶段开始时本机没有已配置 Provider 或 provider 类环境变量。后续用户在连接中心安全配置 RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 渠道后，RunningHub 完成一次账户检测和一次真实工作流任务，`gpt-image-2` 与 OpenOx 的 Gemini 图片兼容模型分别完成一次最低成本生图，Gemini 原生与通用 HTTP 分别完成最低成本文本生成。每个真实请求均只提交一次，没有自动重试；需要更换模型或提高输出预算时均再次取得用户明确确认。没有读取未知钥匙串项，也没有在终端、浏览器、报告或 Git 中输出密钥。全量自动化验收提交为 `dd34c95`；其后的 STITCH 最终视觉收敛使用登录后的真实 Provider 数据完成桌面、390px、深浅色与编辑抽屉人工复核。外部条件收尾又补充了正式浅色 STITCH 变体、内联图片本地持久化、MiniMax H3 排队任务取消、可选 Redis 共享预算和第三批浏览器 Mock 回归，并重新通过六项全量验收。
 
 ## 本地环境与启动
 
@@ -57,7 +57,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 | 提示词库 | 通过 | `/prompts` 正常渲染现有提示词和筛选入口。 |
 | 素材库 | 通过 | `/assets` 正常渲染类型筛选、导入、导出和新增入口。 |
 | 连接中心 | 通过 | 管理员登录后完成 RunningHub 与 OpenAI 兼容 Provider 配置；云端模型列表可选择并保存连接中心的 `gpt-image-2`，DTO 仅显示密钥已保存状态，不返回明文。 |
-| STITCH 最终视觉复核 | 通过 | 桌面表格实测数据行 75px，长模型名单行截断；390px 使用 16px 留白与卡片间距、12px 圆角、180px 模型值截断和底部状态区；桌面抽屉 440px、窄屏全宽，页面无横向溢出。深色按正式母稿核对，浅色按同一设计 token 核对。 |
+| STITCH 最终视觉复核 | 通过 | 桌面表格实测数据行 75px，长模型名单行截断；390px 使用 16px 留白与卡片间距、12px 圆角、180px 模型值截断和底部状态区；桌面抽屉 440px、窄屏全宽，页面无横向溢出。深色按正式母稿核对，浅色已补齐同一设计系统下的桌面、列表与编辑正式变体。 |
 | 活动任务 | 通过 | 视频和画布图片活动任务均为 0，新增取消路由随 Go 服务正常注册。 |
 | 生成前确认 | 自动化通过 | 前端测试确认摘要只包含渠道、模型、任务类型和协议，不包含密钥；云端模式的连接中心用户渠道也显示真实渠道名称。 |
 
@@ -84,7 +84,7 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 
 删除活动视频或图片任务时也会先传播本地取消。同步画布图片和音频任务使用 5 分钟总体 deadline；持久化视频任务继续使用自创建起 30 分钟、360 次轮询、32 MiB 累计读取和单次 1 MiB 限制。画布任务的代理响应在写入内存 recorder 时即限制为 32 MiB，不再先缓存完整上游响应。
 
-单用户活动生成任务上限继续为 8 个，创建中的预留槽位也计入；HTTP 入口还受每用户每分钟 60 次、并发 4 的请求预算。
+单用户活动生成任务上限继续为 8 个，创建中的预留槽位也计入；HTTP 入口还受每用户每分钟 60 次、并发 4 的请求预算。默认使用单进程计数；配置 `REQUEST_BUDGET_REDIS_URL` 后，固定窗口与并发租约由 Redis 跨实例共享，主体标识先做 SHA-256 摘要，Redis 启动或运行故障会安全失败而不静默降级。
 
 ## 错误映射与脱敏
 
@@ -106,11 +106,11 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 | 命令 | 结果 |
 | --- | --- |
 | `go test ./...` | 通过；`config`、`handler`、`middleware`、`router`、`service` 及 CLI helper/签名清单契约均通过。Mac 测试夹具显式使用 `0700` 私钥目录和短 Unix Socket 路径，异步模型探测等待窗口调整为 5 秒；生产权限、签名和任务 deadline 未放宽。 |
-| `bun run test` | 通过；8 个测试文件、27 个测试全部通过，其中连接中心组件状态测试 5 个用例通过。 |
-| `playwright test` | 通过；7 个 Chromium Mock 浏览器用例全部通过，总耗时 1.3 分钟。收尾复跑发现 390px 用例仍尝试点击已折叠的桌面导航，修正为先打开窄屏导航菜单后再次全量通过。 |
-| `bun run typecheck` | 通过；统一渠道请求头返回类型收敛为 `Record<string, string>`，修复 `fetch` 的 `HeadersInit` 类型阻断。 |
-| `bun run lint` | 通过；0 error、117 个既有 warning，未做无关历史清理。 |
-| `bun run build` | 通过；Next.js 16.2.9 Turbopack 编译、TypeScript、20 个静态页面生成及路由优化全部完成。 |
+| `vitest run` | 通过；9 个测试文件、29 个测试全部通过，其中连接中心组件状态测试 5 个用例、生图内联结果持久化测试 2 个用例通过。 |
+| `playwright test` | 通过；8 个 Chromium Mock 浏览器用例全部通过，总耗时 1.3 分钟；新增编辑、模型拉取、复制不继承密钥和删除确认。 |
+| `tsc --noEmit` | 通过；统一渠道请求头返回类型收敛为 `Record<string, string>`，修复 `fetch` 的 `HeadersInit` 类型阻断。 |
+| `eslint .` | 通过；0 error、117 个既有 warning，未做无关历史清理。 |
+| `next build` | 通过；首次因隔离运行时未把 Node 加入子进程 PATH 而失败，补入同一受控 Node 目录后 Next.js 16.2.9 Turbopack 编译、TypeScript、20 个静态页面生成及路由优化全部完成。 |
 
 覆盖范围包括六态归一、取消与陈旧轮询竞态、连接/总体超时、请求和响应读取限制、并发上限、401/403/429/5xx、异常 JSON、日志脱敏、SSRF IP 分类、跨来源重定向、Header 注入和旧配置迁移演练。
 
@@ -143,29 +143,30 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 
 ## Git 收尾检查
 
-- `git diff --check` 通过；提交候选只包含连接中心前端、Playwright 用例和阶段文档。
+- `git diff --check` 通过；提交候选包含 MiniMax H3 取消、Redis 共享请求预算、生图内联结果持久化、Playwright 回归及对应配置和阶段文档，不包含无关业务改动。
 - Git 跟踪的环境变量文件只有无密钥模板 `.env.example`；本地 `.env`、SQLite `data/infinite-canvas.db`、AI 调用日志和 `web/test-results/` 均由 `.gitignore` 排除。
 - 没有 Git 跟踪的 SQLite、用户素材、Playwright 报告、测试截图、trace 或本地日志；常见 OpenAI、Gemini、GitHub、AWS 和私钥格式的跟踪文件扫描结果为 0。
 - 第四阶段收尾 bundle 输出到仓库外的 `/Users/danchen/infinite-canvas-provider-phase4-final.bundle`，不包含工作区未跟踪或被忽略的本地数据。
 
 ## 旧配置回退
 
-前端 `use-config-store` 测试继续覆盖 Provider 托管目录优先、禁用或缺失时回退旧 `localChannels`；后端迁移 HTTP 演练继续覆盖脱敏预览、导入、清理和再次预览。当前用户数据库没有旧渠道，因此本轮没有写入、清理或迁移真实用户配置。
+前端 `use-config-store` 测试继续覆盖 Provider 托管目录优先、禁用或缺失时回退旧 `localChannels`；后端迁移 HTTP 演练继续覆盖脱敏预览、导入、清理和再次预览。外部条件收尾前已把 SQLite 一致性备份到仓库外的 `/Users/danchen/infinite-canvas-phase4-before-legacy-migration-20260827-213153.db`，完整性检查通过，并对当前账号执行脱敏迁移预览：一个旧渠道已由托管 Provider 覆盖，剩余候选因 Base URL 无效不可导入，且仍包含旧明文凭据。没有猜测修正地址、没有执行迁移、没有清理明文密钥，也没有改写数据库；需要用户先在本地修正候选 Base URL 后再演练真实迁移。
 
 ## 已知限制与下一步
 
 - RunningHub、OpenAI 兼容、Gemini 原生与通用 HTTP 的本阶段最小真实验证均已完成。后续新增凭据仍应写入被 Git 忽略的本地配置或系统钥匙串，不应粘贴到对话中。
 - 生图工作台结果区已优化成功、生成中和失败状态层级，结果图片改为完整比例展示；连接中心增加连接数量、已连接数量和请求防护状态概览。该视觉调整不改变生成协议或数据结构。
-- 连接中心正式 STITCH 设计已形成 `provider-center-v1`：包含桌面连接列表与编辑抽屉、390px 渠道列表、390px 编辑表单、状态与反馈规范、HTML 导出、设计 token 和交付说明。代码侧已完成最终视觉与交互对稿；STITCH HTML 仅作视觉参考，没有直接迁入生产代码。正式母稿只提供深色版本，浅色模式按同一设计系统 token 复核，不宣称具备浅色逐像素母稿。
-- OpenOx 本次返回的是临时 Data URL，完成时可以显示，但未主动同步到云端或素材库的结果不会随账号历史长期保存；刷新后历史卡片会保留成功记录并明确提示“临时结果未同步”，不再误报为生成失败。
+- 连接中心正式 STITCH 设计已形成 `provider-center-v1`：包含深浅色桌面连接列表与编辑抽屉、深浅色 390px 渠道列表和编辑表单、状态与反馈规范、HTML 导出、设计 token 和交付说明。新增浅色变体使用同一设计系统和生成会话 `12504138825416016201`，屏幕 ID、PNG、HTML 与 SHA-256 元数据已归档；STITCH HTML 仅作视觉参考，没有直接迁入生产代码。
+- OpenOx 返回的内联 Data URL 会在写入日志前转存到浏览器 localforage，同一浏览器刷新后可按 `storageKey` 恢复，账号历史不再写入长 Base64。该本地副本不等于云端素材；跨设备或清理浏览器数据后仍需依赖对象存储或素材库。
 - Gemini 原生连接已完成一次连接测试和模型拉取；测试后模型目录会立即同步回编辑表单，避免抽屉内下拉仍显示空列表。本轮未因此重复请求上游。
 - 编辑 Gemini 原生连接并保存新的默认模型曾把刚通过的连接状态重置为 `untested`；更新逻辑已改为仅在协议、Base URL、密钥或请求头变化时清除测试状态。修复前已被重置的本地状态不会伪造恢复，报告仍按实际调用记录连接和模型拉取已通过，本轮没有为了恢复 UI 标签重复测试。
 - Gemini 原生模型目录仍包含已不再向新用户开放的 `gemini-2.5-flash-lite`；模型拉取成功不等于当前账号拥有生成权限。真实请求应优先使用已验证的 `gemini-3.5-flash-lite`，并保留上游模型不可用错误的明确提示。
 - 通用 HTTP 的 `gemini-3.5-flash` 在极低 8-token 预算下可能只消耗内部处理预算并以 `length` 结束；128 tokens 已验证能返回短文本。OpenOx 曾有一次连接 `EOF`，由用户确认后的独立请求成功，不应在代码中增加隐式自动重试。
-- 通用视频上游没有统一取消协议。后续已为火山方舟 Seedance 排队任务和 RunningHub ComfyUI 任务接入各自官方取消端点；Gemini Veo、MiniMax、KIE、APIMart、OpenAI/grok2api、CogVideoX/Agnes 和通用 HTTP 尚无可确认的运行中取消契约，取消仍只能停止本地轮询和当前网络读取，已提交的异步上游任务可能继续运行。
+- 通用视频上游没有统一取消协议。现已为火山方舟 Seedance、MiniMax H3 排队任务和 RunningHub ComfyUI 任务接入各自官方取消端点；Gemini Veo、KIE、APIMart、OpenAI/grok2api、CogVideoX/Agnes、其他 MiniMax 协议和通用 HTTP 尚无可确认的运行中取消契约，取消仍只能停止本地轮询和当前网络读取，已提交的异步上游任务可能继续运行。
 - 画布图片、视频和音频运行节点，以及生图台、视频台运行任务卡已提供独立“取消任务”按钮；取消后保留记录并明确显示“已取消”，删除任务/记录仍沿用先取消再删除的既有行为。
 - 生成前确认框已经接入画布、生图台、视频台及重试入口；正式有渠道后需人工确认渠道名称、模型和任务类型与实际请求一致。
-- 连接中心 Playwright 浏览器 Mock 回归已覆盖登录会话持久化、加载转空、错误重试、禁用与不可用、停用确认、响应式断点、API 抽屉必填校验与协议切换、模型保存、旧配置迁移风险与确认参数，以及连接中心模型进入生图台和视频台的跨页面链路；完整 7 个用例已在独占 Next 测试服务下全部通过。全部流程均拦截 API，不点击生成、不调用真实渠道、不修改数据库；迁移提示已改用 Ant Design 6 的 `Alert.title`，复跑不再出现该废弃警告。
+- 连接中心 Playwright 浏览器 Mock 回归已覆盖登录会话持久化、加载转空、错误重试、禁用与不可用、停用确认、响应式断点、API 抽屉必填校验与协议切换、模型保存、旧配置迁移风险与确认参数、编辑、模型拉取、复制、删除，以及连接中心模型进入生图台和视频台的跨页面链路；完整 8 个用例已在独占 Next 测试服务下全部通过。全部流程均拦截 API，不点击生成、不调用真实渠道、不修改数据库；迁移提示已改用 Ant Design 6 的 `Alert.title`，复跑不再出现该废弃警告。
+- 多实例共享预算实现与跨实例 Mock 契约已完成，但本机没有配置真实 Redis，也没有启动两个后端实例做生产拓扑演练；正式部署前仍需提供受控 Redis、隔离前缀和可观测性并执行运行时验收。
 - 生图台浮动工作流按钮已统一服务端与浏览器首次渲染坐标，并在客户端恢复保存位置后再显示，避免原有位置差异触发 hydration warning 或首屏闪跳。
 - 不开始 Tauri，不修改线上部署。阶段分支已在用户授权后推送到个人 fork；本报告收尾不执行线上部署。
 - Mac CLI helper 的版本探测已移入独立 Unix Socket 伴随进程，并增加逐次 HMAC/nonce 防重放授权、签名响应、Ed25519 清单、过期时间和二进制 SHA-256 强校验。Codex 支持独立只读登录状态、用户二次确认后的固定浏览器 OAuth，以及逐次确认的固定最小模型调用；调用使用只读沙箱、临时目录、2 分钟 deadline、4 KiB 脱敏最终输出、单任务并发与独立取消，不接受自定义模型、提示词、参数或工作目录，也不自动重试。本机签名清单、CLI 版本检测、登录状态与最小调用确认窗已完成 UI 人工回归；伴随进程未启动、Socket 不可访问和篡改签名清单也均安全失败，恢复后检测重新成功。Next 代理同时修正为转发浏览器原始 Host，避免把 `0.0.0.0` 监听地址误判为非回环。仓库现已提供离线 Ed25519 清单工具、Developer ID universal 发布脚本、Team ID 校验安装器、LaunchAgent、共享密钥文件和显式卸载器；相关 Go 与前端契约测试已通过。本轮没有 Apple 签名身份，因此没有生成或安装正式发布包，也没有实际触发登录或模型调用。Gemini/即梦没有稳定非交互状态契约，因此不猜测执行。
@@ -177,11 +178,19 @@ Go 后端监听 `http://127.0.0.1:8080`，Next.js 监听 `http://127.0.0.1:3000`
 | 火山方舟 Ark Seedance | 官方提供 `DELETE /contents/generations/tasks/{id}`；排队任务可取消，完成任务调用同一路径属于删除语义 | 仅本地最后状态为 `queued` 时传播；单次请求限制 64 KiB / 10 秒，远端失败仍保留本地取消 |
 | RunningHub App / Workflow | 官方提供 `POST /task/openapi/cancel`，请求包含 `apiKey` 与 `taskId` | Provider API 新增独立取消入口；单次请求限制 512 KiB / 20 秒 |
 | Gemini Veo | 官方视频文档仅确认长任务查询，未确认视频任务取消方法 | 只停止本地轮询与当前网络读取 |
-| MiniMax 视频 | 官方 API 概览仅确认创建、查询与文件获取，未确认取消方法 | 只停止本地轮询与当前网络读取 |
+| MiniMax H3 | 官方 v2 H3 接口提供 `DELETE /v2/video_generation/{task_id}`，且只允许取消排队任务 | 仅本地最后状态为 `queued` 时传播；运行中任务不调用删除端点 |
+| 其他 MiniMax 视频协议 | 当前没有可安全绑定到现有 adapter 的正式取消契约 | 只停止本地轮询与当前网络读取 |
 | KIE / APIMart | 官方任务文档确认创建与状态查询，未确认运行中取消方法 | 只停止本地轮询与当前网络读取 |
 | OpenAI Videos / grok2api | OpenAI 的删除接口面向已完成或失败的视频资源，不作为运行中取消使用 | 不猜测调用删除端点；只停止本地轮询与当前网络读取 |
 | CogVideoX / Agnes / 通用 HTTP | 当前没有可确认且能安全绑定到现有 adapter 的正式取消契约 | 只停止本地轮询与当前网络读取 |
 
 审计依据为供应商正式文档和官方客户端所公开的协议；后续只有取得明确的运行中取消契约后才扩展 adapter，避免把资源删除、批处理取消或其他产品线接口误用为视频任务取消。
 
-主要依据：火山方舟 [API 文档中心](https://api.volcengine.com/api-docs/?serviceCode=ark&version=2024-01-01) 与官方 [Ark CLI 生成任务参考](https://github.com/volcengine/ark-cli/blob/main/skills/arkcli-gen/references/gen-meta.md)、RunningHub [取消任务文档](https://www.runninghub.cn/runninghub-api-doc-cn/api-425749015)、Gemini [Veo 视频文档](https://ai.google.dev/gemini-api/docs/video)、MiniMax [视频 API 概览](https://platform.minimaxi.com/docs/api-reference/api-overview)、KIE [任务查询文档](https://docs.kie.ai/market/common/get-task-detail)、APIMart [任务状态文档](https://docs.apimart.ai/cn/api-reference/tasks/status) 和 OpenAI [Videos API 参考](https://developers.openai.com/api/reference/cli/resources/videos)。
+主要依据：火山方舟 [API 文档中心](https://api.volcengine.com/api-docs/?serviceCode=ark&version=2024-01-01) 与官方 [Ark CLI 生成任务参考](https://github.com/volcengine/ark-cli/blob/main/skills/arkcli-gen/references/gen-meta.md)、RunningHub [取消任务文档](https://www.runninghub.cn/runninghub-api-doc-cn/api-425749015)、Gemini [Veo 视频文档](https://ai.google.dev/gemini-api/docs/video)、MiniMax [H3 取消任务文档](https://platform.minimax.io/docs/api-reference/video-generation-v2-delete)、KIE [任务查询文档](https://docs.kie.ai/market/common/get-task-detail)、APIMart [任务状态文档](https://docs.apimart.ai/cn/api-reference/tasks/status) 和 OpenAI [Videos API 参考](https://developers.openai.com/api/reference/cli/resources/videos)。
+
+### 仍需外部条件
+
+- Apple 签名与公证：本机钥匙串检查结果为 0 个有效代码签名身份，因此不能生成可验证的 Developer ID 发布包，也不能完成 Gatekeeper、公证和真实安装验收；需要 Apple Developer Team、Developer ID Application 证书和公证凭据。
+- 真实旧配置迁移：剩余候选的 Base URL 无效，必须由配置所有者在本地确认正确地址后重新预览；在成功导入前不清理明文密钥。
+- 真实 Redis 多实例演练：共享预算代码和 Mock 跨实例契约已通过，但需要受控 Redis 与至少两个后端实例才能确认生产拓扑下的限流、故障恢复和监控告警。
+- 线上部署、推送部署动作与 Tauri 桌面化不属于第四阶段；本阶段只整理分支、提交和仓库外 Git bundle。
