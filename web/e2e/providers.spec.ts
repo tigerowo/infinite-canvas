@@ -412,3 +412,37 @@ test("连接中心模型进入生图台和视频台选择器", async ({ page }) 
     await videoPicker.click();
     await expect(page.getByRole("option", { name: /mock-video.*Mock 创作渠道/ })).toBeVisible();
 });
+
+test("连接中心图片模型进入无限画布配置节点选择器", async ({ page }) => {
+    test.setTimeout(60_000);
+    const canvasProvider = {
+        ...connectedProvider,
+        id: "mock-canvas",
+        name: "Mock 画布渠道",
+        capabilities: ["image"],
+        models: ["mock-canvas-image"],
+        defaultModel: "mock-canvas-image",
+    };
+    await seedSession(page);
+    await installApiMocks(page, (route) => respond(route, [canvasProvider]), {
+        userConfig: (route) => respond(route, { modelConfig: { channelMode: "remote" }, syncCapabilities: { userData: false, workflows: false, assets: false } }),
+    });
+
+    await page.goto("/canvas");
+    await expect(page.getByRole("heading", { name: "无限画布" })).toBeVisible({ timeout: 15_000 });
+    await page.getByRole("button", { name: "新建画布" }).last().click();
+    const enteredDirectly = await Promise.race([
+        page.waitForURL(/\/canvas\/[^/]+$/, { timeout: 30_000 }).then(() => true).catch(() => false),
+        page.getByRole("button", { name: /无限画布 1.*0 个节点/ }).waitFor({ state: "visible" }).then(() => false),
+    ]);
+    if (!enteredDirectly) {
+        await page.getByRole("button", { name: /无限画布 1.*0 个节点/ }).click();
+        await expect(page).toHaveURL(/\/canvas\/[^/]+$/, { timeout: 30_000 });
+    }
+    await page.getByRole("button", { name: "生成配置" }).click();
+
+    const canvasPicker = page.locator('[data-slot="select-trigger"]').filter({ hasText: "mock-canvas-image" }).first();
+    await expect(canvasPicker).toBeVisible({ timeout: 15_000 });
+    await canvasPicker.click();
+    await expect(page.getByRole("option", { name: /mock-canvas-image.*Mock 画布渠道/ })).toBeVisible();
+});
