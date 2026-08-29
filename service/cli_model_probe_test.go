@@ -192,7 +192,7 @@ func TestExecuteAntigravityCompletionUsesFixedHeadlessArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"--print", "只回复 OK", "--output-format", "json", "--model", "gemini-3.5-flash-low", "--effort", "low", "--print-timeout", "90s", "--disable-slash-commands", "--mode", "plan", "--sandbox"}
-	if strings.Join(strings.Fields(string(args)), "|") != strings.Join(want, "|") {
+	if string(args) != strings.Join(want, "\n")+"\n" {
 		t.Fatalf("args=%q", args)
 	}
 }
