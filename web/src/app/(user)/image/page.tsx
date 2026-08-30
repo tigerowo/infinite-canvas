@@ -118,7 +118,11 @@ type GenerationLog = {
     lastPolledAt?: number;
 };
 
-type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
+type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli"> & {
+    channelId?: string;
+    channelName?: string;
+    channelProtocol?: string;
+};
 type RequestSnapshot = { text: string; requestConfig: AiConfig; displayConfig: GenerationLogConfig; references: ReferenceImage[] };
 type GenerationCategory = { id: string; name: string; createdAt: number };
 type ResultViewMode = "all" | "category";
@@ -130,6 +134,8 @@ const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
+const SUBSCRIPTION_IMAGE_PREFLIGHT_MS = 15 * 1000;
+const SUBSCRIPTION_IMAGE_TIMEOUT_MS = 3 * 60 * 1000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
@@ -188,7 +194,8 @@ export default function ImagePage() {
     };
 
     const pollPendingLogsOnce = (sourceLogs: GenerationLog[]) => {
-        const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.images.length && !pollingLogIdsRef.current.has(log.id));
+        const checkedAt = Date.now();
+        const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.images.length && (isExpiredSubscriptionImageLog(log, checkedAt) || !pollingLogIdsRef.current.has(log.id)));
         if (!pendingLogs.length) return;
         void pollImageTaskLogsOnce(pendingLogs);
     };
@@ -852,14 +859,27 @@ export default function ImagePage() {
     };
 
     const pollImageTaskLogsOnce = async (pendingLogs: GenerationLog[]) => {
-        const ids = pendingLogs.map(imageLogTaskId).filter(Boolean);
+        const polledAt = Date.now();
+        const expiredLogs = pendingLogs.filter((log) => isExpiredSubscriptionImageLog(log, polledAt));
+        expiredLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
+        await Promise.all(
+            expiredLogs.map(async (log) => {
+                const message = "订阅生图调用超时（3分钟）";
+                const task: CanvasImageTask = { ...log.task!, status: "timed_out", error: { message }, error_detail: message };
+                const nextLog = imageLogFromTask(log, task);
+                await saveLog(nextLog);
+                setResults((value) => updateResultByLogId(value, log.id, { status: "failed", task, error: message, errorDetail: message, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
+            }),
+        );
+        const activeLogs = pendingLogs.filter((log) => !expiredLogs.includes(log));
+        const ids = activeLogs.map(imageLogTaskId).filter(Boolean);
         if (!ids.length) return;
-        pendingLogs.forEach((log) => pollingLogIdsRef.current.add(log.id));
+        activeLogs.forEach((log) => pollingLogIdsRef.current.add(log.id));
         try {
             const tasks = await batchCanvasImageTaskStatus(imageTaskConfig(), ids);
             const taskById = new Map(tasks.map((task) => [task.id, task]));
             await Promise.all(
-                pendingLogs.map(async (log) => {
+                activeLogs.map(async (log) => {
                     const task = taskById.get(imageLogTaskId(log));
                     if (!task) {
                         const nextLog = { ...log, status: "失败" as const, durationMs: Date.now() - log.createdAt, failCount: 1, errors: ["图片任务不存在或未创建成功"], errorDetails: ["后端没有找到对应的图片任务"], lastPolledAt: Date.now() };
@@ -884,7 +904,7 @@ export default function ImagePage() {
                 }),
             );
         } finally {
-            pendingLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
+            activeLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
         }
     };
 
@@ -1949,6 +1969,14 @@ function ResultImageCard({
 }
 
 function PendingImageCard({ result, now, cancelling, cancelDisabled, onCancel, onCopyPrompt }: { result: GenerationResult; now: number; cancelling: boolean; cancelDisabled: boolean; onCancel: () => void; onCopyPrompt: (text: string) => void | Promise<void> }) {
+    const elapsedMs = Math.max(0, now - result.createdAt);
+    const subscriptionTask = result.config.channelProtocol === "gpt-image-2" || result.config.channelProtocol === "codex-image-emergency";
+    const checkingSubscriptionEndpoint = subscriptionTask && elapsedMs < SUBSCRIPTION_IMAGE_PREFLIGHT_MS;
+    const stageIndex = checkingSubscriptionEndpoint || !result.task || result.task.status === "queued" ? 0 : result.task.status === "completed" ? 2 : 1;
+    const stageLabels = ["准备", "生成", "保存", "完成"];
+    const timeoutBudgetPercent = Math.min(100, (elapsedMs / SUBSCRIPTION_IMAGE_TIMEOUT_MS) * 100);
+    const exceededTimeoutBudget = subscriptionTask && elapsedMs >= SUBSCRIPTION_IMAGE_TIMEOUT_MS;
+
     return (
         <div className="overflow-hidden rounded-xl border border-dashed border-sky-300 bg-sky-50/40 dark:border-sky-900 dark:bg-sky-950/10">
             <div className="relative aspect-[4/3]">
@@ -1959,13 +1987,37 @@ function PendingImageCard({ result, now, cancelling, cancelDisabled, onCancel, o
                         backgroundSize: "16px 16px",
                     }}
                 />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
-                    <LoaderCircle className="size-6 animate-spin text-sky-500" />
-                    <span className="font-medium text-stone-700 dark:text-stone-200">请求处理中</span>
-                    <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(Math.max(0, now - result.createdAt))}</span>
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-5 text-sm text-stone-500 dark:text-stone-400">
+                    {exceededTimeoutBudget ? <AlertCircle className="size-6 text-red-500" /> : <LoaderCircle className="size-6 animate-spin text-sky-500" />}
+                    <span className={exceededTimeoutBudget ? "font-medium text-red-600 dark:text-red-400" : "font-medium text-stone-700 dark:text-stone-200"}>
+                        {exceededTimeoutBudget ? "已超过3分钟超时上限" : checkingSubscriptionEndpoint ? "正在检查订阅端点" : subscriptionTask ? stageIndex === 0 ? "正在准备订阅请求" : stageIndex === 2 ? "正在保存生成结果" : "等待订阅服务生成" : "请求处理中"}
+                    </span>
+                    {subscriptionTask ? (
+                        <div className={`mt-1 w-full max-w-64 rounded-xl border bg-white/85 p-3 shadow-sm backdrop-blur dark:bg-stone-950/80 ${exceededTimeoutBudget ? "border-red-200 dark:border-red-950" : "border-sky-200/80 dark:border-sky-900"}`}>
+                            <div className="flex items-center justify-between text-[11px] text-stone-500 dark:text-stone-400">
+                                <span>超时预算</span>
+                                <span className="font-medium tabular-nums text-stone-700 dark:text-stone-200">{formatDuration(elapsedMs)} / 3分</span>
+                            </div>
+                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800" role="progressbar" aria-label="订阅生图超时预算已使用" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(timeoutBudgetPercent)}>
+                                <div className={`h-full rounded-full transition-[width] duration-1000 ${exceededTimeoutBudget ? "bg-red-500" : "bg-sky-500"}`} style={{ width: `${timeoutBudgetPercent}%` }} />
+                            </div>
+                            <div className="mt-2 grid grid-cols-4 gap-1 text-center text-[10px]">
+                                {stageLabels.map((label, index) => (
+                                    <span key={label} className={index === stageIndex ? "font-medium text-sky-600 dark:text-sky-400" : index < stageIndex ? "text-stone-600 dark:text-stone-300" : "text-stone-400 dark:text-stone-600"}>
+                                        {label}
+                                    </span>
+                                ))}
+                            </div>
+                            <div className={`mt-2 text-center text-[10px] ${exceededTimeoutBudget ? "text-red-500 dark:text-red-400" : "text-stone-400 dark:text-stone-500"}`}>
+                                {exceededTimeoutBudget ? "请取消任务后再重试" : checkingSubscriptionEndpoint ? "预检通过后才会发起生图" : "上游未返回实时百分比"}
+                            </div>
+                        </div>
+                    ) : (
+                        <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(elapsedMs)}</span>
+                    )}
                 </div>
             </div>
-            <TaskInfo result={{ ...result, durationMs: Math.max(0, now - result.createdAt) }} onCopyPrompt={onCopyPrompt} />
+            <TaskInfo result={{ ...result, durationMs: elapsedMs }} onCopyPrompt={onCopyPrompt} />
             <div className="flex justify-end border-t border-sky-200 px-3 py-2 dark:border-sky-950">
                 <Button size="small" type="text" danger icon={<CircleStop className="size-3.5" />} loading={cancelling} disabled={cancelDisabled} onClick={onCancel}>
                     {cancelDisabled ? "等待任务创建" : "取消任务"}
@@ -2007,6 +2059,7 @@ function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: Gen
 
 function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; error?: string; onCopyPrompt: (text: string) => void | Promise<void> }) {
     const [expanded, setExpanded] = useState(false);
+    const channel = useGenerationChannelMeta(result.config, result.task);
 
     return (
         <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 text-xs text-stone-500 dark:border-stone-800 dark:text-stone-400">
@@ -2022,6 +2075,8 @@ function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; e
                 </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
+                <Tag className="m-0" color="cyan">渠道 · {channel.name}</Tag>
+                {channel.routeLabel ? <Tag className="m-0">路径 · {channel.routeLabel}</Tag> : null}
                 {result.workflowName ? (
                     <Tag className="m-0" color="cyan">
                         工作流 {result.workflowName}
@@ -2087,6 +2142,7 @@ function HistoryLogCard({
     const [detailOpen, setDetailOpen] = useState(false);
     const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
+    const channel = useGenerationChannelMeta(log.config, log.task);
     const missingTemporaryImage = log.status === "成功" && log.imageCount > 0 && !firstImage && !log.errors.length;
     const createCategory = async () => {
         const category = await onCreateCategory(categoryName);
@@ -2167,6 +2223,8 @@ function HistoryLogCard({
                             工作流 {log.workflowName}
                         </Tag>
                     ) : null}
+                    <Tag className="m-0 text-[10px]" color="cyan">渠道 · {channel.name}</Tag>
+                    {channel.routeLabel ? <Tag className="m-0 text-[10px]">路径 · {channel.routeLabel}</Tag> : null}
                     <Tag className="m-0 text-[10px]">{formatLogTime(log.createdAt)}</Tag>
                     <Tag className="m-0 text-[10px]">{log.model}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.apiMode === "chat" ? "Chat" : log.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
@@ -2443,6 +2501,12 @@ function createResultFromImageLog(log: GenerationLog, status: GenerationResult["
 
 function imageLogTaskId(log: GenerationLog) {
     return log.task?.id || "";
+}
+
+function isExpiredSubscriptionImageLog(log: GenerationLog, now: number) {
+    const protocol = log.config.channelProtocol || "";
+    const subscriptionTask = protocol === "gpt-image-2" || protocol === "codex-image-emergency" || log.task?.id.startsWith("subscription-image:");
+    return Boolean(subscriptionTask && log.status === "生成中" && now - log.createdAt >= SUBSCRIPTION_IMAGE_TIMEOUT_MS);
 }
 
 function isRecoverableImageTask(task: CanvasImageTask) {
@@ -2747,6 +2811,9 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
         imageModel: log.config?.imageModel || log.model || "",
         activeChannelId: taskChannelId || log.config?.activeChannelId || log.config?.imageChannelId || "",
         imageChannelId: taskChannelId || log.config?.imageChannelId || log.config?.activeChannelId || "",
+        channelId: taskChannelId || log.config?.channelId || log.config?.imageChannelId || log.config?.activeChannelId || "",
+        channelName: log.task?.channelName || log.config?.channelName || "",
+        channelProtocol: log.config?.channelProtocol || "",
         quality: log.config?.quality || log.quality || "",
         size: log.config?.size || log.size || "",
         count: log.config?.count || String(log.imageCount || log.successCount || 1),
@@ -2772,12 +2839,19 @@ function resolveImageChannelId(config: AiConfig, model: string, ...preferredIds:
 }
 
 function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
+    const model = config.imageModel || config.model;
+    const channelId = config.imageChannelId || config.activeChannelId;
+    const channels = modelChannelsForConfig(config);
+    const channel = channels.find((item) => item.id === channelId && item.models.includes(model)) || channels.find((item) => item.id === channelId) || channels.find((item) => item.models.includes(model));
     return {
         channelMode: config.channelMode,
         model: config.model,
         imageModel: config.imageModel,
         activeChannelId: config.imageChannelId || config.activeChannelId,
         imageChannelId: config.imageChannelId,
+        channelId: channel?.id || channelId,
+        channelName: channel?.name || "",
+        channelProtocol: channel?.protocol || "",
         quality: config.quality,
         size: config.size,
         count: config.count,
@@ -2786,6 +2860,17 @@ function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
         streamPartialImages: config.streamPartialImages,
         responseFormatB64Json: config.responseFormatB64Json,
         codexCli: config.codexCli,
+    };
+}
+
+function useGenerationChannelMeta(config: GenerationLogConfig, task?: CanvasImageTask) {
+    const effectiveConfig = useEffectiveConfig();
+    const channelId = imageTaskChannelId(task) || config.channelId?.trim() || config.imageChannelId?.trim() || config.activeChannelId?.trim() || "";
+    const channel = modelChannelsForConfig(effectiveConfig).find((item) => item.id === channelId);
+    const protocol = config.channelProtocol || channel?.protocol || "";
+    return {
+        name: task?.channelName?.trim() || config.channelName?.trim() || channel?.name?.trim() || channelId || "未记录",
+        routeLabel: protocol === "gpt-image-2" ? "订阅登录态 · 无 API 回退" : protocol === "codex-image-emergency" ? "Codex 应急额度" : "",
     };
 }
 
@@ -2886,10 +2971,3 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
-
-
-
-
-
-

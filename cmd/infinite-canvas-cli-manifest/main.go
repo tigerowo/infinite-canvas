@@ -23,9 +23,11 @@ import (
 const executableLimit = int64(256 * 1024 * 1024)
 
 var allowedCandidates = map[string]map[string]bool{
-	"codex":      {"codex": true},
-	"gemini-cli": {"agy": true},
-	"jimeng":     {"dreamina": true},
+	"codex":                 {"codex": true},
+	"codex-image-emergency": {"codex": true},
+	"gpt-image-2":           {"gpt-image-2-skill": true},
+	"gemini-cli":            {"agy": true},
+	"jimeng":                {"dreamina": true},
 }
 
 var manifestAllowedRoots = defaultManifestAllowedRoots

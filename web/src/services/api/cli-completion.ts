@@ -3,26 +3,29 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { CLIHelperResult } from "@/lib/provider";
 
 export class CLICompletionRequestError extends Error {
-    constructor(message: string, readonly status: number) {
+    constructor(
+        message: string,
+        readonly status: number,
+    ) {
         super(message);
         this.name = "CLICompletionRequestError";
     }
 }
 
-export async function requestAntigravityCLICompletion(config: AiConfig, prompt: string, signal?: AbortSignal) {
+export async function requestControlledCLICompletion(config: AiConfig, prompt: string, signal?: AbortSignal) {
     const channel = localChannelForActiveModel(config);
     const token = useUserStore.getState().token;
-    if (!channel?.id || channel.protocol !== "gemini-cli" || !token) throw new CLICompletionRequestError("Antigravity CLI 渠道不可用", 400);
+    if (!channel?.id || !["codex", "gemini-cli"].includes(channel.protocol) || !token) throw new CLICompletionRequestError("受控 CLI 渠道不可用", 400);
 
     const started = await requestCLIAction(`/api/v1/providers/${encodeURIComponent(channel.id)}/cli/completions`, token, { model: config.model, prompt }, signal);
-    if (!started.taskId || started.taskStatus !== "running") throw new CLICompletionRequestError(started.message || "Antigravity CLI 调用未启动", 400);
+    if (!started.taskId || started.taskStatus !== "running") throw new CLICompletionRequestError(started.message || "受控 CLI 调用未启动", 400);
     try {
         for (;;) {
             await waitForCLICompletion(2500, signal);
             const result = await requestCLIAction(`/api/v1/providers/${encodeURIComponent(channel.id)}/cli/model-probe/${encodeURIComponent(started.taskId)}/status`, token, {}, signal);
             if (result.taskStatus === "running") continue;
             if (result.taskStatus === "succeeded" && result.output) return result.output;
-            throw new CLICompletionRequestError(result.message || "Antigravity CLI 调用失败", 502);
+            throw new CLICompletionRequestError(result.message || "受控 CLI 调用失败", 502);
         }
     } catch (error) {
         if (signal?.aborted) {
@@ -38,7 +41,7 @@ export async function requestAntigravityCLICompletion(config: AiConfig, prompt: 
 async function requestCLIAction(url: string, token: string, body: unknown, signal?: AbortSignal) {
     const response = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify(body), signal });
     const envelope = (await response.json().catch(() => ({}))) as { code?: number; data?: CLIHelperResult; msg?: string };
-    if (!response.ok || envelope.code !== 0 || !envelope.data) throw new CLICompletionRequestError(envelope.msg || "Antigravity CLI 接口请求失败", response.status);
+    if (!response.ok || envelope.code !== 0 || !envelope.data) throw new CLICompletionRequestError(envelope.msg || "受控 CLI 接口请求失败", response.status);
     return envelope.data;
 }
 

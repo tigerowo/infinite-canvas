@@ -21,6 +21,16 @@ if [[ -n "$agy_path" && "$agy_path" != /* ]]; then
     echo "Antigravity CLI 必须使用绝对路径" >&2
     exit 1
 fi
+dreamina_path="$(command -v dreamina || true)"
+if [[ -n "$dreamina_path" && "$dreamina_path" != /* ]]; then
+    echo "即梦 CLI 必须使用绝对路径" >&2
+    exit 1
+fi
+gpt_image_2_path="$(command -v gpt-image-2-skill || true)"
+if [[ -n "$gpt_image_2_path" && "$gpt_image_2_path" != /* ]]; then
+    echo "GPT Image 2 helper 必须使用绝对路径" >&2
+    exit 1
+fi
 
 label="com.tigerowo.infinite-canvas.cli-helper.dev"
 install_root="$HOME/Library/Application Support/Infinite Canvas/cli-helper-dev"
@@ -77,8 +87,15 @@ CGO_ENABLED=0 GOOS=darwin GOARCH="$architecture" "$go_path" build -trimpath -ldf
     -public-key "$work_dir/public-key.txt" >/dev/null
 expires_at="$(/bin/date -u -v+30d '+%Y-%m-%dT%H:%M:%SZ')"
 manifest_entries=(-entry "codex=codex=$codex_path")
+manifest_entries+=(-entry "codex-image-emergency=codex=$codex_path")
+if [[ -n "$gpt_image_2_path" ]]; then
+    manifest_entries+=(-entry "gpt-image-2=gpt-image-2-skill=$gpt_image_2_path")
+fi
 if [[ -n "$agy_path" ]]; then
     manifest_entries+=(-entry "gemini-cli=agy=$agy_path")
+fi
+if [[ -n "$dreamina_path" ]]; then
+    manifest_entries+=(-entry "jimeng=dreamina=$dreamina_path")
 fi
 "$go_path" run ./cmd/infinite-canvas-cli-manifest \
     -private-key "$work_dir/signing/private-key.pem" \
@@ -110,6 +127,14 @@ stdout_xml="$(printf '%s' "$logs_dir/cli-helper-dev.log" | xml_escape)"
 stderr_xml="$(printf '%s' "$logs_dir/cli-helper-dev-error.log" | xml_escape)"
 path_value="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:/Applications/ChatGPT.app/Contents/Resources:$HOME/.local/bin:$HOME/.npm/bin:$HOME/.bun/bin:$HOME/.codex/bin"
 path_xml="$(printf '%s' "$path_value" | xml_escape)"
+proxy_xml=""
+for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+    proxy_value="$(/usr/bin/printenv "$proxy_name" 2>/dev/null || true)"
+    if [[ "$proxy_value" =~ ^https?://(localhost|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\]):[0-9]{1,5}/?$ ]]; then
+        proxy_value_xml="$(printf '%s' "$proxy_value" | xml_escape)"
+        proxy_xml+="<key>$proxy_name</key><string>$proxy_value_xml</string>"$'\n'
+    fi
+done
 
 /bin/cat > "$work_dir/agent.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -124,7 +149,7 @@ path_xml="$(printf '%s' "$path_value" | xml_escape)"
 <key>CLI_HELPER_SHARED_SECRET_FILE</key><string>$secret_xml</string>
 <key>CLI_HELPER_SOCKET</key><string>$socket_xml</string>
 <key>PATH</key><string>$path_xml</string>
-</dict>
+$proxy_xml</dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 <key>ProcessType</key><string>Interactive</string>

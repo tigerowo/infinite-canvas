@@ -20,23 +20,29 @@ import (
 )
 
 const (
-	cliModelProbeOutputLimit = 4 * 1024
-	cliModelProbeTimeout     = 2 * time.Minute
-	cliModelProbeRetention   = 10 * time.Minute
-	cliModelProbePrompt      = "Reply with exactly OK. Do not inspect files, run commands, or use tools."
-	cliCompletionPromptLimit = 24 * 1024
+	cliModelProbeOutputLimit    = 4 * 1024
+	cliModelProbeTimeout        = 2 * time.Minute
+	cliModelProbeRetention      = 10 * time.Minute
+	cliModelProbePrompt         = "Reply with exactly OK. Do not inspect files, run commands, or use tools."
+	cliCompletionPromptLimit    = 24 * 1024
+	cliCodexDefaultModel        = "codex-cli-default"
+	cliCodexEmergencyImageModel = "codex-image-emergency"
+	cliGPTImage2Model           = "gpt-image-2"
 )
 
 type cliModelProbeTask struct {
-	ID         string
-	UserID     string
-	ProviderID string
-	Protocol   string
-	Status     string
-	Output     string
-	Message    string
-	UpdatedAt  time.Time
-	Cancel     context.CancelFunc
+	ID             string
+	UserID         string
+	ProviderID     string
+	Protocol       string
+	Status         string
+	Output         string
+	Message        string
+	GenerationType string
+	TaskType       string
+	UpstreamID     string
+	UpdatedAt      time.Time
+	Cancel         context.CancelFunc
 }
 
 var cliModelProbeState = struct {
@@ -158,6 +164,7 @@ func executeCLIModelProbeStart(parent context.Context, input cliCompanionActionR
 		"--sandbox", "read-only",
 		"--skip-git-repo-check",
 		"--ephemeral",
+		"--model", "gpt-5.5",
 		"--output-last-message", outputPath,
 		cliModelProbePrompt,
 	)
@@ -253,6 +260,102 @@ func executeAntigravityCompletionStart(parent context.Context, input cliCompanio
 	return cliModelProbeResult(task), model.ProviderStatusConnected
 }
 
+func executeCodexCompletionStart(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
+	result := CLIHelperResult{Protocol: input.Protocol}
+	if input.Protocol != "codex" || input.Model != cliCodexDefaultModel || len(input.Prompt) == 0 || len(input.Prompt) > cliCompletionPromptLimit {
+		result.Message = "Codex CLI 调用参数无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	hashes, err := loadCLIHelperHashes(input.Protocol, time.Now())
+	if err != nil {
+		result.Message = "CLI helper 可信清单未配置或无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	executable, err := findControlledCLIExecutable(cliSpecs[input.Protocol].Candidates, hashes)
+	if err != nil {
+		result.Message = "未检测到受支持的 CLI"
+		return result, model.ProviderStatusUnavailable
+	}
+	result.Available = true
+	result.Executable = executable
+	cliModelProbeState.Lock()
+	defer cliModelProbeState.Unlock()
+	pruneCLIModelProbeTasks(time.Now())
+	if cliModelProbeState.ActiveID != "" {
+		result.Message = "CLI helper 正在执行另一个模型调用"
+		return result, model.ProviderStatusTimeout
+	}
+	taskID, err := newCLIModelProbeTaskID()
+	if err != nil {
+		result.Message = "模型调用任务创建失败"
+		return result, model.ProviderStatusFailed
+	}
+	directory, err := os.MkdirTemp("", "infinite-canvas-codex-completion-")
+	if err != nil {
+		result.Message = "模型调用临时目录创建失败"
+		return result, model.ProviderStatusFailed
+	}
+	outputPath := filepath.Join(directory, "last-message.txt")
+	ctx, cancel := context.WithTimeout(parent, cliModelProbeTimeout)
+	command := exec.CommandContext(ctx, executable,
+		"exec",
+		"--sandbox", "read-only",
+		"--skip-git-repo-check",
+		"--ephemeral",
+		"--model", "gpt-5.5",
+		"--output-last-message", outputPath,
+		"-",
+	)
+	command.Dir = directory
+	command.Env = controlledCLIEnvironment()
+	command.Stdin = strings.NewReader(input.Prompt)
+	command.Stdout = io.Discard
+	command.Stderr = io.Discard
+	if err := command.Start(); err != nil {
+		cancel()
+		_ = os.RemoveAll(directory)
+		result.Message = "Codex CLI 调用启动失败"
+		return result, model.ProviderStatusFailed
+	}
+	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Status: "running", Message: "Codex CLI 调用正在执行", TaskType: "completion", UpdatedAt: time.Now(), Cancel: cancel}
+	cliModelProbeState.Tasks[taskID] = task
+	cliModelProbeState.ActiveID = taskID
+	go finishCodexCompletion(command, ctx, cancel, directory, outputPath, taskID)
+	return cliModelProbeResult(task), model.ProviderStatusConnected
+}
+
+func finishCodexCompletion(command *exec.Cmd, ctx context.Context, cancel context.CancelFunc, directory string, outputPath string, taskID string) {
+	err := command.Wait()
+	contextErr := ctx.Err()
+	cancel()
+	output, outputErr := readCLIModelProbeOutput(outputPath)
+	_ = os.RemoveAll(directory)
+	cliModelProbeState.Lock()
+	defer cliModelProbeState.Unlock()
+	task := cliModelProbeState.Tasks[taskID]
+	if task == nil {
+		return
+	}
+	if task.Status != "cancelled" {
+		switch {
+		case errors.Is(contextErr, context.DeadlineExceeded):
+			task.Status, task.Message = "timed_out", "Codex CLI 调用超时"
+		case errors.Is(contextErr, context.Canceled):
+			task.Status, task.Message = "cancelled", "Codex CLI 调用已取消"
+		case err != nil:
+			task.Status, task.Message = "failed", "Codex CLI 调用失败"
+		case outputErr != nil || output == "":
+			task.Status, task.Message = "failed", "Codex CLI 没有返回有效结果"
+		default:
+			task.Status, task.Output, task.Message = "succeeded", output, "Codex CLI 调用成功"
+		}
+	}
+	task.UpdatedAt = time.Now()
+	if cliModelProbeState.ActiveID == taskID {
+		cliModelProbeState.ActiveID = ""
+	}
+}
+
 func finishAntigravityCompletion(command *exec.Cmd, ctx context.Context, cancel context.CancelFunc, directory string, output *cappedCLIOutput, taskID string) {
 	err := command.Wait()
 	contextErr := ctx.Err()
@@ -321,8 +424,14 @@ func executeCLIModelProbeCancel(input cliCompanionActionRequest) (CLIHelperResul
 	if task.Status == "running" {
 		task.Status = "cancelled"
 		task.Output = ""
-		if task.Protocol == "gemini-cli" {
+		if task.Protocol == "jimeng" {
+			task.Message = "即梦本地轮询已取消；上游任务可能仍会继续"
+		} else if task.GenerationType == "image" {
+			task.Message = "本机生图调用已取消"
+		} else if task.Protocol == "gemini-cli" {
 			task.Message = "Antigravity CLI 调用已取消"
+		} else if task.TaskType == "completion" {
+			task.Message = "Codex CLI 调用已取消"
 		} else {
 			task.Message = "Codex 最小调用已取消"
 		}
@@ -417,6 +526,10 @@ func cliModelProbeProviderStatus(status string) model.ProviderStatus {
 func pruneCLIModelProbeTasks(current time.Time) {
 	for id, task := range cliModelProbeState.Tasks {
 		if task.Status != "running" && current.Sub(task.UpdatedAt) > cliModelProbeRetention {
+			if task.GenerationType == "image" && task.Protocol != "jimeng" {
+				cleanupCLIGenerationOutput(task.Output)
+				forgetSubscriptionImageResult(id)
+			}
 			delete(cliModelProbeState.Tasks, id)
 		}
 	}

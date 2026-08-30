@@ -177,6 +177,18 @@ func TestCLICompanionAuthStatusActionIsBoundToAuthorization(t *testing.T) {
 	}
 }
 
+func TestCLICompanionAccountSummaryActionRejectsUnexpectedPrivateFields(t *testing.T) {
+	input := cliCompanionActionRequest{Action: cliCompanionActionAccountSummary, UserID: "user-1", ProviderID: "provider-1", Protocol: "jimeng"}
+	result := CLIHelperResult{Available: true, Protocol: "jimeng", Account: &CLIAccountSummary{UserName: "test-user", VIPLevel: "maestro", TotalCredit: "88.5"}, Message: "即梦账户信息已更新"}
+	if !validCLICompanionActionRequest(input) || !validCLICompanionResult(input, result) {
+		t.Fatal("valid account summary action was rejected")
+	}
+	result.Output = "raw-private-output"
+	if validCLICompanionResult(input, result) {
+		t.Fatal("account summary must reject raw CLI output")
+	}
+}
+
 func TestCLICompanionLoginStartActionIsBoundToAuthorization(t *testing.T) {
 	secret := bytes.Repeat([]byte{0x71}, 32)
 	current := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)

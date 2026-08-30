@@ -139,6 +139,25 @@ func TestApplyTrustedCLIProviderModelsRejectsUserSuppliedCatalog(t *testing.T) {
 	}
 }
 
+func TestUpdateSavedProviderConnectionStatusKeepsConnectedCLIOnOrdinarySave(t *testing.T) {
+	item := model.Provider{
+		Kind:             model.ProviderKindCLI,
+		Enabled:          true,
+		ConnectionStatus: model.ProviderStatusConnected,
+		StatusMessage:    "CLI 检测成功",
+		LastCheckedAt:    "checked-at",
+	}
+	updateSavedProviderConnectionStatus(&item, false)
+	if item.ConnectionStatus != model.ProviderStatusConnected || item.StatusMessage != "CLI 检测成功" || item.LastCheckedAt != "checked-at" {
+		t.Fatalf("普通保存不应重置 CLI 连接状态：%#v", item)
+	}
+
+	updateSavedProviderConnectionStatus(&item, true)
+	if item.ConnectionStatus != model.ProviderStatusUnavailable || item.StatusMessage != "本地 CLI helper 尚未连接" || item.LastCheckedAt != "" {
+		t.Fatalf("连接配置变化后应要求重新检测 CLI：%#v", item)
+	}
+}
+
 func TestNormalizeProviderHeadersRejectsHeaderInjection(t *testing.T) {
 	headers := normalizeProviderHeaders(map[string]string{
 		"X-Safe": "configured",

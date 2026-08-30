@@ -248,3 +248,68 @@ func ProxyImage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(data)
 }
+
+// ProxyMedia 代理远端视频和音频请求，供下载及对象存储同步使用。
+func ProxyMedia(w http.ResponseWriter, r *http.Request) {
+	proxyMedia(w, r, service.SafeProxyHTTPClient(), storageUploadMaxBytes)
+}
+
+func proxyMedia(w http.ResponseWriter, r *http.Request, client *http.Client, maxBytes int64) {
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		Fail(w, "url 参数不能为空")
+		return
+	}
+	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+		Fail(w, "无效的 url")
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, targetURL, nil)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "video/mp4,video/*,audio/*,application/octet-stream;q=0.8,*/*;q=0.5")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		FailWithStatus(w, http.StatusBadGateway, "代理媒体请求失败")
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		FailWithStatus(w, http.StatusBadGateway, "代理媒体请求失败: "+resp.Status)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		FailWithStatus(w, http.StatusBadGateway, "代理媒体请求失败")
+		return
+	}
+	if int64(len(data)) > maxBytes {
+		FailWithStatus(w, http.StatusBadGateway, "代理媒体超过 256 MiB 限制")
+		return
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]))
+	detected := strings.ToLower(http.DetectContentType(data))
+	if strings.HasPrefix(detected, "text/html") || strings.Contains(detected, "xml") {
+		FailWithStatus(w, http.StatusBadGateway, "代理地址没有返回安全媒体")
+		return
+	}
+	if contentType == "application/octet-stream" && (strings.HasPrefix(detected, "video/") || strings.HasPrefix(detected, "audio/")) {
+		contentType = detected
+	}
+	if !strings.HasPrefix(contentType, "video/") && !strings.HasPrefix(contentType, "audio/") {
+		FailWithStatus(w, http.StatusBadGateway, "代理地址没有返回安全媒体")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(data)
+}

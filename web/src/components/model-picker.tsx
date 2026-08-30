@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useState } from "react";
 import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { jimengModelProfile } from "@/lib/jimeng-models";
 import { cn } from "@/lib/utils";
 import { filterModelsByCapability, modelChannelsForConfig, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
@@ -69,8 +70,9 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
         >
             <SelectTrigger
                 className={cn(
-                    "canvas-composer-model-picker h-8 w-fit max-w-full gap-2 rounded-full border border-input bg-transparent px-3 text-sm font-normal shadow-sm transition-colors",
+                    "canvas-composer-model-picker h-8 w-fit max-w-full gap-2 rounded-full border px-3 text-sm font-normal shadow-sm transition-colors",
                     fullWidth ? "w-full min-w-0 justify-start" : "min-w-[9rem] justify-start",
+                    currentOption ? "border-ring/70 bg-accent/80 hover:bg-accent" : "border-input bg-transparent hover:bg-accent/50",
                     "data-[state=open]:border-ring data-[state=open]:ring-2 data-[state=open]:ring-ring/20",
                     className,
                 )}
@@ -79,7 +81,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                 title={current || placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{currentOption?.protocol === "jimeng" ? jimengModelProfile(current)?.label || current : current || placeholder}</span>
+                {currentOption?.channelName ? <span className="max-w-32 shrink-0 truncate rounded-md bg-background/80 px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground ring-1 ring-border/70">{currentOption.channelName}</span> : null}
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -93,8 +96,13 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             >
                 {options.length ? (
                     options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${option.model} ${option.channelName}`}>
-                            <ModelLabel model={option.model} channelName={option.channelName} />
+                        <SelectItem
+                            key={option.key}
+                            value={option.key}
+                            textValue={`${option.model} ${option.channelName}`}
+                            className="my-0.5 min-h-10 px-2 py-1.5 data-[state=checked]:bg-accent data-[state=checked]:text-accent-foreground data-[state=checked]:ring-1 data-[state=checked]:ring-ring/50"
+                        >
+                            <ModelLabel model={option.model} channelName={option.channelName} selected={option.key === currentValue} />
                         </SelectItem>
                     ))
                 ) : (
@@ -107,12 +115,14 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     );
 }
 
-function ModelLabel({ model, channelName }: { model: string; channelName?: string }) {
+function ModelLabel({ model, channelName, selected = false }: { model: string; channelName?: string; selected?: boolean }) {
+    const jimeng = jimengModelProfile(model);
     return (
-        <span className="flex min-w-0 items-center gap-2">
+        <span className="flex min-w-0 flex-1 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{model}</span>
-            {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
+            <span className={cn("truncate", selected && "font-medium")}>{jimeng?.label || model}</span>
+            {jimeng ? <span className="shrink-0 rounded border border-border px-1 py-0.5 text-[10px] leading-none text-muted-foreground">待真实验证</span> : null}
+            {channelName ? <span className={cn("ml-auto max-w-32 shrink-0 truncate rounded-md px-1.5 py-0.5 text-[10px] leading-none", selected ? "bg-background/80 text-foreground ring-1 ring-border/70" : "bg-muted text-muted-foreground")}>{channelName}</span> : null}
         </span>
     );
 }

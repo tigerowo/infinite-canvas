@@ -1133,6 +1133,7 @@ func normalizePrivateStorageSetting(setting model.PrivateStorageSetting) model.P
 	if setting.CapacityLimitBytes <= 0 {
 		setting.CapacityLimitBytes = 9 * 1024 * 1024 * 1024
 	}
+	setting.OperationBudget = normalizeStorageOperationBudget(setting.OperationBudget)
 	setting.CapacityCheck = normalizeStorageCapacityCheckSetting(setting.CapacityCheck)
 	if setting.Providers == nil {
 		setting.Providers = []model.StorageProvider{}
@@ -1141,6 +1142,26 @@ func normalizePrivateStorageSetting(setting model.PrivateStorageSetting) model.P
 		setting.Providers[i] = normalizeStorageProvider(setting.Providers[i])
 	}
 	return setting
+}
+
+func normalizeStorageOperationBudget(budget model.StorageOperationBudget) model.StorageOperationBudget {
+	if budget.Enabled == nil {
+		enabled := true
+		budget.Enabled = &enabled
+	}
+	if budget.ClassALimit <= 0 {
+		budget.ClassALimit = 1_000_000
+	}
+	if budget.ClassBLimit <= 0 {
+		budget.ClassBLimit = 10_000_000
+	}
+	if budget.WarningPercent <= 0 || budget.WarningPercent >= 100 {
+		budget.WarningPercent = 80
+	}
+	if budget.StopPercent <= budget.WarningPercent || budget.StopPercent > 100 {
+		budget.StopPercent = 90
+	}
+	return budget
 }
 
 func normalizeStorageCapacityCheckSetting(setting model.StorageCapacityCheckSetting) model.StorageCapacityCheckSetting {

@@ -100,7 +100,7 @@ function isLocalNetworkHost(hostname: string) {
     );
 }
 
-export function getProxyUrl(url: string): string {
+export function getProxyUrl(url: string, proxyPath = "/api/proxy-image"): string {
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
         return url;
     }
@@ -116,7 +116,7 @@ export function getProxyUrl(url: string): string {
     } catch {
         return url;
     }
-    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
+    return `${proxyPath}?url=${encodeURIComponent(url)}`;
 }
 
 export async function uploadImage(input: string | Blob, options: UploadImageOptions = {}): Promise<UploadedImage> {
@@ -174,7 +174,10 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
     const uploadResponse = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: "Bearer " + token }, body: formData });
     const payload = (await uploadResponse.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
-    if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "服务端图片上传失败");
+    if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) {
+        if (payload?.msg?.includes("对象存储预算保护已触发")) return uploadImage(blob, { localOnly: true });
+        throw new Error(payload?.msg || "服务端图片上传失败");
+    }
     const meta = await readImageMeta(payload.data.url);
     if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
     return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
@@ -261,6 +264,7 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) {
+        if (payload?.msg?.includes("对象存储预算保护已触发")) return null;
         if (!canUseGlobalProvider) return null;
         throw new Error(payload?.msg || "服务端图片上传失败");
     }

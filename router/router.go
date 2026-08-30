@@ -127,6 +127,9 @@ func New() *gin.Engine {
 	v1.POST("/providers/:id/cli/auth-status", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.CheckUserCLIProviderAuth(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.POST("/providers/:id/cli/account", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.GetUserCLIAccountSummary(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/providers/:id/cli/login", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.StartUserCLIProviderLogin(c.Writer, c.Request, c.Param("id"))
 	})
@@ -135,6 +138,15 @@ func New() *gin.Engine {
 	})
 	v1.POST("/providers/:id/cli/completions", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.StartUserCLICompletion(c.Writer, c.Request, c.Param("id"))
+	})
+	v1.POST("/providers/:id/cli/generations", middleware.GenerationRequestBudget, func(c *gin.Context) {
+		handler.StartUserCLIGeneration(c.Writer, c.Request, c.Param("id"))
+	})
+	v1.POST("/providers/:id/cli/generations/:taskId/status", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.QueryUserCLIGeneration(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
+	})
+	v1.POST("/providers/:id/cli/generations/:taskId/cancel", middleware.HeavyRequestBudget, func(c *gin.Context) {
+		handler.CancelUserCLIGeneration(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
 	})
 	v1.POST("/providers/:id/cli/model-probe/:taskId/status", middleware.HeavyRequestBudget, func(c *gin.Context) {
 		handler.QueryUserCLIModelProbe(c.Writer, c.Request, c.Param("id"), c.Param("taskId"))
@@ -168,6 +180,7 @@ func New() *gin.Engine {
 	v1.GET("/user-data/assets", gin.WrapF(handler.UserAssetData))
 	v1.POST("/user-data/assets", gin.WrapF(handler.SaveUserAssetData))
 	api.GET("/proxy-image", middleware.ProxyRequestBudget, gin.WrapF(handler.ProxyImage))
+	api.GET("/proxy-media", middleware.ProxyRequestBudget, gin.WrapF(handler.ProxyMedia))
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", middleware.AuthRequestBudget, gin.WrapF(handler.AdminLogin))

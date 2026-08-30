@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,31 +39,42 @@ var (
 		sync.Mutex
 		running bool
 	}
-	cliSecretLine   = regexp.MustCompile(`(?i)(api[_-]?key|authorization|bearer|token|secret|password)\s*[:=]\s*\S+`)
-	cliAllowedRoots = controlledCLIAllowedRoots
-	cliSpecs        = map[string]struct {
+	cliSecretLine             = regexp.MustCompile(`(?i)(api[_-]?key|authorization|bearer|token|secret|password)\s*[:=]\s*\S+`)
+	cliGPTImageVersionPattern = regexp.MustCompile(`^gpt-image-2-skill [0-9]+\.[0-9]+\.[0-9]+$`)
+	cliAllowedRoots           = controlledCLIAllowedRoots
+	cliSpecs                  = map[string]struct {
 		Candidates []string
 		Version    []string
 	}{
-		"codex":      {Candidates: []string{"codex"}, Version: []string{"--version"}},
-		"gemini-cli": {Candidates: []string{"agy"}, Version: []string{"--version"}},
-		"jimeng":     {Candidates: []string{"dreamina"}, Version: []string{"--version"}},
+		"codex":                 {Candidates: []string{"codex"}, Version: []string{"--version"}},
+		"codex-image-emergency": {Candidates: []string{"codex"}, Version: []string{"--version"}},
+		"gpt-image-2":           {Candidates: []string{"gpt-image-2-skill"}, Version: []string{"--version"}},
+		"gemini-cli":            {Candidates: []string{"agy"}, Version: []string{"--version"}},
+		"jimeng":                {Candidates: []string{"dreamina"}, Version: []string{"--version"}},
 	}
 	cliModelNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+	cliCreditPattern    = regexp.MustCompile(`^\d{1,18}(?:\.\d{1,8})?$`)
 )
 
+type CLIAccountSummary struct {
+	UserName    string `json:"userName"`
+	VIPLevel    string `json:"vipLevel"`
+	TotalCredit string `json:"totalCredit"`
+}
+
 type CLIHelperResult struct {
-	Available    bool     `json:"available"`
-	Protocol     string   `json:"protocol"`
-	Executable   string   `json:"executable,omitempty"`
-	Version      string   `json:"version,omitempty"`
-	AuthStatus   string   `json:"authStatus,omitempty"`
-	ActionStatus string   `json:"actionStatus,omitempty"`
-	TaskID       string   `json:"taskId,omitempty"`
-	TaskStatus   string   `json:"taskStatus,omitempty"`
-	Output       string   `json:"output,omitempty"`
-	Models       []string `json:"models,omitempty"`
-	Message      string   `json:"message"`
+	Available    bool               `json:"available"`
+	Protocol     string             `json:"protocol"`
+	Executable   string             `json:"executable,omitempty"`
+	Version      string             `json:"version,omitempty"`
+	AuthStatus   string             `json:"authStatus,omitempty"`
+	ActionStatus string             `json:"actionStatus,omitempty"`
+	TaskID       string             `json:"taskId,omitempty"`
+	TaskStatus   string             `json:"taskStatus,omitempty"`
+	Output       string             `json:"output,omitempty"`
+	Models       []string           `json:"models,omitempty"`
+	Account      *CLIAccountSummary `json:"account,omitempty"`
+	Message      string             `json:"message"`
 }
 
 type cliHelperManifestEnvelope struct {
@@ -122,7 +135,7 @@ func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CL
 	if _, ok := cliSpecs[item.Protocol]; !ok {
 		return CLIHelperResult{Protocol: item.Protocol, AuthStatus: "unsupported", Message: "CLI 类型不受支持"}, nil
 	}
-	if item.Protocol != "codex" && item.Protocol != "gemini-cli" {
+	if item.Protocol != "codex" && item.Protocol != "gemini-cli" && item.Protocol != "jimeng" {
 		return CLIHelperResult{Protocol: item.Protocol, AuthStatus: "unsupported", Message: "该 CLI 暂无已确认的非交互登录状态命令"}, nil
 	}
 	if !config.Cfg.CLIHelperEnabled {
@@ -152,6 +165,27 @@ func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CL
 		if _, saveErr := repository.SaveProvider(item); saveErr != nil {
 			return CLIHelperResult{}, saveErr
 		}
+	}
+	return result, nil
+}
+
+func GetCurrentUserCLIAccountSummary(ctx context.Context, providerID string) (CLIHelperResult, error) {
+	_, item, err := currentUserProvider(ctx, providerID)
+	if err != nil {
+		return CLIHelperResult{}, err
+	}
+	if item.Kind != model.ProviderKindCLI || !item.Enabled || item.Protocol != "jimeng" {
+		return CLIHelperResult{}, safeMessageError{message: "仅已启用的即梦 CLI 连接支持账户概览"}
+	}
+	if !config.Cfg.CLIHelperEnabled {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "Mac CLI helper 未启用"}, nil
+	}
+	if runtime.GOOS != "darwin" {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI helper 仅支持 macOS"}, nil
+	}
+	result, _, err := requestCLICompanionAction(ctx, item.OwnerUserID, item.ID, item.Protocol, cliCompanionActionAccountSummary)
+	if err != nil {
+		return CLIHelperResult{Protocol: item.Protocol, Message: "CLI 伴随进程未连接或授权失败"}, nil
 	}
 	return result, nil
 }
@@ -233,21 +267,46 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 	var output cappedCLIOutput
 	command.Stdout = &output
 	command.Stderr = &output
-	if err := command.Run(); err != nil {
+	runErr := command.Run()
+	version := ""
+	if runErr != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			result.Message = "CLI 版本检测超时"
 			return result, model.ProviderStatusTimeout
 		}
-		result.Message = "CLI 版本检测失败"
-		return result, model.ProviderStatusFailed
+		if protocol != "gpt-image-2" {
+			result.Message = "CLI 版本检测失败"
+			return result, model.ProviderStatusFailed
+		}
+		var ok bool
+		version, ok = parseGPTImageVersionOutput(output.String())
+		if !ok {
+			result.Message = "CLI 版本检测失败"
+			return result, model.ProviderStatusFailed
+		}
 	}
-	version := sanitizeCLIOutput(output.String())
+	if version == "" {
+		version = sanitizeCLIOutput(output.String())
+	}
 	if version == "" {
 		version = "已安装（版本未知）"
 	}
 	result.Available = true
 	result.Executable = executable
 	result.Version = version
+	if protocol == "codex" {
+		result.Models = []string{cliCodexDefaultModel}
+	}
+	if protocol == "codex-image-emergency" {
+		result.Models = []string{cliCodexEmergencyImageModel}
+		result.Message = "Codex 应急生图 CLI 检测成功；每次调用都需要单独确认"
+		return result, model.ProviderStatusConnected
+	}
+	if protocol == "gpt-image-2" {
+		result.Models = []string{cliGPTImage2Model}
+		result.Message = "GPT Image 2 订阅 helper 检测成功；调用时仅使用 Codex 登录态"
+		return result, model.ProviderStatusConnected
+	}
 	if protocol == "gemini-cli" {
 		models, modelErr := executeAntigravityModelList(parent, executable)
 		if modelErr != nil {
@@ -262,12 +321,29 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 	return result, model.ProviderStatusConnected
 }
 
+func parseGPTImageVersionOutput(value string) (string, bool) {
+	var response struct {
+		OK    bool `json:"ok"`
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal([]byte(value), &response) != nil || response.OK || response.Error.Code != "invalid_command" {
+		return "", false
+	}
+	version := strings.TrimSpace(response.Error.Message)
+	return version, cliGPTImageVersionPattern.MatchString(version)
+}
+
 func executeCLICompanionAction(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
 	switch input.Action {
 	case cliCompanionActionVersion:
 		return executeCLICompanionVersion(parent, input.Protocol)
 	case cliCompanionActionAuthStatus:
 		return executeCLICompanionAuthStatus(parent, input.Protocol)
+	case cliCompanionActionAccountSummary:
+		return executeCLICompanionAccountSummary(parent, input.Protocol)
 	case cliCompanionActionLoginStart:
 		return executeCLICompanionLoginStart(parent, input.Protocol)
 	case cliCompanionActionProbeStart:
@@ -277,7 +353,19 @@ func executeCLICompanionAction(parent context.Context, input cliCompanionActionR
 	case cliCompanionActionProbeCancel:
 		return executeCLIModelProbeCancel(input)
 	case cliCompanionActionCompletionStart:
+		if input.Protocol == "codex" {
+			return executeCodexCompletionStart(parent, input)
+		}
 		return executeAntigravityCompletionStart(parent, input)
+	case cliCompanionActionGenerationStart:
+		if input.Protocol == "jimeng" {
+			return executeJimengGenerationStart(parent, input)
+		}
+		return executeSubscriptionImageGenerationStart(parent, input)
+	case cliCompanionActionGenerationStatus:
+		return executeCLIModelProbeStatus(input)
+	case cliCompanionActionGenerationCancel:
+		return executeCLIModelProbeCancel(input)
 	default:
 		return CLIHelperResult{Protocol: input.Protocol, Message: "CLI 动作不受支持"}, model.ProviderStatusUnavailable
 	}
@@ -335,7 +423,7 @@ func executeCLICompanionLoginStart(parent context.Context, protocol string) (CLI
 
 func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
 	result := CLIHelperResult{Protocol: protocol}
-	if protocol != "codex" && protocol != "gemini-cli" {
+	if protocol != "codex" && protocol != "gemini-cli" && protocol != "jimeng" {
 		result.AuthStatus = "unsupported"
 		result.Message = "该 CLI 暂无已确认的非交互登录状态命令"
 		return result, model.ProviderStatusUnavailable
@@ -359,6 +447,17 @@ func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLI
 	}
 	result.Available = true
 	result.Executable = executable
+	if protocol == "jimeng" {
+		if err := executeDreaminaAuthStatus(parent, executable); err != nil {
+			result.AuthStatus = "unauthenticated"
+			result.Message = "即梦 CLI 未登录或账户状态不可用"
+			return result, model.ProviderStatusUnavailable
+		}
+		result.AuthStatus = "authenticated"
+		result.Models = append([]string(nil), jimengCLIModels...)
+		result.Message = "即梦 CLI 已登录"
+		return result, model.ProviderStatusConnected
+	}
 	if protocol == "gemini-cli" {
 		models, err := executeAntigravityModelList(parent, executable)
 		if err != nil {
@@ -388,8 +487,102 @@ func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLI
 		return result, model.ProviderStatusUnavailable
 	}
 	result.AuthStatus = "authenticated"
+	result.Models = []string{cliCodexDefaultModel}
 	result.Message = "Codex CLI 已登录"
 	return result, model.ProviderStatusConnected
+}
+
+func executeDreaminaAuthStatus(parent context.Context, executable string) error {
+	_, err := queryDreaminaAccountSummary(parent, executable)
+	return err
+}
+
+func executeCLICompanionAccountSummary(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
+	result := CLIHelperResult{Protocol: protocol}
+	if protocol != "jimeng" {
+		result.Message = "该 CLI 不支持账户概览"
+		return result, model.ProviderStatusUnavailable
+	}
+	hashes, err := loadCLIHelperHashes(protocol, time.Now())
+	if err != nil {
+		result.Message = "CLI helper 可信清单未配置或无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	select {
+	case cliHelperSlots <- struct{}{}:
+		defer func() { <-cliHelperSlots }()
+	default:
+		result.Message = "CLI helper 正忙，请稍后重试"
+		return result, model.ProviderStatusTimeout
+	}
+	executable, err := findControlledCLIExecutable(cliSpecs[protocol].Candidates, hashes)
+	if err != nil {
+		result.Message = "未检测到受支持的 CLI"
+		return result, model.ProviderStatusUnavailable
+	}
+	account, err := queryDreaminaAccountSummary(parent, executable)
+	if err != nil {
+		result.Message = "即梦账户信息读取失败，请重新登录后重试"
+		return result, model.ProviderStatusUnavailable
+	}
+	result.Available = true
+	result.Executable = executable
+	result.Account = &account
+	result.Message = "即梦账户信息已更新"
+	return result, model.ProviderStatusConnected
+}
+
+func queryDreaminaAccountSummary(parent context.Context, executable string) (CLIAccountSummary, error) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, executable, "user_credit")
+	command.Env = controlledCLIEnvironment()
+	command.Stdin = nil
+	var output cappedCLIOutput
+	command.Stdout = &output
+	command.Stderr = io.Discard
+	if err := command.Run(); err != nil {
+		return CLIAccountSummary{}, err
+	}
+	var value struct {
+		TotalCredit json.Number `json:"total_credit"`
+		UserID      json.Number `json:"user_id"`
+		UserName    string      `json:"user_name"`
+		VIPLevel    string      `json:"vip_level"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(output.String()))
+	decoder.UseNumber()
+	if decoder.Decode(&value) != nil || value.UserID == "" {
+		return CLIAccountSummary{}, errors.New("Dreamina account response is invalid")
+	}
+	account := CLIAccountSummary{
+		UserName:    strings.TrimSpace(value.UserName),
+		VIPLevel:    strings.TrimSpace(value.VIPLevel),
+		TotalCredit: value.TotalCredit.String(),
+	}
+	if !validCLIAccountSummary(account) {
+		return CLIAccountSummary{}, errors.New("Dreamina account response is invalid")
+	}
+	return account, nil
+}
+
+func validCLIAccountSummary(value CLIAccountSummary) bool {
+	return validCLIAccountText(value.UserName, 128, true) &&
+		validCLIAccountText(value.VIPLevel, 64, true) &&
+		cliCreditPattern.MatchString(value.TotalCredit)
+}
+
+func validCLIAccountText(value string, limit int, allowEmpty bool) bool {
+	value = strings.TrimSpace(value)
+	if (!allowEmpty && value == "") || len(value) > limit || strings.ContainsRune(value, '\x00') {
+		return false
+	}
+	for _, char := range value {
+		if char == '\r' || char == '\n' || char == '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 func executeAntigravityModelList(parent context.Context, executable string) ([]string, error) {
@@ -595,7 +788,26 @@ func controlledCLIEnvironment() []string {
 			result = append(result, name+"="+value)
 		}
 	}
+	for _, name := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		if value, ok := controlledLoopbackProxy(os.Getenv(name)); ok {
+			result = append(result, name+"="+value)
+		}
+	}
 	return result
+}
+
+func controlledLoopbackProxy(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	parsed, err := url.Parse(value)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.Port() == "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return "", false
+	}
+	return value, true
 }
 
 type cappedCLIOutput struct {

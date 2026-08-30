@@ -20,11 +20,11 @@ func StartCurrentUserCLICompletion(ctx context.Context, providerID string, input
 	}
 	input.Model = strings.TrimSpace(input.Model)
 	input.Prompt = strings.TrimSpace(input.Prompt)
-	if item.Kind != model.ProviderKindCLI || item.Protocol != "gemini-cli" || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
-		return CLIHelperResult{}, safeMessageError{message: "Antigravity CLI 渠道不可用"}
+	if item.Kind != model.ProviderKindCLI || item.Protocol != "codex" && item.Protocol != "gemini-cli" || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
+		return CLIHelperResult{}, safeMessageError{message: "受控 CLI 渠道不可用"}
 	}
-	if !cliModelNamePattern.MatchString(input.Model) || !userLocalChannelHasModel(item.Models, input.Model) {
-		return CLIHelperResult{}, safeMessageError{message: "Antigravity CLI 模型不可用"}
+	if !cliModelNamePattern.MatchString(input.Model) || item.Protocol == "codex" && input.Model != cliCodexDefaultModel || item.Protocol == "gemini-cli" && !userLocalChannelHasModel(item.Models, input.Model) {
+		return CLIHelperResult{}, safeMessageError{message: "受控 CLI 模型不可用"}
 	}
 	if input.Prompt == "" || len(input.Prompt) > cliCompletionPromptLimit || strings.ContainsRune(input.Prompt, '\x00') {
 		return CLIHelperResult{}, safeMessageError{message: "画布助手请求为空或内容过大"}

@@ -74,6 +74,19 @@ func CheckUserCLIProviderAuth(w http.ResponseWriter, r *http.Request, providerID
 	OK(w, result)
 }
 
+func GetUserCLIAccountSummary(w http.ResponseWriter, r *http.Request, providerID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	result, err := service.GetCurrentUserCLIAccountSummary(r.Context(), providerID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
 func StartUserCLIProviderLogin(w http.ResponseWriter, r *http.Request, providerID string) {
 	if !isLoopbackWebRequest(r) {
 		Fail(w, "CLI helper 只接受本机回环请求")
@@ -140,6 +153,66 @@ func StartUserCLICompletion(w http.ResponseWriter, r *http.Request, providerID s
 		return
 	}
 	result, err := service.StartCurrentUserCLICompletion(r.Context(), providerID, input)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func StartUserCLIGeneration(w http.ResponseWriter, r *http.Request, providerID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	var input struct {
+		Confirmed      bool   `json:"confirmed"`
+		GenerationType string `json:"generationType"`
+		Model          string `json:"model"`
+		Prompt         string `json:"prompt"`
+		Ratio          string `json:"ratio"`
+		Resolution     string `json:"resolution"`
+		Duration       int    `json:"duration"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	decodeErr := decoder.Decode(&input)
+	trailingErr := decoder.Decode(&struct{}{})
+	if decodeErr != nil || trailingErr != io.EOF || !input.Confirmed {
+		Fail(w, "请明确确认渠道、模型和任务类型后再调用本机 CLI")
+		return
+	}
+	result, err := service.StartCurrentUserCLIGeneration(r.Context(), providerID, service.CLIGenerationInput{
+		GenerationType: input.GenerationType, Model: input.Model, Prompt: input.Prompt,
+		Ratio: input.Ratio, Resolution: input.Resolution, Duration: input.Duration,
+	})
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func QueryUserCLIGeneration(w http.ResponseWriter, r *http.Request, providerID string, taskID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	result, err := service.QueryCurrentUserCLIGeneration(r.Context(), providerID, taskID)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, result)
+}
+
+func CancelUserCLIGeneration(w http.ResponseWriter, r *http.Request, providerID string, taskID string) {
+	if !isLoopbackWebRequest(r) {
+		Fail(w, "CLI helper 只接受本机回环请求")
+		return
+	}
+	result, err := service.CancelCurrentUserCLIGeneration(r.Context(), providerID, taskID)
 	if err != nil {
 		FailError(w, err)
 		return

@@ -3,7 +3,7 @@ import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, gemini
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
 import { channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
-import { requestAntigravityCLICompletion } from "@/services/api/cli-completion";
+import { requestControlledCLICompletion } from "@/services/api/cli-completion";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 
@@ -70,8 +70,8 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
     };
     const configuredSystemPrompt = (requestConfig.systemPrompts.text || requestConfig.systemPrompt).trim();
     const systemPrompt = configuredSystemPrompt ? configuredSystemPrompt + "\n\n" + input.systemPrompt : input.systemPrompt;
-    if (channelProtocolForConfig(requestConfig) === "gemini-cli") {
-        const content = await requestAntigravityCLICompletion(requestConfig, buildAntigravityPrompt(systemPrompt, input.messages, input.allowTools ? input.tools : []), input.signal);
+    if (["codex", "gemini-cli"].includes(channelProtocolForConfig(requestConfig))) {
+        const content = await requestControlledCLICompletion(requestConfig, buildControlledCLIPrompt(systemPrompt, input.messages, input.allowTools ? input.tools : []), input.signal);
         return { content, toolCalls: [], usedJsonFallback: true };
     }
     let messages = input.messages;
@@ -100,12 +100,12 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
     throw requestError;
 }
 
-function buildAntigravityPrompt(systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[]) {
+function buildControlledCLIPrompt(systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[]) {
     const toolGuide = tools.length
         ? `可用画布工具（只能通过 JSON actions 调用）：\n${JSON.stringify(tools.map((tool) => tool.function))}\n返回格式：{"reply":"给用户的回复","actions":[{"name":"工具名","arguments":{}}]}`
         : "直接返回给用户的文本，不要调用工具。";
     const transcript = messages
-        .map((message) => `${message.role}: ${typeof message.content === "string" ? message.content : message.content.map((part) => (part.type === "text" ? part.text : "[图片引用]")).join("\n")}`)
+        .map((message) => `${message.role}: ${typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => (part.type === "text" ? part.text : "[图片引用]")).join("\n") : ""}`)
         .join("\n\n");
     const prefix = `${systemPrompt}\n\n${toolGuide}`.slice(0, 3000);
     return `${prefix}\n\n对话记录：\n${transcript.slice(-3000)}`;

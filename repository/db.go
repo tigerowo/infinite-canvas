@@ -74,6 +74,7 @@ func DB() (*gorm.DB, error) {
 			&model.UserConfig{},
 			&model.AICallLog{},
 			&model.StorageObject{},
+			&model.StorageUsage{},
 			&model.VideoTask{},
 			&model.VideoGenerationLog{},
 			&model.ImageGenerationLog{},

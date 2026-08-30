@@ -10,7 +10,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export type LocalModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine" | "gemini-cli";
+    protocol: "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine" | "codex" | "codex-image-emergency" | "gpt-image-2" | "gemini-cli" | "jimeng";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -220,8 +220,7 @@ export function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPubl
     const imageModels = filterChannelModelsByCapability(channels, "image", models);
     const videoModels = filterChannelModelsByCapability(channels, "video", models);
     const audioModels = filterChannelModelsByCapability(channels, "audio", models);
-    const managedDefault = (capability: ModelCapability, available: string[]) =>
-        managedChannels.find((channel) => channel.isDefault && channel.capabilities?.includes(capability) && available.includes(channel.defaultModel || ""))?.defaultModel || "";
+    const managedDefault = (capability: ModelCapability, available: string[]) => managedChannels.find((channel) => channel.isDefault && channel.capabilities?.includes(capability) && available.includes(channel.defaultModel || ""))?.defaultModel || "";
     const fallbackTextModel = validDefault(modelChannel.defaultTextModel, textModels) || preferredModel(textModels, isTextModelName) || textModels[0] || "";
     const fallbackModel = validDefault(modelChannel.defaultModel, textModels) || fallbackTextModel;
     const fallbackImageModel = validDefault(modelChannel.defaultImageModel, imageModels) || managedDefault("image", imageModels) || preferredModel(imageModels, isImageModelName);
@@ -296,45 +295,60 @@ function isVideoModelName(model: string) {
 
 function isImageModelName(model: string) {
     const value = model.toLowerCase();
-    return !isVideoModelName(model) && !isAudioModelName(model) && (
-        value.includes("image") ||
-        value.includes("nano-banana") ||
-        value.includes("seedream") ||
-        value.includes("gpt-image") ||
-        value.includes("cogview") ||
-        value.includes("dall-e") ||
-        value.includes("dalle") ||
-        value.includes("imagen") ||
-        value.includes("gemini-2.5-flash") ||
-        value.includes("gemini-3-pro") ||
-        value.includes("gemini-3.1-flash") ||
-        value.includes("flux") ||
-        value.includes("kontext") ||
-        value.includes("4o-image") ||
-        value.includes("4o image") ||
-        value.includes("gpt-4o-image") ||
-        value.includes("z-image") ||
-        value.includes("qwen/image") ||
-        value.includes("qwen2/image") ||
-        value.includes("qwen/text-to-image") ||
-        value.includes("qwen2/text-to-image") ||
-        value.includes("ideogram") ||
-        value.includes("recraft") ||
-        value.includes("sdxl") ||
-        value.includes("stable-diffusion") ||
-        value.includes("midjourney") ||
-        value.includes("wan2-7-image") ||
-        value.includes("wan2.7-image") ||
-        value.includes("wan/2-7-image") ||
-        value.includes("topaz/image") ||
-        value.includes("gemini-omni-character") ||
-        (value.includes("grok-imagine") && !value.includes("video"))
+    return (
+        !isVideoModelName(model) &&
+        !isAudioModelName(model) &&
+        (value.includes("image") ||
+            value.includes("nano-banana") ||
+            value.includes("seedream") ||
+            value.includes("gpt-image") ||
+            value.includes("cogview") ||
+            value.includes("dall-e") ||
+            value.includes("dalle") ||
+            value.includes("imagen") ||
+            value.includes("gemini-2.5-flash") ||
+            value.includes("gemini-3-pro") ||
+            value.includes("gemini-3.1-flash") ||
+            value.includes("flux") ||
+            value.includes("kontext") ||
+            value.includes("4o-image") ||
+            value.includes("4o image") ||
+            value.includes("gpt-4o-image") ||
+            value.includes("z-image") ||
+            value.includes("qwen/image") ||
+            value.includes("qwen2/image") ||
+            value.includes("qwen/text-to-image") ||
+            value.includes("qwen2/text-to-image") ||
+            value.includes("ideogram") ||
+            value.includes("recraft") ||
+            value.includes("sdxl") ||
+            value.includes("stable-diffusion") ||
+            value.includes("midjourney") ||
+            value.includes("wan2-7-image") ||
+            value.includes("wan2.7-image") ||
+            value.includes("wan/2-7-image") ||
+            value.includes("topaz/image") ||
+            value.includes("gemini-omni-character") ||
+            (value.includes("grok-imagine") && !value.includes("video")))
     );
 }
 
 function isAudioModelName(model: string) {
     const value = model.toLowerCase();
-    return value.includes("audio") || value.includes("tts") || value.includes("speech") || value.includes("voice") || value.includes("music") || value.includes("sound") || value.includes("elevenlabs") || value.includes("suno") || value.includes("lyrics") || value.includes("vocal") || value.includes("midi") || value.includes("wav");
+    return (
+        value.includes("audio") ||
+        value.includes("tts") ||
+        value.includes("speech") ||
+        value.includes("voice") ||
+        value.includes("music") ||
+        value.includes("sound") ||
+        value.includes("elevenlabs") ||
+        value.includes("suno") ||
+        value.includes("lyrics") ||
+        value.includes("vocal") ||
+        value.includes("midi") ||
+        value.includes("wav")
+    );
 }
 
 function isTextModelName(model: string) {
@@ -365,9 +379,9 @@ export function filterModelsByCapability(models: string[], capability?: ModelCap
 
 export function filterChannelModelsByCapability(channels: Array<{ protocol?: LocalModelChannel["protocol"]; models: string[]; capabilities?: ModelCapability[] }>, capability: ModelCapability, allowedModels?: string[]) {
     const allowed = allowedModels ? new Set(allowedModels) : null;
-    return normalizeModelList(
-        channels.flatMap((channel) => (channel.capabilities?.length === 1 ? (channel.capabilities[0] === capability ? channel.models : []) : filterModelsByCapability(channel.models, capability, channel.protocol || ""))),
-    ).filter((model) => !allowed || allowed.has(model));
+    return normalizeModelList(channels.flatMap((channel) => (channel.capabilities?.length === 1 ? (channel.capabilities[0] === capability ? channel.models : []) : filterModelsByCapability(channel.models, capability, channel.protocol || "")))).filter(
+        (model) => !allowed || allowed.has(model),
+    );
 }
 
 export function modelChannelsForConfig(config: AiConfig) {
@@ -386,7 +400,10 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
 
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = localChannelForActiveModel({ ...config, model });
-    return Boolean(model.trim()) && (config.channelMode === "remote" || channel?.protocol === "gemini-cli" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey || channel?.hasHeaders)));
+    return (
+        Boolean(model.trim()) &&
+        (config.channelMode === "remote" || channel?.protocol === "codex" || channel?.protocol === "gemini-cli" || channel?.protocol === "jimeng" || Boolean(channel?.baseUrl.trim() && (channel?.apiKey.trim() || channel?.hasApiKey || channel?.hasHeaders)))
+    );
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -558,7 +575,8 @@ function modelChannelFingerprint(channel: Pick<LocalModelChannel, "name" | "prot
 
 export function channelIdForActiveModel(config: AiConfig) {
     const channels = modelChannelsForConfig(config);
-    const selectedChannelId = config.model === config.imageModel ? config.imageChannelId : config.model === config.videoModel ? config.videoChannelId : config.model === config.audioModel ? config.audioChannelId : config.model === config.textModel ? config.textChannelId : "";
+    const selectedChannelId =
+        config.model === config.imageModel ? config.imageChannelId : config.model === config.videoModel ? config.videoChannelId : config.model === config.audioModel ? config.audioChannelId : config.model === config.textModel ? config.textChannelId : "";
     const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
     if (selectedChannel?.protocol === "gemini") return selectedChannelId;
     if (!selectedChannel) {
@@ -579,7 +597,12 @@ export function channelIdForActiveModel(config: AiConfig) {
 export function modelChannelForActiveModel(config: AiConfig) {
     const channels = modelChannelsForConfig(config);
     const channelId = channelIdForActiveModel(config);
-    return channels.find((channel) => (channel.id || "") === channelId && channel.models.includes(config.model)) || channels.find((channel) => channel.models.includes(config.model)) || channels.find((channel) => (channel.id || "") === channelId) || channels[0];
+    return (
+        channels.find((channel) => (channel.id || "") === channelId && channel.models.includes(config.model)) ||
+        channels.find((channel) => channel.models.includes(config.model)) ||
+        channels.find((channel) => (channel.id || "") === channelId) ||
+        channels[0]
+    );
 }
 
 export function modelChannelHeaders(config: AiConfig): Record<string, string> {

@@ -196,3 +196,87 @@ func TestExecuteAntigravityCompletionUsesFixedHeadlessArguments(t *testing.T) {
 		t.Fatalf("args=%q", args)
 	}
 }
+
+func TestExecuteCodexCompletionUsesReadOnlyStdinPrompt(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Mac CLI helper only runs on macOS")
+	}
+	directory := t.TempDir()
+	resolvedDirectory, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousRoots := cliAllowedRoots
+	cliAllowedRoots = func() []string { return []string{directory, resolvedDirectory} }
+	t.Cleanup(func() { cliAllowedRoots = previousRoots })
+	executable := filepath.Join(directory, "codex")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$HOME/codex-completion-args"
+IFS= read -r prompt
+printf '%s' "$prompt" > "$HOME/codex-completion-stdin"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output-last-message" ]; then
+    shift
+    output="$1"
+  fi
+  shift
+done
+printf 'canvas codex ok\n' > "$output"
+`
+	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	t.Setenv("HOME", directory)
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(directory, "manifest.json")
+	if err := os.WriteFile(manifestPath, cliTestManifest(t, privateKey, time.Now().Add(time.Hour), "codex", "codex", cliTestFileHash(t, executable)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousManifest, previousPublicKey := config.Cfg.CLIHelperManifest, config.Cfg.CLIHelperPublicKey
+	config.Cfg.CLIHelperManifest = manifestPath
+	config.Cfg.CLIHelperPublicKey = base64.StdEncoding.EncodeToString(publicKey)
+	cliModelProbeState.Lock()
+	previousTasks, previousActiveID := cliModelProbeState.Tasks, cliModelProbeState.ActiveID
+	cliModelProbeState.Tasks, cliModelProbeState.ActiveID = map[string]*cliModelProbeTask{}, ""
+	cliModelProbeState.Unlock()
+	t.Cleanup(func() {
+		config.Cfg.CLIHelperManifest, config.Cfg.CLIHelperPublicKey = previousManifest, previousPublicKey
+		cliModelProbeState.Lock()
+		cliModelProbeState.Tasks, cliModelProbeState.ActiveID = previousTasks, previousActiveID
+		cliModelProbeState.Unlock()
+	})
+	input := cliCompanionActionRequest{Action: cliCompanionActionCompletionStart, UserID: "user-1", ProviderID: "provider-1", Protocol: "codex", Model: cliCodexDefaultModel, Prompt: "只回复 Codex OK"}
+	started, _ := executeCodexCompletionStart(context.Background(), input)
+	input.Action, input.TaskID, input.Model, input.Prompt = cliCompanionActionProbeStatus, started.TaskID, "", ""
+	deadline := time.Now().Add(5 * time.Second)
+	var result CLIHelperResult
+	for {
+		result, _ = executeCLIModelProbeStatus(input)
+		if result.TaskStatus != "running" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Codex completion did not finish")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if result.TaskStatus != "succeeded" || result.Output != "canvas codex ok" {
+		t.Fatalf("result=%#v", result)
+	}
+	args, err := os.ReadFile(filepath.Join(directory, "codex-completion-args"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
+	if len(lines) != 8 || lines[0] != "exec" || lines[1] != "--sandbox" || lines[2] != "read-only" || lines[3] != "--skip-git-repo-check" || lines[4] != "--ephemeral" || lines[5] != "--output-last-message" || filepath.Base(lines[6]) != "last-message.txt" || lines[7] != "-" {
+		t.Fatalf("args=%q", lines)
+	}
+	stdin, err := os.ReadFile(filepath.Join(directory, "codex-completion-stdin"))
+	if err != nil || string(stdin) != "只回复 Codex OK" {
+		t.Fatalf("stdin=%q err=%v", stdin, err)
+	}
+}

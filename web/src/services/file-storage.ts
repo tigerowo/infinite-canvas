@@ -28,13 +28,13 @@ export async function uploadAssetMediaFile(file: File, prefix = "asset-media"): 
     try {
         return await uploadMediaBlobToServer(file, file.name || `${prefix}-${nanoid()}`);
     } catch (error) {
-        if (error instanceof Error && !error.message.includes("服务端对象存储未启用")) throw error;
+        if (error instanceof Error && !error.message.includes("服务端对象存储未启用") && !error.message.includes("对象存储预算保护已触发")) throw error;
         return uploadMediaFile(file, prefix);
     }
 }
 
 export async function downloadRemoteMedia(url: string) {
-    const response = await fetch(getProxyUrl(url));
+    const response = await fetch(getProxyUrl(url, "/api/proxy-media"));
     if (!response.ok) throw new Error(`媒体下载失败：${response.status}`);
     const blob = await response.blob();
     if (blob.type.includes("json") || blob.type.startsWith("text/")) {
@@ -53,7 +53,12 @@ export async function downloadRemoteMedia(url: string) {
 
 export async function uploadRemoteMediaToServer(url: string, filename: string): Promise<UploadedFile> {
     const blob = await downloadRemoteMedia(url);
-    return uploadMediaBlobToServer(blob, filename);
+    try {
+        return await uploadMediaBlobToServer(blob, filename);
+    } catch (error) {
+        if (error instanceof Error && error.message.includes("对象存储预算保护已触发")) return uploadMediaFile(blob, "remote-media");
+        throw error;
+    }
 }
 
 async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<UploadedFile> {

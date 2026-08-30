@@ -25,7 +25,7 @@ var providerAPIProtocols = map[string]bool{
 	"apimart": true, "kie": true, "mimo": true, "runninghub": true, "volcengine": true,
 }
 
-var providerCLIProtocols = map[string]bool{"codex": true, "gemini-cli": true, "jimeng": true}
+var providerCLIProtocols = map[string]bool{"codex": true, "codex-image-emergency": true, "gpt-image-2": true, "gemini-cli": true, "jimeng": true}
 var providerCapabilities = map[string]bool{"text": true, "image": true, "video": true, "audio": true}
 
 type ProviderInput struct {
@@ -198,17 +198,7 @@ func SaveCurrentUserProvider(ctx context.Context, input ProviderInput) (Provider
 	}
 	item.WorkingDirectory = input.WorkingDirectory
 	item.UpdatedAt = now()
-	if !item.Enabled {
-		item.ConnectionStatus = model.ProviderStatusDisabled
-		item.StatusMessage = "渠道已禁用"
-	} else if item.Kind == model.ProviderKindCLI {
-		item.ConnectionStatus = model.ProviderStatusUnavailable
-		item.StatusMessage = "本地 CLI helper 尚未连接"
-	} else if changedConnection || item.ConnectionStatus == model.ProviderStatusDisabled {
-		item.ConnectionStatus = model.ProviderStatusUntested
-		item.StatusMessage = ""
-		item.LastCheckedAt = ""
-	}
+	updateSavedProviderConnectionStatus(&item, changedConnection)
 	item, err = repository.SaveProvider(item)
 	if err != nil {
 		return ProviderView{}, err
@@ -220,6 +210,27 @@ func SaveCurrentUserProvider(ctx context.Context, input ProviderInput) (Provider
 		item.IsDefault = true
 	}
 	return providerView(item)
+}
+
+func updateSavedProviderConnectionStatus(item *model.Provider, changedConnection bool) {
+	if !item.Enabled {
+		item.ConnectionStatus = model.ProviderStatusDisabled
+		item.StatusMessage = "渠道已禁用"
+		return
+	}
+	if item.Kind == model.ProviderKindCLI {
+		if changedConnection || item.ConnectionStatus == model.ProviderStatusDisabled {
+			item.ConnectionStatus = model.ProviderStatusUnavailable
+			item.StatusMessage = "本地 CLI helper 尚未连接"
+			item.LastCheckedAt = ""
+		}
+		return
+	}
+	if changedConnection || item.ConnectionStatus == model.ProviderStatusDisabled {
+		item.ConnectionStatus = model.ProviderStatusUntested
+		item.StatusMessage = ""
+		item.LastCheckedAt = ""
+	}
 }
 
 func DeleteCurrentUserProvider(ctx context.Context, id string) error {
@@ -465,8 +476,20 @@ func applyTrustedCLIProviderModels(saved model.Provider, input *ProviderInput) e
 }
 
 func trustedCLIProviderCapabilities(protocol string) []string {
+	if protocol == "codex" {
+		return []string{"text"}
+	}
 	if protocol == "gemini-cli" {
 		return []string{"text"}
+	}
+	if protocol == "gpt-image-2" {
+		return []string{"image"}
+	}
+	if protocol == "codex-image-emergency" {
+		return []string{"image"}
+	}
+	if protocol == "jimeng" {
+		return []string{"image", "video"}
 	}
 	return nil
 }

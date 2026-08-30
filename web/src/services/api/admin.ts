@@ -277,6 +277,13 @@ export type AdminPrivateSettings = {
             cron: string;
         };
         capacityLimitBytes: number;
+        operationBudget: {
+            enabled: boolean;
+            classALimit: number;
+            classBLimit: number;
+            warningPercent: number;
+            stopPercent: number;
+        };
     };
 };
 
@@ -344,6 +351,15 @@ export type StorageCapacityResult = {
     overLimit: boolean;
     checkedAt: string;
     providerName: string;
+    period: string;
+    classAOperations: number;
+    classBOperations: number;
+    classALimit: number;
+    classBLimit: number;
+    warningPercent: number;
+    stopPercent: number;
+    writeProtected: boolean;
+    usageSource: "local_estimate";
 };
 
 export async function measureAdminStorageProvider(token: string, payload: { index: number; provider: AdminStorageProvider }) {

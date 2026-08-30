@@ -35,13 +35,17 @@ const (
 )
 
 const (
-	cliCompanionActionVersion         = "version"
-	cliCompanionActionAuthStatus      = "auth-status"
-	cliCompanionActionLoginStart      = "login-start"
-	cliCompanionActionProbeStart      = "model-probe-start"
-	cliCompanionActionProbeStatus     = "model-probe-status"
-	cliCompanionActionProbeCancel     = "model-probe-cancel"
-	cliCompanionActionCompletionStart = "completion-start"
+	cliCompanionActionVersion          = "version"
+	cliCompanionActionAuthStatus       = "auth-status"
+	cliCompanionActionAccountSummary   = "account-summary"
+	cliCompanionActionLoginStart       = "login-start"
+	cliCompanionActionProbeStart       = "model-probe-start"
+	cliCompanionActionProbeStatus      = "model-probe-status"
+	cliCompanionActionProbeCancel      = "model-probe-cancel"
+	cliCompanionActionCompletionStart  = "completion-start"
+	cliCompanionActionGenerationStart  = "generation-start"
+	cliCompanionActionGenerationStatus = "generation-status"
+	cliCompanionActionGenerationCancel = "generation-cancel"
 )
 
 const (
@@ -55,13 +59,17 @@ var cliCompanionNoncePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32,64}$`)
 var cliCompanionTaskPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{32}$`)
 
 type cliCompanionActionRequest struct {
-	Action     string `json:"action"`
-	UserID     string `json:"userId"`
-	ProviderID string `json:"providerId"`
-	Protocol   string `json:"protocol"`
-	TaskID     string `json:"taskId,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Prompt     string `json:"prompt,omitempty"`
+	Action         string `json:"action"`
+	UserID         string `json:"userId"`
+	ProviderID     string `json:"providerId"`
+	Protocol       string `json:"protocol"`
+	TaskID         string `json:"taskId,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Prompt         string `json:"prompt,omitempty"`
+	GenerationType string `json:"generationType,omitempty"`
+	Ratio          string `json:"ratio,omitempty"`
+	Resolution     string `json:"resolution,omitempty"`
+	Duration       int    `json:"duration,omitempty"`
 }
 
 type cliCompanionActionResponse struct {
@@ -117,7 +125,7 @@ func (handler *cliCompanionHandler) ServeHTTP(w http.ResponseWriter, r *http.Req
 		return
 	}
 	executionContext := r.Context()
-	if input.Action == cliCompanionActionLoginStart || input.Action == cliCompanionActionProbeStart || input.Action == cliCompanionActionCompletionStart {
+	if input.Action == cliCompanionActionLoginStart || input.Action == cliCompanionActionProbeStart || input.Action == cliCompanionActionCompletionStart || input.Action == cliCompanionActionGenerationStart {
 		executionContext = handler.lifetime
 	}
 	result, status := handler.execute(executionContext, input)
@@ -242,9 +250,9 @@ func requestCLICompanionInput(parent context.Context, input cliCompanionActionRe
 func validCLICompanionResult(input cliCompanionActionRequest, result CLIHelperResult) bool {
 	switch input.Action {
 	case cliCompanionActionVersion:
-		return result.AuthStatus == "" && result.ActionStatus == "" && !hasCLIModelProbeResult(result) && validCLIResultModels(result.Models)
+		return result.Account == nil && result.AuthStatus == "" && result.ActionStatus == "" && !hasCLIModelProbeResult(result) && validCLIResultModels(result.Models)
 	case cliCompanionActionAuthStatus:
-		if result.Version != "" || result.ActionStatus != "" || hasCLIModelProbeResult(result) {
+		if result.Account != nil || result.Version != "" || result.ActionStatus != "" || hasCLIModelProbeResult(result) {
 			return false
 		}
 		switch result.AuthStatus {
@@ -253,8 +261,10 @@ func validCLICompanionResult(input cliCompanionActionRequest, result CLIHelperRe
 		default:
 			return false
 		}
+	case cliCompanionActionAccountSummary:
+		return input.Protocol == "jimeng" && (result.Account == nil || validCLIAccountSummary(*result.Account)) && result.Version == "" && result.AuthStatus == "" && result.ActionStatus == "" && len(result.Models) == 0 && !hasCLIModelProbeResult(result)
 	case cliCompanionActionLoginStart:
-		if result.Version != "" || result.AuthStatus != "" || hasCLIModelProbeResult(result) {
+		if result.Account != nil || result.Version != "" || result.AuthStatus != "" || hasCLIModelProbeResult(result) {
 			return false
 		}
 		switch result.ActionStatus {
@@ -267,7 +277,9 @@ func validCLICompanionResult(input cliCompanionActionRequest, result CLIHelperRe
 		return validCLIModelProbeResult(result) && ((result.TaskStatus == "" && result.TaskID == "" && result.Output == "") || (result.TaskStatus == "running" && cliCompanionTaskPattern.MatchString(result.TaskID) && result.Output == ""))
 	case cliCompanionActionCompletionStart:
 		return validCLIModelProbeResult(result) && ((result.TaskStatus == "" && result.TaskID == "" && result.Output == "") || (result.TaskStatus == "running" && cliCompanionTaskPattern.MatchString(result.TaskID) && result.Output == ""))
-	case cliCompanionActionProbeStatus, cliCompanionActionProbeCancel:
+	case cliCompanionActionGenerationStart:
+		return validCLIModelProbeResult(result) && ((result.TaskStatus == "" && result.TaskID == "" && result.Output == "") || (result.TaskStatus == "running" && cliCompanionTaskPattern.MatchString(result.TaskID) && result.Output == ""))
+	case cliCompanionActionProbeStatus, cliCompanionActionProbeCancel, cliCompanionActionGenerationStatus, cliCompanionActionGenerationCancel:
 		return validCLIModelProbeResult(result) && result.TaskID == input.TaskID && ((result.TaskStatus == "succeeded" && result.Output != "") || (result.TaskStatus != "succeeded" && result.Output == ""))
 	default:
 		return false
@@ -279,7 +291,7 @@ func hasCLIModelProbeResult(result CLIHelperResult) bool {
 }
 
 func validCLIModelProbeResult(result CLIHelperResult) bool {
-	if result.Version != "" || result.AuthStatus != "" || result.ActionStatus != "" || len(result.Output) > cliModelProbeOutputLimit || len(result.Models) != 0 {
+	if result.Account != nil || result.Version != "" || result.AuthStatus != "" || result.ActionStatus != "" || len(result.Output) > cliModelProbeOutputLimit || len(result.Models) != 0 {
 		return false
 	}
 	switch result.TaskStatus {
@@ -304,7 +316,7 @@ func validCLIResultModels(models []string) bool {
 
 func validCLICompanionAction(action string) bool {
 	switch action {
-	case cliCompanionActionVersion, cliCompanionActionAuthStatus, cliCompanionActionLoginStart, cliCompanionActionProbeStart, cliCompanionActionProbeStatus, cliCompanionActionProbeCancel, cliCompanionActionCompletionStart:
+	case cliCompanionActionVersion, cliCompanionActionAuthStatus, cliCompanionActionAccountSummary, cliCompanionActionLoginStart, cliCompanionActionProbeStart, cliCompanionActionProbeStatus, cliCompanionActionProbeCancel, cliCompanionActionCompletionStart, cliCompanionActionGenerationStart, cliCompanionActionGenerationStatus, cliCompanionActionGenerationCancel:
 		return true
 	default:
 		return false
@@ -316,14 +328,16 @@ func validCLICompanionActionRequest(input cliCompanionActionRequest) bool {
 		return false
 	}
 	switch input.Action {
-	case cliCompanionActionProbeStatus, cliCompanionActionProbeCancel:
-		return cliCompanionTaskPattern.MatchString(input.TaskID) && input.Model == "" && input.Prompt == ""
+	case cliCompanionActionProbeStatus, cliCompanionActionProbeCancel, cliCompanionActionGenerationStatus, cliCompanionActionGenerationCancel:
+		return cliCompanionTaskPattern.MatchString(input.TaskID) && input.Model == "" && input.Prompt == "" && input.GenerationType == "" && input.Ratio == "" && input.Resolution == "" && input.Duration == 0
 	case cliCompanionActionCompletionStart:
-		return input.TaskID == "" && cliModelNamePattern.MatchString(input.Model) && len(input.Prompt) > 0 && len(input.Prompt) <= cliCompletionPromptLimit && !strings.ContainsRune(input.Prompt, '\x00')
+		return input.TaskID == "" && cliModelNamePattern.MatchString(input.Model) && len(input.Prompt) > 0 && len(input.Prompt) <= cliCompletionPromptLimit && !strings.ContainsRune(input.Prompt, '\x00') && input.GenerationType == "" && input.Ratio == "" && input.Resolution == "" && input.Duration == 0
+	case cliCompanionActionGenerationStart:
+		return validCLIGenerationRequest(input)
 	case cliCompanionActionProbeStart:
-		return input.TaskID == "" && input.Prompt == "" && (input.Model == "" || cliModelNamePattern.MatchString(input.Model))
+		return input.TaskID == "" && input.Prompt == "" && (input.Model == "" || cliModelNamePattern.MatchString(input.Model)) && input.GenerationType == "" && input.Ratio == "" && input.Resolution == "" && input.Duration == 0
 	default:
-		return input.TaskID == "" && input.Model == "" && input.Prompt == ""
+		return input.TaskID == "" && input.Model == "" && input.Prompt == "" && input.GenerationType == "" && input.Ratio == "" && input.Resolution == "" && input.Duration == 0
 	}
 }
 

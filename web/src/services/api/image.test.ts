@@ -42,4 +42,28 @@ describe("Chat image responses", () => {
         expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-antigravity/cli/completions");
         expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ model: "gemini-3.5-flash-low", prompt: "user: 只回复 OK" });
     });
+
+    it("routes a canvas text node through the selected Codex CLI connection", async () => {
+        vi.useFakeTimers();
+        useUserStore.setState({ token: "test-token" });
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-codex", taskStatus: "running", message: "running" } }))
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-codex", taskStatus: "succeeded", output: "Codex OK", message: "success" } }));
+        const config = {
+            ...defaultConfig,
+            model: "codex-cli-default",
+            textModel: "codex-cli-default",
+            textChannelId: "provider-codex",
+            localChannels: [{ id: "provider-codex", protocol: "codex" as const, name: "Codex CLI", baseUrl: "", apiKey: "", models: ["codex-cli-default"], capabilities: ["text" as const], managed: true, enabled: true }],
+        };
+        const onDelta = vi.fn();
+
+        const pending = requestImageQuestion(config, [{ role: "user", content: "只回复 Codex OK" }], onDelta);
+        await vi.advanceTimersByTimeAsync(2500);
+        await expect(pending).resolves.toBe("Codex OK");
+        expect(onDelta).toHaveBeenCalledWith("Codex OK");
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-codex/cli/completions");
+        expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ model: "codex-cli-default", prompt: "user: 只回复 Codex OK" });
+    });
 });

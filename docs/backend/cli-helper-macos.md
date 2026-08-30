@@ -22,13 +22,23 @@ Mac CLI helper 使用两套独立信任机制：
 scripts/macos/install-cli-helper-dev.sh
 ```
 
-开发安装器只接受零参数，使用当前仓库源码和当前 `PATH` 中的 `go`、`codex`；如果同时检测到官方 Antigravity `agy`，也会纳入本机可信清单：
+订阅生图主路径还需要先独立安装第三方 helper，并在安装前自行核对其源码和版本。项目安装器不会代为联网安装，也不会自动升级它：
+
+```bash
+npm install --global gpt-image-2-skill
+gpt-image-2-skill --version
+scripts/macos/install-cli-helper-dev.sh
+```
+
+如果没有安装 `gpt-image-2-skill`，开发安装仍可完成 Codex 文本与应急生图清单，但连接中心的 `GPT Image 2（订阅登录态）` 检测会明确显示不可用。安装或升级 helper 后必须重新运行开发安装器，以固定新的绝对路径和 SHA-256。
+
+开发安装器只接受零参数，使用当前仓库源码和当前 `PATH` 中的 `go`、`codex`；如果同时检测到 `gpt-image-2-skill`、官方 Antigravity `agy` 或即梦 `dreamina`，也会分别纳入本机可信清单：
 
 - 只构建当前 Mac 架构，并使用本机 ad-hoc 签名；不会伪造 Developer ID、Team ID、Gatekeeper 或 Apple 公证通过。
-- 在安装期间生成临时 Ed25519 私钥和 30 天有效清单，只允许当前解析到的 Codex，以及可选的官方 Antigravity `agy` 二进制 SHA-256；私钥不会保留，公钥和清单使用 `0600` 权限安装。
+- 在安装期间生成临时 Ed25519 私钥和 30 天有效清单，只允许当前解析到的 Codex、可选 GPT Image 2 helper、官方 Antigravity `agy` 与即梦 CLI 二进制 SHA-256；Codex 文本和 Codex 应急生图使用不同协议项但绑定同一受控二进制。私钥不会保留，公钥和清单使用 `0600` 权限安装。
 - 使用独立目录 `~/Library/Application Support/Infinite Canvas/cli-helper-dev`、独立 LaunchAgent `com.tigerowo.infinite-canvas.cli-helper.dev` 和独立日志，不覆盖正式安装；Unix Socket 位于权限为 `0700` 的短路径 `~/.infinite-canvas/cli-helper-dev/helper.sock`，避免触及 macOS Socket 路径长度上限。
 - 首次安装生成随机共享密钥，重复安装保留该密钥；Socket、公钥、清单、共享密钥、环境文件和 LaunchAgent 均只允许当前用户访问。
-- Codex 或 Antigravity CLI 更新、安装路径变化或清单到期后必须重新运行安装器，重新计算二进制哈希并生成新清单。
+- Codex、GPT Image 2 helper、Antigravity 或即梦 CLI 更新、安装路径变化或清单到期后必须重新运行安装器，重新计算二进制哈希并生成新清单。
 
 开发安装完成后，按脚本提示加载：
 

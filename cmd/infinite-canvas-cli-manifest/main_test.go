@@ -33,7 +33,12 @@ func TestGenerateKeyAndSignManifest(t *testing.T) {
 	if err := generateSigningKey(privateKeyPath, publicKeyPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := signManifest(privateKeyPath, manifestPath, time.Now().Add(time.Hour).UTC().Format(time.RFC3339), []string{"codex=codex=" + executablePath}); err != nil {
+	entries := []string{
+		"codex=codex=" + executablePath,
+		"codex-image-emergency=codex=" + executablePath,
+		"gpt-image-2=gpt-image-2-skill=" + executablePath,
+	}
+	if err := signManifest(privateKeyPath, manifestPath, time.Now().Add(time.Hour).UTC().Format(time.RFC3339), entries); err != nil {
 		t.Fatal(err)
 	}
 	publicKeyText, err := os.ReadFile(publicKeyPath)
@@ -55,6 +60,10 @@ func TestGenerateKeyAndSignManifest(t *testing.T) {
 	payload, err := base64.StdEncoding.DecodeString(envelope.Payload)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var manifest manifestPayload
+	if json.Unmarshal(payload, &manifest) != nil || len(manifest.Executables) != len(entries) {
+		t.Fatal("manifest does not preserve controlled subscription image entries")
 	}
 	signature, err := base64.StdEncoding.DecodeString(envelope.Signature)
 	if err != nil || !ed25519.Verify(ed25519.PublicKey(publicKey), payload, signature) {

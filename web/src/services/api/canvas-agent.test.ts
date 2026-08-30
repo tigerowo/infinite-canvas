@@ -58,4 +58,28 @@ describe("canvas Antigravity CLI adapter", () => {
         expect(startBody).not.toHaveProperty("command");
         expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/v1/providers/provider-antigravity/cli/model-probe/task-123/status");
     });
+
+    it("routes the canvas Agent through the selected Codex CLI default model", async () => {
+        vi.useFakeTimers();
+        useUserStore.setState({ token: "test-token" });
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { available: true, protocol: "codex", taskId: "task-codex", taskStatus: "running", message: "running" }, msg: "" }))
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { available: true, protocol: "codex", taskId: "task-codex", taskStatus: "succeeded", output: "Codex 画布 Agent 已响应", message: "success" }, msg: "" }));
+        const config = {
+            ...defaultConfig,
+            model: "codex-cli-default",
+            textModel: "codex-cli-default",
+            textChannelId: "provider-codex",
+            localChannels: [{ id: "provider-codex", protocol: "codex" as const, name: "Codex CLI", baseUrl: "", apiKey: "", models: ["codex-cli-default"], capabilities: ["text" as const], managed: true, enabled: true }],
+        };
+
+        const pending = requestCanvasAgentTurn({ config, systemPrompt: "画布规则", messages: [{ role: "user", content: "只回复测试结果" }], tools: [], allowTools: false });
+        await vi.advanceTimersByTimeAsync(2500);
+        await expect(pending).resolves.toMatchObject({ content: "Codex 画布 Agent 已响应", toolCalls: [], usedJsonFallback: true });
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-codex/cli/completions");
+        const startBody = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body));
+        expect(startBody).toMatchObject({ model: "codex-cli-default" });
+        expect(startBody).not.toHaveProperty("command");
+    });
 });

@@ -120,6 +120,15 @@ type PrivateStorageSetting struct {
 	RoundRobinCursor        int                         `json:"roundRobinCursor"`
 	CapacityCheck           StorageCapacityCheckSetting `json:"capacityCheck"`
 	CapacityLimitBytes      int64                       `json:"capacityLimitBytes"`
+	OperationBudget         StorageOperationBudget      `json:"operationBudget"`
+}
+
+type StorageOperationBudget struct {
+	Enabled        *bool `json:"enabled"`
+	ClassALimit    int64 `json:"classALimit"`
+	ClassBLimit    int64 `json:"classBLimit"`
+	WarningPercent int   `json:"warningPercent"`
+	StopPercent    int   `json:"stopPercent"`
 }
 
 type StorageProvider struct {

@@ -118,6 +118,14 @@ stdout_xml="$(printf '%s' "$logs_dir/cli-helper.log" | xml_escape)"
 stderr_xml="$(printf '%s' "$logs_dir/cli-helper-error.log" | xml_escape)"
 path_value="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:/Applications/ChatGPT.app/Contents/Resources:$HOME/.local/bin:$HOME/.npm/bin:$HOME/.bun/bin:$HOME/.codex/bin"
 path_xml="$(printf '%s' "$path_value" | xml_escape)"
+proxy_xml=""
+for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+    proxy_value="$(/usr/bin/printenv "$proxy_name" 2>/dev/null || true)"
+    if [[ "$proxy_value" =~ ^https?://(localhost|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[::1\]):[0-9]{1,5}/?$ ]]; then
+        proxy_value_xml="$(printf '%s' "$proxy_value" | xml_escape)"
+        proxy_xml+="<key>$proxy_name</key><string>$proxy_value_xml</string>"$'\n'
+    fi
+done
 
 /bin/cat > "$tmp_dir/agent.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -132,7 +140,7 @@ path_xml="$(printf '%s' "$path_value" | xml_escape)"
 <key>CLI_HELPER_SHARED_SECRET_FILE</key><string>$secret_xml</string>
 <key>CLI_HELPER_SOCKET</key><string>$socket_xml</string>
 <key>PATH</key><string>$path_xml</string>
-</dict>
+$proxy_xml</dict>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
 <key>ProcessType</key><string>Interactive</string>

@@ -37,6 +37,10 @@ export function checkCLIProviderAuth(token: string, id: string) {
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/auth-status`, {}, token);
 }
 
+export function fetchCLIAccountSummary(token: string, id: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/account`, {}, token);
+}
+
 export function startCLIProviderLogin(token: string, id: string) {
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/login`, { confirmed: true }, token);
 }
@@ -55,6 +59,18 @@ export function queryCLIModelProbe(token: string, id: string, taskId: string) {
 
 export function cancelCLIModelProbe(token: string, id: string, taskId: string) {
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/model-probe/${encodeURIComponent(taskId)}/cancel`, {}, token);
+}
+
+export function startCLIGeneration(token: string, id: string, input: { generationType: "image" | "video"; model: string; prompt: string; ratio: string; resolution: string; duration: number }) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations`, { confirmed: true, ...input }, token);
+}
+
+export function queryCLIGeneration(token: string, id: string, taskId: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations/${encodeURIComponent(taskId)}/status`, {}, token);
+}
+
+export function cancelCLIGeneration(token: string, id: string, taskId: string) {
+    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations/${encodeURIComponent(taskId)}/cancel`, {}, token);
 }
 
 export function submitRunningHubTask(token: string, id: string, reference: string, nodeInfoList: RunningHubNodeInfo[]) {

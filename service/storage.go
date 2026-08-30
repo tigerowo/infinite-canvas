@@ -64,20 +64,97 @@ type storageObjectStream struct {
 
 // StorageCapacityResult 存储容量统计结果。
 type StorageCapacityResult struct {
-	Bytes        int64  `json:"bytes"`
-	LimitBytes   int64  `json:"limitBytes"`
-	OverLimit    bool   `json:"overLimit"`
-	CheckedAt    string `json:"checkedAt"`
-	ProviderName string `json:"providerName"`
+	Bytes            int64  `json:"bytes"`
+	LimitBytes       int64  `json:"limitBytes"`
+	OverLimit        bool   `json:"overLimit"`
+	CheckedAt        string `json:"checkedAt"`
+	ProviderName     string `json:"providerName"`
+	Period           string `json:"period"`
+	ClassAOperations int64  `json:"classAOperations"`
+	ClassBOperations int64  `json:"classBOperations"`
+	ClassALimit      int64  `json:"classALimit"`
+	ClassBLimit      int64  `json:"classBLimit"`
+	WarningPercent   int    `json:"warningPercent"`
+	StopPercent      int    `json:"stopPercent"`
+	WriteProtected   bool   `json:"writeProtected"`
+	UsageSource      string `json:"usageSource"`
 }
 
 const defaultStorageCapacityLimitBytes int64 = 9 * 1024 * 1024 * 1024
+const storageBudgetProtectedMessage = "对象存储预算保护已触发，已停止新的云端写入"
 
 var (
 	storageCapacityCron *cron.Cron
 	storageCapacityOnce sync.Once
 	storageCapacityMu   sync.Mutex
 )
+
+func storageUsagePeriod() string {
+	return time.Now().Format("2006-01")
+}
+
+func storageBudgetEnabled(budget model.StorageOperationBudget) bool {
+	return budget.Enabled != nil && *budget.Enabled
+}
+
+func storageBudgetThreshold(limit int64, percent int) int64 {
+	if limit <= 0 || percent <= 0 {
+		return 0
+	}
+	return limit * int64(percent) / 100
+}
+
+func recordStorageOperation(provider model.StorageProvider, operationClass string) {
+	if provider.Type != model.StorageProviderTypeS3 {
+		return
+	}
+	if err := repository.IncrementStorageUsage(provider.ID, storageUsagePeriod(), operationClass, now()); err != nil {
+		log.Printf("storage operation usage record failed provider=%s class=%s err=%v", provider.Name, operationClass, err)
+	}
+}
+
+func ensureStorageWriteBudget(provider model.StorageProvider, storage model.PrivateStorageSetting) error {
+	if provider.Type != model.StorageProviderTypeS3 {
+		return nil
+	}
+	storage = normalizePrivateStorageSetting(storage)
+	if provider.CapacityExceeded || provider.CapacityBytes >= storage.CapacityLimitBytes {
+		return errors.New(storageBudgetProtectedMessage + "：容量已达到保护线")
+	}
+	budget := storage.OperationBudget
+	if !storageBudgetEnabled(budget) {
+		return nil
+	}
+	usage, err := repository.GetStorageUsage(provider.ID, storageUsagePeriod())
+	if err != nil {
+		return errors.New(storageBudgetProtectedMessage + "：无法确认本机操作计数")
+	}
+	if usage.ClassAOperations >= storageBudgetThreshold(budget.ClassALimit, budget.StopPercent) {
+		return errors.New(storageBudgetProtectedMessage + "：A 类操作已达到保护线")
+	}
+	return nil
+}
+
+func storageCapacityResult(provider model.StorageProvider, storage model.PrivateStorageSetting, bytes int64, checkedAt string) (StorageCapacityResult, error) {
+	storage = normalizePrivateStorageSetting(storage)
+	budget := storage.OperationBudget
+	usage, err := repository.GetStorageUsage(provider.ID, storageUsagePeriod())
+	if err != nil {
+		return StorageCapacityResult{}, err
+	}
+	limit := storage.CapacityLimitBytes
+	overLimit := bytes >= limit
+	writeProtected := overLimit
+	if storageBudgetEnabled(budget) {
+		writeProtected = writeProtected || usage.ClassAOperations >= storageBudgetThreshold(budget.ClassALimit, budget.StopPercent)
+	}
+	return StorageCapacityResult{
+		Bytes: bytes, LimitBytes: limit, OverLimit: overLimit, CheckedAt: checkedAt, ProviderName: provider.Name,
+		Period: usage.Period, ClassAOperations: usage.ClassAOperations, ClassBOperations: usage.ClassBOperations,
+		ClassALimit: budget.ClassALimit, ClassBLimit: budget.ClassBLimit, WarningPercent: budget.WarningPercent,
+		StopPercent: budget.StopPercent, WriteProtected: writeProtected, UsageSource: "local_estimate",
+	}, nil
+}
 
 // HasAdminStorageProvider 检查管理员是否配置了有效的对象存储。
 func HasAdminStorageProvider(storage model.PrivateStorageSetting) bool {
@@ -217,6 +294,9 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 			return UploadedStorageObject{}, errors.New("服务端对象存储未启用")
 		}
 	}
+	if err := ensureStorageWriteBudget(provider, storage); err != nil {
+		return UploadedStorageObject{}, err
+	}
 	objectID := uuid.NewString()
 	ext := path.Ext(filename)
 	if ext == "" {
@@ -354,7 +434,8 @@ func MeasureUserStorageProvider(ctx context.Context, providerInput StorageObject
 		return StorageCapacityResult{}, err
 	}
 	checkedAt := now()
-	return StorageCapacityResult{Bytes: bytes, LimitBytes: defaultStorageCapacityLimitBytes, OverLimit: bytes >= defaultStorageCapacityLimitBytes, CheckedAt: checkedAt, ProviderName: provider.Name}, nil
+	storage := normalizePrivateStorageSetting(model.PrivateStorageSetting{})
+	return storageCapacityResult(provider, storage, bytes, checkedAt)
 }
 
 // MeasureAdminStorageProvider 管理员统计存储容量。
@@ -392,15 +473,12 @@ func MeasureAdminStorageProvider(ctx context.Context, index int, providerInput *
 	provider.CapacityBytes = bytes
 	provider.CapacityCheckedAt = checkedAt
 	provider.CapacityExceeded = bytes >= limit
-	if provider.CapacityExceeded {
-		provider.Enabled = false
-	}
 	storage.Providers[index] = provider
 	settings.Private.Storage = storage
 	if _, err := repository.SaveSettings(settings, now()); err != nil {
 		return StorageCapacityResult{}, err
 	}
-	return StorageCapacityResult{Bytes: bytes, LimitBytes: limit, OverLimit: provider.CapacityExceeded, CheckedAt: checkedAt, ProviderName: provider.Name}, nil
+	return storageCapacityResult(provider, storage, bytes, checkedAt)
 }
 
 // MeasureAllEnabledStorageProviders 统计所有启用的存储提供商的容量。
@@ -425,9 +503,6 @@ func MeasureAllEnabledStorageProviders() {
 		provider.CapacityBytes = bytes
 		provider.CapacityCheckedAt = now()
 		provider.CapacityExceeded = bytes >= storage.CapacityLimitBytes
-		if provider.CapacityExceeded {
-			provider.Enabled = false
-		}
 		storage.Providers[i] = provider
 		changed = true
 	}
@@ -667,6 +742,7 @@ func putS3Object(provider model.StorageProvider, objectKey string, contentType s
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
 		return fmt.Errorf("对象存储上传失败: %s %s", response.Status, string(body))
 	}
+	recordStorageOperation(provider, "a")
 	return nil
 }
 
@@ -687,6 +763,7 @@ func getS3ObjectStream(provider model.StorageProvider, objectKey string, rangeHe
 		_ = response.Body.Close()
 		return storageObjectStream{}, fmt.Errorf("对象读取失败: %s", response.Status)
 	}
+	recordStorageOperation(provider, "b")
 	return httpStorageObjectStream(response, true), nil
 }
 
@@ -742,6 +819,7 @@ func measureS3Provider(ctx context.Context, provider model.StorageProvider) (int
 			_ = response.Body.Close()
 			return 0, fmt.Errorf("对象存储容量统计失败: %s %s", response.Status, string(body))
 		}
+		recordStorageOperation(provider, "a")
 		body, readErr := io.ReadAll(response.Body)
 		_ = response.Body.Close()
 		if readErr != nil {

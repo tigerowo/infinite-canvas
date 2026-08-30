@@ -32,6 +32,7 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `storage_usages`
 - `providers`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
@@ -129,6 +130,20 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `created_by` | string | 创建用户 ID |
 | `created_at` | string | 创建时间 |
 | `deleted_at` | string | 预留字段；当前删除链路直接删除索引记录 |
+
+### storage_usages
+
+S3/R2 月度操作预算的本机计数表。只记录由 Infinite Canvas 后端实际发起并获得成功响应的请求，不包含公开域名直连、Cloudflare 控制台或其他客户端产生的操作，因此用于本机预算保护和趋势预警，不作为供应商账单依据。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `provider_id` | string | 存储 Provider ID，与 `period` 组成联合主键 |
+| `period` | string | 自然月，格式 `YYYY-MM` |
+| `class_a_operations` | number | 上传和 S3 列表分页等 A 类操作累计值 |
+| `class_b_operations` | number | 后端代理读取等 B 类操作累计值 |
+| `updated_at` | string | 最近一次计数更新时间 |
+
+容量或 A 类操作达到配置的保护比例后，后端停止新的 S3/R2 写入；已有对象读取与免费删除保持可用。B 类操作达到预警线时只提示，不主动切断历史素材。
 
 ### prompts
 
