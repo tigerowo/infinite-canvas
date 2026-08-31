@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -142,7 +143,7 @@ func TestExecuteAntigravityCompletionUsesFixedHeadlessArguments(t *testing.T) {
 	cliAllowedRoots = func() []string { return []string{directory, resolvedDirectory} }
 	t.Cleanup(func() { cliAllowedRoots = previousRoots })
 	executable := filepath.Join(directory, "agy")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/agy-args\"\nprintf '{\"status\":\"SUCCESS\",\"response\":\"canvas ok\"}'\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/agy-args\"\nprintf 'canvas ok\\n'\n"
 	if err := os.WriteFile(executable, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +192,29 @@ func TestExecuteAntigravityCompletionUsesFixedHeadlessArguments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--print", "只回复 OK", "--output-format", "json", "--model", "gemini-3.5-flash-low", "--effort", "low", "--print-timeout", "90s", "--disable-slash-commands", "--mode", "plan", "--sandbox"}
+	want := []string{"--print", "只回复 OK", "--output-format", "text", "--model", "gemini-3.5-flash-low", "--effort", "low", "--print-timeout", "90s", "--disable-slash-commands", "--mode", "plan", "--sandbox"}
 	if string(args) != strings.Join(want, "\n")+"\n" {
 		t.Fatalf("args=%q", args)
+	}
+}
+
+func TestParseAntigravityCompletionAcceptsTextOutput(t *testing.T) {
+	response, err := parseAntigravityCompletion("canvas ok\n")
+	if err != nil || response != "canvas ok" {
+		t.Fatalf("response=%q error=%v", response, err)
+	}
+}
+
+func TestAntigravityCompletionFailureDiagnosticIsRedacted(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(os.TempDir(), "antigravity-sensitive-workdir")
+	diagnostic := safeAntigravityCompletionDiagnostic(`{"status":"failed","error":"upstream failed token=secret-value at `+home+` and `+directory+`"}`, "", directory, "private prompt", errors.New("exit status 1"))
+	message := antigravityCompletionFailureMessage(diagnostic)
+	if strings.Contains(message, "secret-value") || strings.Contains(message, home) || strings.Contains(message, directory) || !strings.Contains(message, "[redacted]") {
+		t.Fatalf("message=%q", message)
 	}
 }
 

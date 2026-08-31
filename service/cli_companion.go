@@ -32,6 +32,7 @@ const (
 	cliCompanionAuthWindow    = 30 * time.Second
 	cliCompanionNonceTTL      = 2 * time.Minute
 	cliCompanionNonceLimit    = 4096
+	CLICompanionHTTPTimeout   = 20 * time.Second
 )
 
 const (
@@ -222,7 +223,7 @@ func requestCLICompanionInput(parent context.Context, input cliCompanionActionRe
 	defer transport.CloseIdleConnections()
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   15 * time.Second,
+		Timeout:   CLICompanionHTTPTimeout,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

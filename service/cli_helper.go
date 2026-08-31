@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	cliHelperOutputLimit   = 16 * 1024
-	cliHelperManifestLimit = 64 * 1024
-	cliHelperBinaryLimit   = int64(256 * 1024 * 1024)
-	cliHelperLoginTimeout  = 10 * time.Minute
+	cliHelperOutputLimit           = 16 * 1024
+	cliHelperManifestLimit         = 64 * 1024
+	cliHelperBinaryLimit           = int64(256 * 1024 * 1024)
+	cliHelperLoginTimeout          = 10 * time.Minute
+	cliAntigravityModelListTimeout = 15 * time.Second
 )
 
 var (
@@ -314,7 +315,10 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 			return result, model.ProviderStatusUnavailable
 		}
 		result.Models = models
-		result.Message = "Antigravity CLI 检测成功，已读取模型列表"
+		result.Message = "Antigravity CLI 检测成功，已读取文本模型"
+		if userLocalChannelHasModel(models, cliAntigravityImageModel) {
+			result.Message += "并启用 Nano Banana 2 生图工具"
+		}
 		return result, model.ProviderStatusConnected
 	}
 	result.Message = "CLI 检测成功"
@@ -468,6 +472,9 @@ func executeCLICompanionAuthStatus(parent context.Context, protocol string) (CLI
 		result.AuthStatus = "authenticated"
 		result.Models = models
 		result.Message = "Antigravity CLI 已登录"
+		if userLocalChannelHasModel(models, cliAntigravityImageModel) {
+			result.Message += "，Nano Banana 2 生图工具可用"
+		}
 		return result, model.ProviderStatusConnected
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
@@ -586,7 +593,7 @@ func validCLIAccountText(value string, limit int, allowEmpty bool) bool {
 }
 
 func executeAntigravityModelList(parent context.Context, executable string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, cliAntigravityModelListTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "models")
 	command.Env = controlledCLIEnvironment()
@@ -611,6 +618,9 @@ func executeAntigravityModelList(parent context.Context, executable string) ([]s
 	}
 	if len(models) == 0 {
 		return nil, errors.New("Antigravity model list is empty")
+	}
+	if seen[cliAntigravityImageReasoner] {
+		models = append(models, cliAntigravityImageModel)
 	}
 	return models, nil
 }

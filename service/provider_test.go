@@ -130,7 +130,7 @@ func TestApplyTrustedCLIProviderModelsRejectsUserSuppliedCatalog(t *testing.T) {
 	if !reflect.DeepEqual(input.Models, saved.Models) {
 		t.Fatalf("models = %#v", input.Models)
 	}
-	if !reflect.DeepEqual(input.Capabilities, []string{"text"}) {
+	if !reflect.DeepEqual(input.Capabilities, []string{"text", "image"}) {
 		t.Fatalf("capabilities = %#v", input.Capabilities)
 	}
 	input.DefaultModel = "user-supplied-model"

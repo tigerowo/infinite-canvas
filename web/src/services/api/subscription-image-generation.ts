@@ -1,4 +1,5 @@
 import { cancelCLIGeneration, queryCLIGeneration, startCLIGeneration } from "@/services/api/providers";
+import { GEMINI_CLI_IMAGE_MODEL } from "@/lib/provider";
 import { localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -6,13 +7,17 @@ export type SubscriptionImageTaskReference = { providerId: string; taskId: strin
 
 export function isSubscriptionImageConfig(config: AiConfig) {
     const channel = localChannelForActiveModel(config);
-    return (channel?.protocol === "gpt-image-2" && config.model === "gpt-image-2") || (channel?.protocol === "codex-image-emergency" && config.model === "codex-image-emergency");
+    return (
+        (channel?.protocol === "gpt-image-2" && config.model === "gpt-image-2") ||
+        (channel?.protocol === "codex-image-emergency" && config.model === "codex-image-emergency") ||
+        (channel?.protocol === "gemini-cli" && config.model === GEMINI_CLI_IMAGE_MODEL)
+    );
 }
 
 export async function startSubscriptionImageGeneration(config: AiConfig, prompt: string) {
     const channel = localChannelForActiveModel(config);
     const token = useUserStore.getState().token;
-    if (!token || !channel?.id || !isSubscriptionImageConfig(config)) throw new Error("订阅生图渠道不可用，请先检测本机 helper");
+    if (!token || !channel?.id || !isSubscriptionImageConfig(config)) throw new Error("本机 CLI 生图渠道不可用，请先检测 helper");
     const result = await startCLIGeneration(token, channel.id, {
         generationType: "image",
         model: config.model,
@@ -21,7 +26,7 @@ export async function startSubscriptionImageGeneration(config: AiConfig, prompt:
         resolution: normalizeSubscriptionImageQuality(config.quality),
         duration: 0,
     });
-    if (!result.taskId || result.taskStatus !== "running") throw new Error(result.message || "订阅生图任务创建失败");
+    if (!result.taskId || result.taskStatus !== "running") throw new Error(result.message || "本机 CLI 生图任务创建失败");
     return { result, id: encodeSubscriptionImageTaskReference(channel.id, result.taskId) };
 }
 

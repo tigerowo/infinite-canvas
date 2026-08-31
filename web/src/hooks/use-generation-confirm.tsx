@@ -33,6 +33,7 @@ export function useGenerationConfirm() {
                         <div className="text-xs opacity-60">协议：{summary.protocol}</div>
                         {summary.model === "gpt-image-2" ? <div className="text-xs text-cyan-600">主路径：复用 Codex 登录态；不会自动回退到付费 OpenAI API。</div> : null}
                         {summary.model === "codex-image-emergency" ? <div className="text-xs text-amber-600">应急路径：本次将调用 codex exec，可能占用你的 Codex 开发额度。</div> : null}
+                        {summary.model === "nano-banana-2" ? <div className="text-xs text-cyan-600">Google 登录路径：通过 Antigravity 内置 generate_image 工具调用；不会自动回退到付费 API。</div> : null}
                     </div>
                 ),
                 okText: "确认调用",

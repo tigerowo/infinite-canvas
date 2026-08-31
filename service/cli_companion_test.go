@@ -75,6 +75,12 @@ func TestCLICompanionRejectsExpiredOrTamperedAuthorization(t *testing.T) {
 	}
 }
 
+func TestCLICompanionHTTPTimeoutCoversSynchronousCLIDetection(t *testing.T) {
+	if CLICompanionHTTPTimeout <= 15*time.Second {
+		t.Fatalf("timeout=%s", CLICompanionHTTPTimeout)
+	}
+}
+
 func TestRequestCLICompanionUsesPrivateUnixSocket(t *testing.T) {
 	directory, err := os.MkdirTemp("", "ic-cli-")
 	if err != nil {

@@ -480,7 +480,7 @@ func trustedCLIProviderCapabilities(protocol string) []string {
 		return []string{"text"}
 	}
 	if protocol == "gemini-cli" {
-		return []string{"text"}
+		return []string{"text", "image"}
 	}
 	if protocol == "gpt-image-2" {
 		return []string{"image"}

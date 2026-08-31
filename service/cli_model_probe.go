@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -28,6 +27,8 @@ const (
 	cliCodexDefaultModel        = "codex-cli-default"
 	cliCodexEmergencyImageModel = "codex-image-emergency"
 	cliGPTImage2Model           = "gpt-image-2"
+	cliAntigravityImageModel    = "nano-banana-2"
+	cliAntigravityImageReasoner = "gemini-3.7-flash-low"
 )
 
 type cliModelProbeTask struct {
@@ -92,7 +93,7 @@ func currentUserProbeCLIProvider(ctx context.Context, providerID string) (model.
 	if err != nil {
 		return model.Provider{}, err
 	}
-	if item.Protocol == "gemini-cli" && (!cliModelNamePattern.MatchString(item.DefaultModel) || !userLocalChannelHasModel(item.Models, item.DefaultModel)) {
+	if item.Protocol == "gemini-cli" && (item.DefaultModel == cliAntigravityImageModel || !cliModelNamePattern.MatchString(item.DefaultModel) || !userLocalChannelHasModel(item.Models, item.DefaultModel)) {
 		return model.Provider{}, safeMessageError{message: "请先检测 Antigravity CLI 并选择默认模型"}
 	}
 	return item, nil
@@ -197,7 +198,7 @@ func executeCLIModelProbeStart(parent context.Context, input cliCompanionActionR
 
 func executeAntigravityCompletionStart(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
 	result := CLIHelperResult{Protocol: input.Protocol}
-	if input.Protocol != "gemini-cli" || !cliModelNamePattern.MatchString(input.Model) || len(input.Prompt) == 0 || len(input.Prompt) > cliCompletionPromptLimit {
+	if input.Protocol != "gemini-cli" || input.Model == cliAntigravityImageModel || !cliModelNamePattern.MatchString(input.Model) || len(input.Prompt) == 0 || len(input.Prompt) > cliCompletionPromptLimit {
 		result.Message = "Antigravity CLI 调用参数无效"
 		return result, model.ProviderStatusUnavailable
 	}
@@ -233,7 +234,7 @@ func executeAntigravityCompletionStart(parent context.Context, input cliCompanio
 	ctx, cancel := context.WithTimeout(parent, cliModelProbeTimeout)
 	command := exec.CommandContext(ctx, executable,
 		"--print", input.Prompt,
-		"--output-format", "json",
+		"--output-format", "text",
 		"--model", input.Model,
 		"--effort", "low",
 		"--print-timeout", "90s",
@@ -244,9 +245,9 @@ func executeAntigravityCompletionStart(parent context.Context, input cliCompanio
 	command.Dir = directory
 	command.Env = controlledCLIEnvironment()
 	command.Stdin = nil
-	var output cappedCLIOutput
+	var output, errorOutput cappedCLIOutput
 	command.Stdout = &output
-	command.Stderr = io.Discard
+	command.Stderr = &errorOutput
 	if err := command.Start(); err != nil {
 		cancel()
 		_ = os.RemoveAll(directory)
@@ -256,7 +257,7 @@ func executeAntigravityCompletionStart(parent context.Context, input cliCompanio
 	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Status: "running", Message: "Antigravity CLI 调用正在执行", UpdatedAt: time.Now(), Cancel: cancel}
 	cliModelProbeState.Tasks[taskID] = task
 	cliModelProbeState.ActiveID = taskID
-	go finishAntigravityCompletion(command, ctx, cancel, directory, &output, taskID)
+	go finishAntigravityCompletion(command, ctx, cancel, directory, input.Prompt, &output, &errorOutput, taskID)
 	return cliModelProbeResult(task), model.ProviderStatusConnected
 }
 
@@ -356,11 +357,12 @@ func finishCodexCompletion(command *exec.Cmd, ctx context.Context, cancel contex
 	}
 }
 
-func finishAntigravityCompletion(command *exec.Cmd, ctx context.Context, cancel context.CancelFunc, directory string, output *cappedCLIOutput, taskID string) {
+func finishAntigravityCompletion(command *exec.Cmd, ctx context.Context, cancel context.CancelFunc, directory string, prompt string, output *cappedCLIOutput, errorOutput *cappedCLIOutput, taskID string) {
 	err := command.Wait()
 	contextErr := ctx.Err()
 	cancel()
 	response, responseErr := parseAntigravityCompletion(output.String())
+	diagnostic := safeAntigravityCompletionDiagnostic(output.String(), errorOutput.String(), directory, prompt, err)
 	_ = os.RemoveAll(directory)
 	cliModelProbeState.Lock()
 	defer cliModelProbeState.Unlock()
@@ -375,9 +377,9 @@ func finishAntigravityCompletion(command *exec.Cmd, ctx context.Context, cancel 
 		case errors.Is(contextErr, context.Canceled):
 			task.Status, task.Message = "cancelled", "Antigravity CLI 调用已取消"
 		case err != nil:
-			task.Status, task.Message = "failed", "Antigravity CLI 调用失败"
+			task.Status, task.Message = "failed", antigravityCompletionFailureMessage(diagnostic)
 		case responseErr != nil:
-			task.Status, task.Message = "failed", "Antigravity CLI 返回结构异常"
+			task.Status, task.Message = "failed", "Antigravity CLI 未返回有效文本"
 		default:
 			task.Status, task.Output, task.Message = "succeeded", response, "Antigravity CLI 调用成功"
 		}
@@ -388,15 +390,43 @@ func finishAntigravityCompletion(command *exec.Cmd, ctx context.Context, cancel 
 	}
 }
 
+func safeAntigravityCompletionDiagnostic(stdout string, stderr string, directory string, prompt string, commandErr error) string {
+	diagnostic := safeSubscriptionImageDiagnostic(stdout, stderr, prompt, commandErr)
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		diagnostic = strings.ReplaceAll(diagnostic, home, "~")
+	}
+	if directory != "" {
+		diagnostic = strings.ReplaceAll(diagnostic, directory, "[working directory]")
+	}
+	return diagnostic
+}
+
+func antigravityCompletionFailureMessage(diagnostic string) string {
+	detail := strings.ToLower(diagnostic)
+	switch {
+	case strings.Contains(detail, "unauthorized"), strings.Contains(detail, "unauthenticated"), strings.Contains(detail, "invalid_grant"), strings.Contains(detail, "token expired"), strings.Contains(detail, "login required"), strings.Contains(detail, "not logged in"):
+		return "Antigravity 登录已失效，请重新登录 Google"
+	case strings.Contains(detail, "permission denied"), strings.Contains(detail, "forbidden"), strings.Contains(detail, "403"):
+		return "Antigravity 当前账号无权使用所选模型"
+	case strings.Contains(detail, "insufficient"), strings.Contains(detail, "quota"), strings.Contains(detail, "credit"), strings.Contains(detail, "balance"), strings.Contains(detail, "额度"), strings.Contains(detail, "余额"):
+		return "Antigravity 额度不足或当前账户受限"
+	case strings.Contains(detail, "429"), strings.Contains(detail, "rate limit"), strings.Contains(detail, "too many requests"), strings.Contains(detail, "限流"):
+		return "Antigravity 请求频率受限，请稍后重试"
+	case strings.Contains(detail, "model"), strings.Contains(detail, "unsupported"), strings.Contains(detail, "not available"), strings.Contains(detail, "not found"):
+		return "Antigravity 所选模型当前不可用"
+	case strings.Contains(detail, "network"), strings.Contains(detail, "connection"), strings.Contains(detail, "connect"), strings.Contains(detail, "dns"), strings.Contains(detail, "tls"):
+		return "Antigravity 网络请求失败"
+	case strings.Contains(detail, "unknown flag"), strings.Contains(detail, "invalid argument"), strings.Contains(detail, "invalid value"):
+		return "Antigravity CLI 参数被拒绝"
+	case diagnostic != "" && !strings.HasPrefix(detail, "exit status"):
+		return "Antigravity CLI 调用失败：" + diagnostic
+	default:
+		return "Antigravity CLI 调用失败（上游未返回可识别原因）"
+	}
+}
+
 func parseAntigravityCompletion(value string) (string, error) {
-	var envelope struct {
-		Status   string `json:"status"`
-		Response string `json:"response"`
-	}
-	if json.Unmarshal([]byte(value), &envelope) != nil || !strings.EqualFold(strings.TrimSpace(envelope.Status), "success") {
-		return "", errors.New("Antigravity completion envelope is invalid")
-	}
-	response := sanitizeCLIOutput(envelope.Response)
+	response := sanitizeCLIOutput(value)
 	if response == "" || len(response) > cliModelProbeOutputLimit {
 		return "", errors.New("Antigravity completion response is invalid")
 	}

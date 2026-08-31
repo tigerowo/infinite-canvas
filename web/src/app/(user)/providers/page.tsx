@@ -7,7 +7,7 @@ import { ArrowRight, Cable, Coins, Copy, Crown, Ellipsis, History, Import, KeyRo
 
 import { ProviderListState, ProviderStatusTag, ProviderSummary } from "@/app/(user)/providers/components/provider-list-state";
 import { getProviderCenterThemeConfig } from "@/lib/app-theme";
-import { isRunningHubReference, type CLIAccountSummary, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
+import { GEMINI_CLI_IMAGE_MODEL, isRunningHubReference, type CLIAccountSummary, type CLIHelperResult, type Provider, type ProviderCapability, type ProviderInput, type ProviderKind, type ProviderMigrationPreview, type ProviderProtocol, type ProviderStatus } from "@/lib/provider";
 import { fetchCLIAccountSummary, fetchProviderMigrationPreview } from "@/services/api/providers";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useProviderStore } from "@/stores/use-provider-store";
@@ -753,7 +753,7 @@ export default function ProvidersPage() {
                                             : formProtocol === "codex-image-emergency"
                                               ? "仅在主路径失效时手动选择。固定执行 codex exec --model gpt-5.5，可能占用 Codex 开发额度，系统绝不自动切换到此连接。"
                                             : formProtocol === "gemini-cli"
-                                              ? "检测时只读执行 agy models 拉取已登录账号可用模型；固定最小调用需二次确认，文本模型可供无限画布助手选择。"
+                                              ? "检测时只读执行 agy models 拉取文本模型，并在当前账号支持时加入 Nano Banana 2 生图工具。它不是 reasoning model，不会作为默认文本模型；每次真实调用仍需单独确认。"
                                               : "登录检测不会回传账户信息；账户概览仅在点击刷新时通过受控 helper 读取账号名、会员等级和当前积分，不保存凭据或积分数据。"
                                     }
                                 />
@@ -848,7 +848,7 @@ export default function ProvidersPage() {
                         </Form.Item>
                         <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
                             <Form.Item name="defaultModel" label="默认模型">
-                                <Select allowClear showSearch options={models.map((model) => ({ label: model, value: model }))} placeholder="选择默认模型" />
+                                <Select allowClear showSearch options={models.filter((model) => formProtocol !== "gemini-cli" || model !== GEMINI_CLI_IMAGE_MODEL).map((model) => ({ label: model, value: model }))} placeholder="选择默认模型" />
                             </Form.Item>
                             <Form.Item name="timeout" label="请求超时（秒）">
                                 <InputNumber className="w-full" min={1} max={600} />

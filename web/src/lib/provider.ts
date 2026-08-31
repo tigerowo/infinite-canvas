@@ -127,6 +127,7 @@ export const managedProviderProtocols = new Set<ProviderProtocol>(["openai", "ge
 export const CODEX_CLI_DEFAULT_MODEL = "codex-cli-default";
 export const CODEX_EMERGENCY_IMAGE_MODEL = "codex-image-emergency";
 export const GPT_IMAGE_2_SUBSCRIPTION_MODEL = "gpt-image-2";
+export const GEMINI_CLI_IMAGE_MODEL = "nano-banana-2";
 
 export function providerModelChannels(providers: Provider[]) {
     return providers

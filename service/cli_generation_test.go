@@ -3,6 +3,8 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -41,7 +43,8 @@ func TestJimengGenerationRequestAllowsPublicModelProfiles(t *testing.T) {
 func TestSubscriptionImageGenerationRequestKeepsQuotaRoutesSeparate(t *testing.T) {
 	primary := cliCompanionActionRequest{Action: cliCompanionActionGenerationStart, UserID: "user-1", ProviderID: "provider-primary", Protocol: "gpt-image-2", GenerationType: "image", Model: cliGPTImage2Model, Prompt: "纸艺老虎", Ratio: "1:1", Resolution: "low"}
 	emergency := cliCompanionActionRequest{Action: cliCompanionActionGenerationStart, UserID: "user-1", ProviderID: "provider-emergency", Protocol: "codex-image-emergency", GenerationType: "image", Model: cliCodexEmergencyImageModel, Prompt: "纸艺老虎", Ratio: "16:9", Resolution: "medium"}
-	if !validCLICompanionActionRequest(primary) || !validCLICompanionActionRequest(emergency) {
+	gemini := cliCompanionActionRequest{Action: cliCompanionActionGenerationStart, UserID: "user-1", ProviderID: "provider-gemini", Protocol: "gemini-cli", GenerationType: "image", Model: cliAntigravityImageModel, Prompt: "纸艺老虎", Ratio: "9:16", Resolution: "low"}
+	if !validCLICompanionActionRequest(primary) || !validCLICompanionActionRequest(emergency) || !validCLICompanionActionRequest(gemini) {
 		t.Fatal("controlled subscription image routes should be accepted")
 	}
 	for name, value := range map[string]cliCompanionActionRequest{
@@ -79,10 +82,10 @@ func TestSubscriptionImageDiagnosticIsBoundedAndRedacted(t *testing.T) {
 			t.Fatalf("diagnostic leaked %q: %s", secret, diagnostic)
 		}
 	}
-	if message := subscriptionImageFailureMessage(diagnostic); message != "GPT Image 2 订阅登录已失效，请重新登录 Codex" {
+	if message := subscriptionImageFailureMessage("gpt-image-2", diagnostic); message != "GPT Image 2 订阅登录已失效，请重新登录 Codex" {
 		t.Fatalf("message=%q diagnostic=%q", message, diagnostic)
 	}
-	if message := subscriptionImageFailureMessage("HTTP 429 too many requests"); message != "GPT Image 2 订阅请求频率受限，请稍后重试" {
+	if message := subscriptionImageFailureMessage("gpt-image-2", "HTTP 429 too many requests"); message != "GPT Image 2 订阅请求频率受限，请稍后重试" {
 		t.Fatalf("rate-limit message=%q", message)
 	}
 	if len([]rune(safeSubscriptionImageDiagnostic(strings.Repeat("x", 800), "", "", errors.New("exit status 1")))) != 512 {
@@ -108,11 +111,45 @@ func TestSubscriptionImageDoctorRequiresReachableCodexEndpoint(t *testing.T) {
 }
 
 func TestSubscriptionImageTimeoutMessageUsesThreeMinuteBudget(t *testing.T) {
-	if message := subscriptionImageTimeoutMessage(""); message != "订阅生图调用超时（3分钟）" {
+	if message := subscriptionImageTimeoutMessage("gpt-image-2", ""); message != "订阅生图调用超时（3分钟）" {
 		t.Fatalf("message=%q", message)
 	}
-	if message := subscriptionImageTimeoutMessage("network connection failed"); !strings.Contains(message, "3分钟") || !strings.Contains(message, "网络请求失败") {
+	if message := subscriptionImageTimeoutMessage("gpt-image-2", "network connection failed"); !strings.Contains(message, "3分钟") || !strings.Contains(message, "网络请求失败") {
 		t.Fatalf("message=%q", message)
+	}
+}
+
+func TestAntigravityImageStreamKeepsConversationForArtifactLookup(t *testing.T) {
+	var stream antigravityImageStream
+	_, _ = stream.Write([]byte("{\"type\":\"init\",\"conversation_id\":\"d7fc92af-6c5c-473e-9ca8-c9d24e682d8d\"}\n"))
+	_, _ = stream.Write([]byte("{\"type\":\"PLANNER_RESPONSE\",\"status\":\"DONE\",\"tool_calls\":[{\"name\":\"generate_image\"}]}\n"))
+	stream.finish()
+	if stream.conversationID == "" {
+		t.Fatalf("stream=%#v", stream)
+	}
+}
+
+func TestAntigravityImageArtifactIsCopiedFromCurrentConversation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	conversationID := "d7fc92af-6c5c-473e-9ca8-c9d24e682d8d"
+	brain := filepath.Join(home, ".gemini", "antigravity-cli", "brain", conversationID)
+	if err := os.MkdirAll(brain, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now()
+	jpeg := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00, 0x01, 0xff, 0xd9}
+	if err := os.WriteFile(filepath.Join(brain, "probe.jpg"), jpeg, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputDirectory, err := newSubscriptionImageDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(outputDirectory) })
+	path, contentType, err := copyAntigravityImageArtifact(conversationID, outputDirectory, startedAt)
+	if err != nil || contentType != "image/jpeg" || filepath.Ext(path) != ".jpg" {
+		t.Fatalf("path=%q contentType=%q err=%v", path, contentType, err)
 	}
 }
 

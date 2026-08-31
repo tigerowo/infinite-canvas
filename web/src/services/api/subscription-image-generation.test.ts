@@ -14,8 +14,8 @@ function succeededResult(output: string): CLIHelperResult {
     return { available: true, protocol: "gpt-image-2", taskStatus: "succeeded", output, message: "success" };
 }
 
-function config(protocol: "gpt-image-2" | "codex-image-emergency", model: "gpt-image-2" | "codex-image-emergency"): AiConfig {
-    const provider = { id: `provider-${protocol}`, protocol, name: protocol === "gpt-image-2" ? "GPT Image 2 订阅" : "Codex 应急生图", baseUrl: "", apiKey: "", models: [model], capabilities: ["image" as const], managed: true, enabled: true };
+function config(protocol: "gpt-image-2" | "codex-image-emergency" | "gemini-cli", model: "gpt-image-2" | "codex-image-emergency" | "nano-banana-2"): AiConfig {
+    const provider = { id: `provider-${protocol}`, protocol, name: protocol === "gpt-image-2" ? "GPT Image 2 订阅" : protocol === "gemini-cli" ? "Antigravity CLI" : "Codex 应急生图", baseUrl: "", apiKey: "", models: [model], capabilities: ["image" as const], managed: true, enabled: true };
     return { ...defaultConfig, model, imageModel: model, imageChannelId: provider.id, activeChannelId: provider.id, localChannels: [provider] };
 }
 
@@ -28,6 +28,7 @@ describe("subscription image controlled adapter", () => {
     it.each([
         ["gpt-image-2" as const, "gpt-image-2" as const],
         ["codex-image-emergency" as const, "codex-image-emergency" as const],
+        ["gemini-cli" as const, "nano-banana-2" as const],
     ])("keeps %s on its explicitly selected route", async (protocol, model) => {
         useUserStore.setState({ token: "test-token" });
         const request = vi

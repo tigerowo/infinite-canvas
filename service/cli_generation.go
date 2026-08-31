@@ -116,7 +116,7 @@ func QueryCurrentUserCLIGeneration(ctx context.Context, providerID string, taskI
 	if err != nil {
 		return CLIHelperResult{Protocol: item.Protocol, TaskID: taskID, Message: "CLI 伴随进程未连接或授权失败"}, nil
 	}
-	if result.TaskStatus == "succeeded" && (item.Protocol == "gpt-image-2" || item.Protocol == "codex-image-emergency") {
+	if result.TaskStatus == "succeeded" && (item.Protocol == "gpt-image-2" || item.Protocol == "codex-image-emergency" || item.Protocol == "gemini-cli") {
 		return finalizeSubscriptionImageResult(ctx, result)
 	}
 	return result, nil
@@ -139,7 +139,7 @@ func currentUserGenerationProvider(ctx context.Context, providerID string) (mode
 	if err != nil {
 		return model.Provider{}, err
 	}
-	if item.Kind != model.ProviderKindCLI || !map[string]bool{"jimeng": true, "gpt-image-2": true, "codex-image-emergency": true}[item.Protocol] || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
+	if item.Kind != model.ProviderKindCLI || !map[string]bool{"jimeng": true, "gpt-image-2": true, "codex-image-emergency": true, "gemini-cli": true}[item.Protocol] || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
 		return model.Provider{}, safeMessageError{message: "CLI 生成渠道不可用，请先检查连接状态"}
 	}
 	if !config.Cfg.CLIHelperEnabled {

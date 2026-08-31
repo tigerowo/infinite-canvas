@@ -63,7 +63,7 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       8 * time.Second,
-		WriteTimeout:      8 * time.Second,
+		WriteTimeout:      service.CLICompanionHTTPTimeout,
 		IdleTimeout:       30 * time.Second,
 	}
 	serverError := make(chan error, 1)

@@ -201,7 +201,7 @@ func TestExecuteCLICompanionVersionFetchesAntigravityModelsAndKeepsJimengDetecti
 			t.Cleanup(func() { cliAllowedRoots = previousRoots })
 			path := filepath.Join(directory, testCase.candidate)
 			argsPath := filepath.Join(directory, "args")
-			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$HOME/args\"\nif [ \"$1\" = models ]; then printf 'gemini-3.5-flash-low\\tFast\\ngemini-3.1-pro-high\\tPro\\n'; else printf '" + testCase.version + "\\n'; fi\n"
+			script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"$HOME/args\"\nif [ \"$1\" = models ]; then printf 'gemini-3.7-flash-low\\tFast\\ngemini-3.1-pro-high\\tPro\\n'; else printf '" + testCase.version + "\\n'; fi\n"
 			if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
 				t.Fatal(err)
 			}
@@ -231,7 +231,7 @@ func TestExecuteCLICompanionVersionFetchesAntigravityModelsAndKeepsJimengDetecti
 			expectedArgs := "--version\n"
 			if testCase.protocol == "gemini-cli" {
 				expectedArgs += "models\n"
-				if strings.Join(result.Models, ",") != "gemini-3.5-flash-low,gemini-3.1-pro-high" {
+				if strings.Join(result.Models, ",") != "gemini-3.7-flash-low,gemini-3.1-pro-high,nano-banana-2" {
 					t.Fatalf("models=%q", result.Models)
 				}
 			}
@@ -239,6 +239,12 @@ func TestExecuteCLICompanionVersionFetchesAntigravityModelsAndKeepsJimengDetecti
 				t.Fatalf("args=%q error=%v", args, err)
 			}
 		})
+	}
+}
+
+func TestAntigravityModelListTimeoutFitsCompanionRequest(t *testing.T) {
+	if cliAntigravityModelListTimeout <= 10*time.Second || cliAntigravityModelListTimeout >= CLICompanionHTTPTimeout {
+		t.Fatalf("model timeout=%s companion timeout=%s", cliAntigravityModelListTimeout, CLICompanionHTTPTimeout)
 	}
 }
 
