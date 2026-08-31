@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestJimengGenerationRequestAllowsPublicModelProfiles(t *testing.T) {

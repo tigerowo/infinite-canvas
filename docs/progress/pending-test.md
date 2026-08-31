@@ -5,8 +5,7 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
-- Antigravity CLI 新增受控 Nano Banana 2 文生图通道：`agy models` 继续只决定可选文本 reasoning model，连接检测仅在当前账号具备固定低成本 `gemini-3.7-flash-low` 时加入虚拟模型 `nano-banana-2`。真实调用固定执行一次内置 `generate_image`，禁用 slash command、启用 sandbox，不接受页面命令、路径或自定义参数，也不会回退到付费 API。后端只在 CLI 正常退出、返回合法 UUID 会话且该会话目录出现本次调用后新建的 32 MiB 内 PNG/JPEG/WebP 时判定成功，再复制到隔离临时目录并按真实 MIME 写入素材存储；不再依赖 `agy 1.1.22` 已变化的 `stream-json` 工具状态字段。连接中心默认文本模型会排除该虚拟工具模型，生图台确认框和结果卡会明确显示 Google 登录态与 `generate_image` 路径。首次真实调用已确认上游成功生成 JPEG，但旧事件判断将其误记为失败；修复后仍需重新安装开发 helper、重启 Go 后端，并由用户逐次确认一张最低成本图片完成闭环。
-- 已将原作者 `origin/main` 的 v0.6.0 更新合并到连接中心分支：保留连接中心 Provider、受控 Mac CLI、GPT Image 2/即梦、任务取消与请求预算，同时接入 Agent Skill、检查点长上下文、Chat/Responses 切换、媒体自动生成、内联引用、视频帧截取、流式文本和新版视频节点控件。合并过程未引入 `.env`、SQLite、用户素材或测试产物；合并后的 Go 全包、Vitest 14 个文件 48 个用例、Playwright 10 个用例、typecheck 和生产 build 均通过，lint 为 0 error、118 条既有 warning。回归同时确认即梦受控登录、账户概览及图片模型进入无限画布共享目录，旧测试断言已与现有能力同步。
+- 已将原作者 `origin/main` 的 v0.6.0 更新合并到连接中心分支：保留连接中心 Provider、受控 Mac CLI、GPT Image 2/即梦、任务取消与请求预算，同时接入 Agent Skill、检查点长上下文、Chat/Responses 切换、媒体自动生成、内联引用、视频帧截取、流式文本和新版视频节点控件。合并过程未引入 `.env`、SQLite、用户素材或测试产物；合并后的 Go 全包、Vitest 14 个文件 49 个用例、Playwright 10 个用例、typecheck 和生产 build 均通过，lint 为 0 error、118 条既有 warning。回归同时确认即梦受控登录、账户概览及图片模型进入无限画布共享目录，旧测试断言已与现有能力同步。
 - GPT Image 2 订阅主通道的检测、非计费预检、最低成本真实文生图、R2 写入、同源素材回显和自动质量长提示词均已完成人工验收，正式能力已移入功能说明。此前已标记为失败的旧卡片不会自动改写；Codex 应急生图仍未执行真实调用，参考图也仍会在启动 CLI 前被拒绝。
 - 独立 `Codex 应急生图` CLI Provider 固定使用 `codex exec --model gpt-5.5 --enable image_generation`，不会读取或回退到 OpenAI API Key；生成确认框会提示可能占用 Codex 开发额度。后续如需真实验收，必须再次逐次确认，不得由订阅主通道自动切换。
 - GPT Image 2 订阅结果解析定向 Vitest 已通过 1 个文件、4 个用例，覆盖严格 UUID 同源素材地址、危险相对路径和明文 HTTP 拒绝；该用例已纳入本轮全量 Vitest，并与 Go、Playwright、typecheck、lint 和生产 build 一并完成验收。
