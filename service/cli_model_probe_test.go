@@ -98,7 +98,7 @@ printf 'OK\n' > "$output"
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
-	if len(lines) != 8 || lines[0] != "exec" || lines[1] != "--sandbox" || lines[2] != "read-only" || lines[3] != "--skip-git-repo-check" || lines[4] != "--ephemeral" || lines[5] != "--output-last-message" || filepath.Base(lines[6]) != "last-message.txt" || lines[7] != cliModelProbePrompt {
+	if len(lines) != 10 || lines[0] != "exec" || lines[1] != "--sandbox" || lines[2] != "read-only" || lines[3] != "--skip-git-repo-check" || lines[4] != "--ephemeral" || lines[5] != "--model" || lines[6] != "gpt-5.5" || lines[7] != "--output-last-message" || filepath.Base(lines[8]) != "last-message.txt" || lines[9] != cliModelProbePrompt {
 		t.Fatalf("args=%q", lines)
 	}
 	crossProvider := input
@@ -272,7 +272,7 @@ printf 'canvas codex ok\n' > "$output"
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(args)), "\n")
-	if len(lines) != 8 || lines[0] != "exec" || lines[1] != "--sandbox" || lines[2] != "read-only" || lines[3] != "--skip-git-repo-check" || lines[4] != "--ephemeral" || lines[5] != "--output-last-message" || filepath.Base(lines[6]) != "last-message.txt" || lines[7] != "-" {
+	if len(lines) != 10 || lines[0] != "exec" || lines[1] != "--sandbox" || lines[2] != "read-only" || lines[3] != "--skip-git-repo-check" || lines[4] != "--ephemeral" || lines[5] != "--model" || lines[6] != "gpt-5.5" || lines[7] != "--output-last-message" || filepath.Base(lines[8]) != "last-message.txt" || lines[9] != "-" {
 		t.Fatalf("args=%q", lines)
 	}
 	stdin, err := os.ReadFile(filepath.Join(directory, "codex-completion-stdin"))

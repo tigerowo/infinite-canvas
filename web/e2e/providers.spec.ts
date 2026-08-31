@@ -447,7 +447,7 @@ test("连接中心图片模型进入无限画布配置节点选择器", async ({
     await expect(page.getByRole("option", { name: /mock-canvas-image.*Mock 画布渠道/ })).toBeVisible();
 });
 
-test("Antigravity CLI 可进入画布文本目录且即梦仍保持仅检测", async ({ page }) => {
+test("Antigravity CLI 可进入画布文本目录且即梦展示受控账户能力", async ({ page }) => {
     test.setTimeout(60_000);
     const canvasProvider = {
         ...connectedProvider,
@@ -512,9 +512,11 @@ test("Antigravity CLI 可进入画布文本目录且即梦仍保持仅检测", a
             await expect(drawer.getByRole("button", { name: "检查登录状态" })).toBeVisible();
             await expect(drawer.getByRole("button", { name: "最小调用" })).toBeVisible();
         } else {
-            await expect(drawer.getByText("当前仅检测 CLI 安装与版本")).toBeVisible();
-            await expect(drawer.getByRole("button", { name: "检查登录状态" })).toHaveCount(0);
+            await expect(drawer.getByText("即梦 CLI 受控接入")).toBeVisible();
+            await expect(drawer.getByRole("button", { name: "检查登录状态" })).toBeVisible();
             await expect(drawer.getByRole("button", { name: "最小调用" })).toHaveCount(0);
+            await expect(drawer.getByRole("region", { name: "即梦账户概览" })).toBeVisible();
+            await expect(drawer.getByText("积分消费明细")).toBeVisible();
         }
         await drawer.getByRole("button", { name: "检测 CLI" }).click();
         await expect.poll(() => detectedProtocols.filter((protocol) => protocol === provider.protocol).length).toBe(1);
@@ -540,5 +542,5 @@ test("Antigravity CLI 可进入画布文本目录且即梦仍保持仅检测", a
     await canvasPicker.click();
     await expect(page.getByRole("option", { name: /mock-canvas-api-image.*Mock 画布 API/ })).toBeVisible();
     await expect(page.getByRole("option", { name: /gemini-3.5-flash-low/ })).toHaveCount(0);
-    await expect(page.getByRole("option", { name: /mock-jimeng-cli-image/ })).toHaveCount(0);
+    await expect(page.getByRole("option", { name: /mock-jimeng-cli-image.*Mock 即梦 CLI/ })).toBeVisible();
 });

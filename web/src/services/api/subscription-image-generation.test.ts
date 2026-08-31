@@ -1,6 +1,7 @@
 import axios from "axios";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { CLIHelperResult } from "@/lib/provider";
 import { createCanvasImageTask, pollCanvasImageTaskStatus } from "@/services/api/image";
 import { parseJimengGenerationOutput } from "@/services/api/jimeng-generation";
 import { defaultConfig, type AiConfig } from "@/stores/use-config-store";
@@ -8,6 +9,10 @@ import { useUserStore } from "@/stores/use-user-store";
 
 const taskId = "c".repeat(32);
 const objectId = "e63f44c2-62d9-4610-9294-6e2fa6322025";
+
+function succeededResult(output: string): CLIHelperResult {
+    return { available: true, protocol: "gpt-image-2", taskStatus: "succeeded", output, message: "success" };
+}
 
 function config(protocol: "gpt-image-2" | "codex-image-emergency", model: "gpt-image-2" | "codex-image-emergency"): AiConfig {
     const provider = { id: `provider-${protocol}`, protocol, name: protocol === "gpt-image-2" ? "GPT Image 2 订阅" : "Codex 应急生图", baseUrl: "", apiKey: "", models: [model], capabilities: ["image" as const], managed: true, enabled: true };
@@ -38,9 +43,9 @@ describe("subscription image controlled adapter", () => {
     });
 
     it("accepts the exact same-origin storage proxy and rejects unsafe relative output", () => {
-        expect(parseJimengGenerationOutput({ taskStatus: "succeeded", output: JSON.stringify({ submitId: taskId, urls: [`/api/files/${objectId}/content`] }) })).toEqual({ submitId: taskId, urls: [`/api/files/${objectId}/content`] });
-        expect(parseJimengGenerationOutput({ taskStatus: "succeeded", output: JSON.stringify({ submitId: taskId, urls: ["/api/files/../../private/content"] }) })).toBeNull();
-        expect(parseJimengGenerationOutput({ taskStatus: "succeeded", output: JSON.stringify({ submitId: taskId, urls: ["http://example.test/image.png"] }) })).toBeNull();
+        expect(parseJimengGenerationOutput(succeededResult(JSON.stringify({ submitId: taskId, urls: [`/api/files/${objectId}/content`] })))).toEqual({ submitId: taskId, urls: [`/api/files/${objectId}/content`] });
+        expect(parseJimengGenerationOutput(succeededResult(JSON.stringify({ submitId: taskId, urls: ["/api/files/../../private/content"] })))).toBeNull();
+        expect(parseJimengGenerationOutput(succeededResult(JSON.stringify({ submitId: taskId, urls: ["http://example.test/image.png"] })))).toBeNull();
     });
 
     it("rejects reference images before either subscription route starts", async () => {
