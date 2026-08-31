@@ -22,6 +22,8 @@ description: 当前后端主要数据表与字段说明
 - `users`
 - `credit_logs`
 - `prompts`
+- `agent_skills`
+- `agent_skill_files`
 - `assets`
 - `settings`
 - `video_tasks`
@@ -162,6 +164,43 @@ S3/R2 月度操作预算的本机计数表。只记录由 Infinite Canvas 后端
 | `updated_at` | string | 更新时间 |
 
 `github_url` 仅用于接口返回，不写入数据库。
+
+### agent_skills
+
+画布 Agent 可选择 Skill 表。系统预设与登录用户上传的 Skill 使用同一张表，通过来源和所有者隔离；未登录用户的 Skill 只保存在浏览器 `localforage`，不写入该表。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | 主键 |
+| `owner_user_id` | string | 用户 Skill 的所有者 ID；系统预设为空 |
+| `source` | string | 来源：`system`、`user` |
+| `name` | string | Skill 名称 |
+| `description` | string | Skill 简介 |
+| `cover_url` | text | Skill 封面图片地址 |
+| `cover_storage_key` | string | 现有图片存储系统中的对象标识；直接填写图片链接时为空 |
+| `content` | text | 完整 Markdown 或文本内容，最多 20000 字 |
+| `enabled` | boolean | 是否启用；停用的系统预设不向画布返回 |
+| `sort` | number | 系统预设排序值 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+用户接口只能读写和删除当前账号自己的 `source=user` 记录；管理员 Skill 页面只维护 `source=system` 记录。Skill 编辑后直接使用最新内容，不保存历史版本。
+
+### agent_skill_files
+
+系统预设 Skill 的附属目录和文本文件表。根 `SKILL.md` 不在本表重复保存，仍以 `agent_skills.content` 为唯一内容来源。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `skill_id` | string | 所属系统 Skill ID，与 `path` 组成联合主键 |
+| `path` | string | Skill 包内安全相对路径 |
+| `kind` | string | `folder` 或 `file` |
+| `content` | text | 文件正文；文件夹为空，每个文件最多 20000 字 |
+| `sort` | number | 同一目录内的显示顺序 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+后台保存系统 Skill 时会在同一数据库事务中替换该 Skill 的附属目录记录；普通用户 Skill 仍然只允许单文件内容，不写入本表。Agent 只在当前激活的系统 Skill 明确引用附属文件时按路径读取，不会把整个目录每轮注入模型上下文。
 
 ### assets
 
@@ -326,11 +365,11 @@ S3/R2 月度操作预算的本机计数表。只记录由 Infinite Canvas 后端
 
 ### settings
 
-系统配置表，只保存两行数据：`public` 放前端可读取的公开配置，`private` 放仅后端和管理员可读取的私有配置，配置值都用 JSON。
+系统配置表。`public` 放前端可读取的公开配置，`private` 放仅后端和管理员可读取的私有配置；`agent-skills-initialized` 是默认 Skill 首次初始化标记，避免管理员删除后被启动流程重新创建。配置值都用 JSON。
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `key` | string | 主键：`public`、`private` |
+| `key` | string | 主键：`public`、`private`、`agent-skills-initialized` |
 | `value` | json | 配置内容 |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |

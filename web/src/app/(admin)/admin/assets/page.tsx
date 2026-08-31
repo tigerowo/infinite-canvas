@@ -110,7 +110,6 @@ export default function AdminAssetsPage() {
             title: "操作",
             key: "actions",
             width: 112,
-            align: "right",
             render: (_, item) => (
                 <Space size={4}>
                     <Tooltip title="详情">

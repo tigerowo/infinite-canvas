@@ -1,5 +1,6 @@
 import { apiDelete, apiGet, apiPost, compactApiParams } from "@/services/api/request";
 import type { Prompt, PromptListResponse } from "@/services/api/prompts";
+import type { AgentSkill, AgentSkillFile } from "@/services/api/agent-skills";
 
 export type AdminPromptCategory = {
     category: string;
@@ -139,6 +140,22 @@ export async function deleteAdminPrompt(token: string, id: string) {
 
 export async function deleteAdminPrompts(token: string, ids: string[]) {
     return apiPost<boolean>("/api/admin/prompts/batch-delete", { ids }, token);
+}
+
+export function fetchAdminAgentSkills(token: string) {
+    return apiGet<AgentSkill[]>("/api/admin/agent-skills", undefined, token);
+}
+
+export function saveAdminAgentSkill(token: string, skill: Partial<AgentSkill>) {
+    return apiPost<AgentSkill>("/api/admin/agent-skills", skill, token);
+}
+
+export function fetchAdminAgentSkillFiles(token: string, id: string) {
+    return apiGet<AgentSkillFile[]>(`/api/admin/agent-skills/${encodeURIComponent(id)}/files`, undefined, token);
+}
+
+export function deleteAdminAgentSkill(token: string, id: string) {
+    return apiDelete<boolean>(`/api/admin/agent-skills/${encodeURIComponent(id)}`, token);
 }
 
 export type AdminAssetQuery = {

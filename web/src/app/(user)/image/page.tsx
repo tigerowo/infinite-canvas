@@ -2757,6 +2757,22 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         }),
     );
     const visibleImages = images.filter((image) => Boolean(image.dataUrl));
+    if (!visibleImages.length && log.status === "成功") {
+        const taskImageUrl = log.task?.image_url || log.task?.url || "";
+        const dataUrl = await resolveImageUrl(log.task?.storageKey, taskImageUrl);
+        if (dataUrl) {
+            visibleImages.push({
+                id: log.task?.id || log.id || nanoid(),
+                dataUrl,
+                storageKey: log.task?.storageKey,
+                durationMs: log.durationMs || 0,
+                width: log.task?.width || 0,
+                height: log.task?.height || 0,
+                bytes: log.task?.bytes || 0,
+                mimeType: log.task?.mimeType || "image/png",
+            });
+        }
+    }
     const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),

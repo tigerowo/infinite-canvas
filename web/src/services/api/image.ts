@@ -515,20 +515,6 @@ async function parseResponsesStreamResponse(response: Response, mime: string): P
     }
 }
 
-function parseStreamChunk(chunk: string, onDelta: (value: string) => void) {
-    let deltaText = "";
-    for (const eventBlock of chunk.split("\n\n")) {
-        const data = eventBlock
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6);
-        if (!data || data === "[DONE]") continue;
-        const delta = (JSON.parse(data) as { choices?: Array<{ delta?: { content?: string } }> }).choices?.[0]?.delta?.content || "";
-        deltaText += delta;
-    }
-    if (deltaText) onDelta(deltaText);
-}
-
 function withSystemPrompt(config: AiConfig, prompt: string) {
     const systemPrompt = (config.systemPrompts.image || config.systemPrompt).trim();
     return systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
@@ -1208,61 +1194,44 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
         return answer;
     }
     if (isGeminiConfig(config)) return requestGeminiText(config, messages, onDelta);
-    let buffer = "";
     let answer = "";
-    let processedLength = 0;
 
     try {
-        const response = await axios.post(
-            aiApiUrl(config, "/chat/completions"),
-            {
-                model: config.model,
-                messages: withSystemMessage(config, messages),
-                stream: true,
-            },
-            {
-                headers: {
-                    ...aiHeaders(config, "application/json"),
-                } as Record<string, string>,
-                responseType: "text",
-                timeout: IMAGE_REQUEST_TIMEOUT_SECONDS * 1000,
-                onDownloadProgress: (event) => {
-                    const responseText = String(event.event?.target?.responseText || "");
-                    const nextText = responseText.slice(processedLength);
-                    processedLength = responseText.length;
-                    buffer += nextText;
-                    const chunks = buffer.split("\n\n");
-                    buffer = chunks.pop() || "";
-                    for (const chunk of chunks) {
-                        parseStreamChunk(chunk, (delta) => {
-                            answer += delta;
-                            onDelta(answer);
-                        });
-                    }
-                },
-            },
-        );
-        if (typeof response.data === "object" && response.data && "code" in response.data && (response.data as { code?: number; msg?: string }).code !== 0) {
-            throw new Error((response.data as { msg?: string }).msg || "请求失败");
-        }
-        if (typeof response.data === "string") {
-            let apiError = "";
-            try {
-                const payload = JSON.parse(response.data) as { code?: number; msg?: string };
-                if (typeof payload.code === "number" && payload.code !== 0) {
-                    apiError = payload.msg || "请求失败";
-                }
-            } catch {
-                // ignore plain text stream content
-            }
-            if (apiError) throw new Error(apiError);
-        }
-        if (buffer) {
-            parseStreamChunk(buffer, (delta) => {
-                answer += delta;
-                onDelta(answer);
+        await withTimeout(IMAGE_REQUEST_TIMEOUT_SECONDS, async (signal) => {
+            const response = await fetch(aiApiUrl(config, "/chat/completions"), {
+                method: "POST",
+                headers: aiHeaders(config, "application/json"),
+                body: JSON.stringify({ model: config.model, messages: withSystemMessage(config, messages), stream: true }),
+                signal,
             });
-        }
+            if (!response.ok) {
+                const error = await fetchErrorDetail(response, "请求失败");
+                throw new ImageRequestError(error.message, error.detail);
+            }
+            if (isEventStreamResponse(response)) {
+                await readJsonServerSentEvents(response, (event) => {
+                    const delta = (event.choices as Array<{ delta?: { content?: string } }> | undefined)?.[0]?.delta?.content || "";
+                    if (!delta) return;
+                    answer += delta;
+                    onDelta(answer);
+                });
+                return;
+            }
+            const payload = (await response.json()) as {
+                code?: number;
+                msg?: string;
+                error?: { message?: string };
+                choices?: Array<{ message?: { content?: string | null } }>;
+                data?: { choices?: Array<{ message?: { content?: string | null } }> };
+            };
+            if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.msg || "请求失败");
+            const content = payload.choices?.[0]?.message?.content || payload.data?.choices?.[0]?.message?.content || "";
+            if (!content && payload.error?.message) throw new Error(payload.error.message);
+            if (content) {
+                answer = content;
+                onDelta(answer);
+            }
+        });
     } catch (error) {
         throw new Error(readAxiosError(error, "请求失败"));
     }

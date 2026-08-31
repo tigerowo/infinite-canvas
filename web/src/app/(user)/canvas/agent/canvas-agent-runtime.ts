@@ -1,4 +1,10 @@
-import { requestCanvasAgentTurn } from "@/services/api/canvas-agent";
+import {
+    canvasAgentSystemPrompt,
+    canvasAgentTokenCalibrationKey,
+    isCanvasAgentContextLimitError,
+    requestCanvasAgentCheckpoint,
+    requestCanvasAgentTurn,
+} from "@/services/api/canvas-agent";
 import type { AiConfig } from "@/stores/use-config-store";
 import type {
     CanvasAgentContent,
@@ -10,6 +16,13 @@ import type {
 import type { CanvasAgentContext } from "./canvas-agent-context";
 import { buildCanvasAgentSkillPrompt } from "./canvas-agent-skills";
 import {
+    compactCanvasAgentHistory,
+    estimateCanvasAgentInputTokens,
+    MAX_AGENT_INPUT_TOKENS,
+    serializeCanvasAgentMessagesForCheckpoint,
+} from "./canvas-agent-memory";
+import {
+    CANVAS_AGENT_SKILL_FILE_TOOL,
     CANVAS_AGENT_TOOLS,
     canvasAgentActionLabel,
     isCanvasAgentMediaAction,
@@ -21,13 +34,6 @@ import {
 } from "./canvas-agent-tools";
 
 const MAX_AGENT_STEPS = 12;
-const MAX_PROTOCOL_MESSAGES = 120;
-
-function trimProtocolMessages(messages: CanvasAgentProtocolMessage[]) {
-    const trimmed = messages.slice(-MAX_PROTOCOL_MESSAGES);
-    while (trimmed[0]?.role === "tool") trimmed.shift();
-    return trimmed;
-}
 
 export type CanvasAgentRuntimeEvent = {
     status: CanvasAssistantMessageStatus;
@@ -40,10 +46,16 @@ export type RunCanvasAgentInput = {
     protocolMessages: CanvasAgentProtocolMessage[];
     userText: string;
     references: CanvasAssistantReference[];
+    activeSkillContents?: Array<{ id: string; source: "system" | "user"; name: string; content: string; hasFiles?: boolean }>;
+    contextCheckpoint?: string;
     getContext: (state: CanvasAgentState) => CanvasAgentContext;
     executeAction: (action: CanvasAgentAction) => Promise<CanvasAgentToolResult>;
     onEvent?: (event: CanvasAgentRuntimeEvent) => void;
-    onCheckpoint?: (checkpoint: { state: CanvasAgentState; protocolMessages: CanvasAgentProtocolMessage[] }) => void;
+    onCheckpoint?: (checkpoint: {
+        state: CanvasAgentState;
+        protocolMessages: CanvasAgentProtocolMessage[];
+        contextCheckpoint?: string;
+    }) => void;
     signal?: AbortSignal;
 };
 
@@ -51,6 +63,7 @@ export type RunCanvasAgentResult = {
     reply: string;
     state: CanvasAgentState;
     protocolMessages: CanvasAgentProtocolMessage[];
+    contextCheckpoint?: string;
 };
 
 export function createCanvasAgentState(): CanvasAgentState {
@@ -67,45 +80,104 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     let state = input.initialState;
     let allowTools = true;
     let hasExecutedActions = false;
-    let protocolMessages: CanvasAgentProtocolMessage[] = trimProtocolMessages([
+    let protocolMessages: CanvasAgentProtocolMessage[] = [
         ...input.protocolMessages,
         { role: "user" as const, content: buildUserContent(input.userText, input.references, input.config.textModel || input.config.model) },
-    ]);
+    ];
+    let contextCheckpoint = input.contextCheckpoint;
+    const activeSkillContents = input.activeSkillContents?.map((skill, index) => `【完整 Skill ${index + 1}：${skill.name}（${skill.source === "system" ? `系统 Skill ID：${skill.id}` : "用户 Skill"}）】\n${skill.content}`).join("\n\n");
+    const skillFileToolAvailable = Boolean(input.activeSkillContents?.some((skill) => skill.source === "system" && skill.hasFiles));
+    const agentTools = skillFileToolAvailable ? [...CANVAS_AGENT_TOOLS, CANVAS_AGENT_SKILL_FILE_TOOL] : CANVAS_AGENT_TOOLS;
+
+    const emitCheckpoint = () => input.onCheckpoint?.({
+        state,
+        protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages),
+        contextCheckpoint,
+    });
+
+    const compactHistory = async () => {
+        const compacted = await compactCanvasAgentHistory({
+            protocolMessages,
+            contextCheckpoint,
+            createCheckpoint: (previousCheckpoint, messages) => requestCanvasAgentCheckpoint({
+                config: input.config,
+                previousCheckpoint,
+                messages: serializeCanvasAgentMessagesForCheckpoint(messages),
+                signal: input.signal,
+            }),
+        });
+        if (!compacted.compacted) return false;
+        protocolMessages = compacted.protocolMessages;
+        contextCheckpoint = compacted.contextCheckpoint;
+        emitCheckpoint();
+        return true;
+    };
 
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
         throwIfAborted(input.signal);
         input.onEvent?.({ status: "thinking", label: step ? "正在根据画布结果继续" : "正在理解画布和创作目标" });
         const context = input.getContext(state);
-        const turn = await requestCanvasAgentTurn({
+        let systemPrompt = buildCanvasAgentSkillPrompt(state.phase, input.userText, context, activeSkillContents, contextCheckpoint, skillFileToolAvailable);
+        const tools = allowTools ? agentTools : [];
+        if (estimateCanvasAgentInputTokens({ systemPrompt: canvasAgentSystemPrompt(input.config, systemPrompt), messages: protocolMessages, tools }, canvasAgentTokenCalibrationKey(input.config)) >= MAX_AGENT_INPUT_TOKENS) {
+            if (await compactHistory()) systemPrompt = buildCanvasAgentSkillPrompt(state.phase, input.userText, context, activeSkillContents, contextCheckpoint, skillFileToolAvailable);
+        }
+
+        const requestTurn = () => requestCanvasAgentTurn({
             config: input.config,
-            systemPrompt: buildCanvasAgentSkillPrompt(state.phase, input.userText, context),
+            systemPrompt,
             messages: protocolMessages,
-            tools: CANVAS_AGENT_TOOLS,
+            tools: agentTools,
             allowTools,
             signal: input.signal,
         });
+        let turn: Awaited<ReturnType<typeof requestCanvasAgentTurn>>;
+        try {
+            turn = await requestTurn();
+        } catch (error) {
+            if (!isCanvasAgentContextLimitError(error) || !(await compactHistory())) throw error;
+            systemPrompt = buildCanvasAgentSkillPrompt(state.phase, input.userText, context, activeSkillContents, contextCheckpoint, skillFileToolAvailable);
+            turn = await requestTurn();
+        }
         if (turn.usedJsonFallback) allowTools = false;
 
         const parsedJson = parseCanvasAgentJson(turn.content);
         const nativeActions = turn.toolCalls.map((toolCall) => normalizeCanvasAgentAction(toolCall.name, toolCall.arguments, toolCall.id));
         const arrangeRequested = /整理|排列|排序|对齐|布局|排版|重新摆放/.test(input.userText) && !/(不要|别|无需|不用).{0,8}(整理|排列|排序|对齐|布局|排版|重新摆放)/.test(input.userText);
-        const actions = (nativeActions.length ? nativeActions : parsedJson.actions).filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
+        const requestedActions = nativeActions.length ? nativeActions : parsedJson.actions;
+        const actions = requestedActions.filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
+        const rejectedToolMessages: CanvasAgentProtocolMessage[] = nativeActions.filter((action) => action.name === "arrange_nodes" && !arrangeRequested).map((action) => ({
+            role: "tool",
+            toolCallId: action.id,
+            name: action.name,
+            content: JSON.stringify({ ok: false, code: "action_not_requested", message: "用户没有要求整理画布，未执行节点排列" }),
+        }));
+
+        if (!actions.length && rejectedToolMessages.length) {
+            protocolMessages = [
+                ...protocolMessages,
+                { role: "assistant", content: turn.content || undefined, ...(turn.reasoningContent !== undefined ? { reasoningContent: turn.reasoningContent } : {}), responseItems: turn.responseItems, toolCalls: nativeActions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) },
+                ...rejectedToolMessages,
+            ];
+            emitCheckpoint();
+            continue;
+        }
 
         if (!actions.length) {
             const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim();
-            if (!hasExecutedActions && userLikelyRequestedCanvasAction(input.userText) && !looksLikeClarifyingQuestion(reply)) {
-                const unsupported = "当前文本模型没有返回可执行的画布工具指令。可以继续讨论文本内容，但无法可靠地自动创建节点或执行生成；请在全局配置中更换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
-                protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: unsupported }]);
-                return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
+            if (!hasExecutedActions && !reply && userLikelyRequestedCanvasAction(input.userText)) {
+                const unsupported = "当前接口没有返回可执行的画布工具指令。请点击输入框右下角的大脑图标，尝试切换 Chat / Responses，或更换支持 Tool Calling 或稳定 JSON 输出的文本模型。";
+                protocolMessages = [...protocolMessages, { role: "assistant" as const, content: unsupported }];
+                return { reply: unsupported, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint };
             }
             const finalReply = reply || "我已经读取当前画布。请告诉我下一步要继续完善哪一部分。";
-            protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: finalReply }]);
-            return { reply: finalReply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
+            protocolMessages = [...protocolMessages, { role: "assistant" as const, content: finalReply, ...(turn.responseItems?.length ? { responseItems: turn.responseItems } : {}) }];
+            return { reply: finalReply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint };
         }
 
         input.onEvent?.({ status: "running", label: actions.length === 1 ? canvasAgentActionLabel(actions[0]) : "正在执行 " + actions.length + " 个画布操作" });
         const assistantToolMessage: CanvasAgentProtocolMessage = nativeActions.length
-            ? { role: "assistant", content: turn.content || undefined, ...(turn.reasoningContent !== undefined ? { reasoningContent: turn.reasoningContent } : {}), toolCalls: actions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
+            ? { role: "assistant", content: turn.content || undefined, ...(turn.reasoningContent !== undefined ? { reasoningContent: turn.reasoningContent } : {}), ...(turn.responseItems?.length ? { responseItems: turn.responseItems } : {}), toolCalls: nativeActions.map((action) => ({ id: action.id, name: action.name, arguments: action.arguments })) }
             : { role: "assistant", content: turn.content };
 
         const results = await executeActions(actions, state, input.executeAction, input.signal, input.onEvent);
@@ -113,7 +185,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         state = results.state;
 
         if (nativeActions.length && allowTools) {
-            protocolMessages = trimProtocolMessages([
+            protocolMessages = [
                 ...protocolMessages,
                 assistantToolMessage,
                 ...results.items.map(({ action, result }) => ({
@@ -122,23 +194,24 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
                     name: action.name,
                     content: JSON.stringify(result),
                 })),
-            ]);
+                ...rejectedToolMessages,
+            ];
         } else {
-            protocolMessages = trimProtocolMessages([
+            protocolMessages = [
                 ...protocolMessages,
                 assistantToolMessage,
                 {
                     role: "user" as const,
                     content: "工具执行结果（只可依据这些真实结果继续）：\n" + JSON.stringify(results.items.map(({ action, result }) => ({ tool: action.name, id: action.id, result }))),
                 },
-            ]);
+            ];
         }
-        input.onCheckpoint?.({ state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) });
+        emitCheckpoint();
     }
 
     const reply = "本轮已达到安全操作步数上限，当前已完成的节点和任务都已保存。你可以让我继续下一步。";
-    protocolMessages = trimProtocolMessages([...protocolMessages, { role: "assistant" as const, content: reply }]);
-    return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages) };
+    protocolMessages = [...protocolMessages, { role: "assistant" as const, content: reply }];
+    return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint };
 }
 
 async function executeActions(
@@ -179,24 +252,21 @@ async function executeActions(
 }
 
 function buildUserContent(text: string, references: CanvasAssistantReference[], modelName: string): CanvasAgentContent {
-    const referenceText = references.length ? "\n\n本次明确引用的真实节点：" + references.map((item) => item.id + "（" + item.title + "）").join("、") : "";
+    const referenceText = references.length
+        ? "\n\n本次输入中的节点占位与真实节点一一对应，请按占位分别理解和操作：" + references.map((item) => `${item.label || item.title} → 节点 ${item.id}（${item.title}）`).join("；")
+        : "";
+    const imageReferences = references.filter((item) => item.dataUrl && (/^data:image\//.test(item.dataUrl) || /^https?:\/\//.test(item.dataUrl)));
+    const imageOrderText = imageReferences.length ? "\n随消息附带的图片顺序：" + imageReferences.map((item, index) => `第 ${index + 1} 张 = ${item.label || item.title}`).join("；") : "";
     const images = supportsCanvasAgentImageInput(modelName)
-        ? references.flatMap((item) => {
-            const url = item.dataUrl;
-            return url && (/^data:image\//.test(url) || /^https?:\/\//.test(url)) ? [{ type: "image_url" as const, image_url: { url } }] : [];
-        })
+        ? imageReferences.map((item) => ({ type: "image_url" as const, image_url: { url: item.dataUrl as string } }))
         : [];
     if (!images.length) return text + referenceText;
-    return [{ type: "text", text: text + referenceText }, ...images];
+    return [{ type: "text", text: text + referenceText + imageOrderText }, ...images];
 }
 
 function supportsCanvasAgentImageInput(modelName: string) {
     const model = modelName.trim().toLowerCase();
     return model === "mimo-v2.5" || /gpt-(?:4o|4\.1|5)|(?:^|[\\/_-])o[134](?:[\\/_-]|$)|gemini|claude|qwen.*(?:vl|vision)|glm-4v|pixtral|llava|internvl|deepseek.*vl|vision/.test(model);
-}
-
-function looksLikeClarifyingQuestion(text: string) {
-    return /[?？]|请(?:告诉|选择|确认|提供)|需要.{0,12}(?:吗|呢)|希望.{0,12}(?:吗|呢)/.test(text);
 }
 
 function persistCanvasAgentProtocolMessages(messages: CanvasAgentProtocolMessage[]) {

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
-import { ChevronRight, CircleStop, Image as ImageIcon, Music2, RefreshCw, Star, Video } from "lucide-react";
+import { ChevronRight, CircleStop, Image as ImageIcon, Maximize2, Music2, Pause, Play, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
@@ -25,7 +25,7 @@ type CanvasNodeProps = {
     isFocusRelated: boolean;
     isConnectionTarget: boolean;
     isConnecting: boolean;
-    editRequestNonce?: number;
+    referenceSelectionState?: "target" | "disabled" | "available";
     showPanel: boolean;
     showImageInfo: boolean;
     mentionReferences?: CanvasResourceReference[];
@@ -53,14 +53,15 @@ type CanvasNodeProps = {
     onCancel?: (node: CanvasNodeData) => void;
     cancelDisabled?: boolean;
     isCancelling?: boolean;
-    onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
+    onSelectReference?: (nodeId: string) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
 };
 
 type NodeContentRendererProps = {
     node: CanvasNodeData;
     theme: (typeof canvasThemes)[keyof typeof canvasThemes];
+    isSelected: boolean;
     isEditingContent: boolean;
     textareaRef: React.RefObject<HTMLTextAreaElement | null>;
     isBatchRoot: boolean;
@@ -77,7 +78,6 @@ type NodeContentRendererProps = {
     onCancel?: (node: CanvasNodeData) => void;
     cancelDisabled?: boolean;
     isCancelling?: boolean;
-    onGenerateImage?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
@@ -92,7 +92,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     isFocusRelated,
     isConnectionTarget,
     isConnecting,
-    editRequestNonce = 0,
+    referenceSelectionState,
     showPanel,
     showImageInfo,
     mentionReferences = [],
@@ -120,8 +120,8 @@ export const CanvasNode = React.memo(function CanvasNode({
     onCancel,
     cancelDisabled = false,
     isCancelling = false,
-    onGenerateImage,
     onViewImage,
+    onSelectReference,
     onContextMenu,
 }: CanvasNodeProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
@@ -194,11 +194,6 @@ export const CanvasNode = React.memo(function CanvasNode({
         textarea?.focus();
         textarea?.setSelectionRange(textarea.value.length, textarea.value.length);
     }, [isEditingContent]);
-
-    useEffect(() => {
-        if (!editRequestNonce || data.type !== CanvasNodeType.Text) return;
-        setIsEditingContent(true);
-    }, [data.type, editRequestNonce]);
 
     useEffect(() => {
         if (!isEditingContent) return;
@@ -291,7 +286,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     return (
         <div
             data-node-id={data.id}
-            className={`node-element absolute flex select-none flex-col transition-shadow duration-200 ${isGroup ? "z-[5]" : isSelected ? "z-50" : "z-10"}`}
+            className={`node-element absolute flex select-none flex-col transition-shadow duration-200 ${isGroup ? "z-[5]" : isSelected ? "z-50" : "z-10"} ${referenceSelectionState === "available" ? "cursor-pointer" : referenceSelectionState ? "cursor-not-allowed" : ""}`}
             style={{
                 transform: `translate(${data.position.x}px, ${data.position.y}px)`,
                 width: data.width,
@@ -307,9 +302,18 @@ export const CanvasNode = React.memo(function CanvasNode({
                 setHovered(false);
                 onHoverEnd(data.id);
             }}
-            onContextMenu={(event) => onContextMenu(event, data.id)}
+            onMouseDownCapture={(event) => {
+                if (!referenceSelectionState) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.button === 0 && referenceSelectionState === "available") onSelectReference?.(data.id);
+            }}
+            onContextMenu={(event) => {
+                if (referenceSelectionState) event.preventDefault();
+                else onContextMenu(event, data.id);
+            }}
         >
-            <div
+            {!referenceSelectionState ? <div
                 className="absolute left-3 top-[-28px] z-[65] max-w-[calc(100%-24px)]"
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
@@ -345,8 +349,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                         {data.title || "未命名节点"}
                     </button>
                 )}
-            </div>
-            {isGroup ? (
+            </div> : null}
+            {isGroup && !referenceSelectionState ? (
                 <div className="pointer-events-none absolute right-3 top-[-28px] z-[65] text-xs opacity-75" style={{ color: theme.node.text }}>
                     {groupChildCount} 个节点
                 </div>
@@ -361,13 +365,20 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }}
                 onMouseDown={(event) => onMouseDown(event, data.id)}
                 onDoubleClick={(event) => {
+                    if (referenceSelectionState) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        return;
+                    }
                     if (isBatchRoot) {
                         event.stopPropagation();
                         onToggleBatch?.(data.id);
                         return;
                     }
-                    if (isCanvasImageNodeType(data.type) && hasImageContent) {
+                    if ((isCanvasImageNodeType(data.type) && hasImageContent) || (data.type === CanvasNodeType.Video && hasVideoContent)) {
+                        event.preventDefault();
                         event.stopPropagation();
+                        if (data.type === CanvasNodeType.Video && event.target instanceof HTMLVideoElement) event.target.pause();
                         onViewImage?.(data);
                         return;
                     }
@@ -393,6 +404,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                         <NodeContent
                             node={data}
                             theme={theme}
+                            isSelected={isSelected}
                             now={now}
                             isEditingContent={isEditingContent}
                             textareaRef={textareaRef}
@@ -409,7 +421,6 @@ export const CanvasNode = React.memo(function CanvasNode({
                             onCancel={onCancel}
                             cancelDisabled={cancelDisabled}
                             isCancelling={isCancelling}
-                            onGenerateImage={onGenerateImage}
                             onViewImage={onViewImage}
                             onToggleBatch={() => onToggleBatch?.(data.id)}
                             onSetBatchPrimary={() => onSetBatchPrimary?.(data)}
@@ -422,20 +433,26 @@ export const CanvasNode = React.memo(function CanvasNode({
 
                 {!isGroup && !hasImageContent && !hasVideoContent && !hasAudioContent ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12" style={{ background: `linear-gradient(to top, ${theme.canvas.background}66, transparent)` }} /> : null}
 
-                <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} />
-                <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} />
-                <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} />
-                <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} />
+                {referenceSelectionState && (referenceSelectionState !== "available" || hovered) ? (
+                    <div className="pointer-events-none absolute inset-0 z-[60] grid place-items-center rounded-[inherit]" style={{ background: `color-mix(in srgb, ${theme.canvas.background} ${referenceSelectionState === "target" ? 78 : referenceSelectionState === "disabled" ? 60 : 34}%, transparent)`, boxShadow: referenceSelectionState === "available" ? `inset 0 0 0 2px ${selectionBlue}` : undefined }}>
+                        {referenceSelectionState !== "disabled" ? <span className="rounded-lg px-3 py-2 text-sm font-medium shadow-sm" style={{ background: theme.toolbar.panel, color: theme.node.text }}>{referenceSelectionState === "target" ? "正在添加参考" : "选择"}</span> : null}
+                    </div>
+                ) : null}
+
+                {!referenceSelectionState ? <ResizeHandle corner="top-left" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState ? <ResizeHandle corner="top-right" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState ? <ResizeHandle corner="bottom-left" onMouseDown={handleResizeMouseDown} /> : null}
+                {!referenceSelectionState ? <ResizeHandle corner="bottom-right" onMouseDown={handleResizeMouseDown} /> : null}
             </div>
 
-            {!isGroup ? (
+            {!referenceSelectionState && !isGroup ? (
                 <>
                     <ConnectionHandleDot side="left" visible={hovered || isSelected || isConnecting} onMouseDown={(event) => onConnectStart(event, data.id, "target")} />
                     <ConnectionHandleDot side="right" visible={data.type !== CanvasNodeType.Config && (hovered || isSelected || isConnecting)} onMouseDown={(event) => onConnectStart(event, data.id, "source")} />
                 </>
             ) : null}
 
-            {showPanel && !isGroup && renderPanel ? <div className={"absolute left-1/2 top-full z-[70] max-w-[calc(100vw-24px)] -translate-x-1/2 pt-4 " + (data.type === CanvasNodeType.Image || data.type === CanvasNodeType.Video ? "w-[580px]" : "w-[500px]")}>{renderPanel(data)}</div> : null}
+            {!referenceSelectionState && showPanel && !isGroup && renderPanel ? <div className={"absolute left-1/2 top-full z-[70] max-w-[calc(100vw-24px)] -translate-x-1/2 pt-4 " + (isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? "w-[622px]" : "w-[500px]")}>{renderPanel(data)}</div> : null}
         </div>
     );
 });
@@ -444,7 +461,9 @@ function NodeContent(props: NodeContentRendererProps) {
     if (props.node.type === CanvasNodeType.Group) return null;
     if ((props.node.type === CanvasNodeType.Config || props.node.type === CanvasNodeType.Director) && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.isBatchRoot) return props.node.type === CanvasNodeType.Panorama ? <PanoramaNodeContent {...props} /> : <ImageNodeContent {...props} />;
-    if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} now={props.now} onCancel={props.onCancel} cancelDisabled={props.cancelDisabled} isCancelling={props.isCancelling} />;
+    if (props.node.metadata?.status === "loading" && (props.node.type !== CanvasNodeType.Text || !props.node.metadata.content)) {
+        return <LoadingContent node={props.node} theme={props.theme} now={props.now} onCancel={props.onCancel} cancelDisabled={props.cancelDisabled} isCancelling={props.isCancelling} />;
+    }
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} />;
 
     const Renderer = nodeContentRenderers[props.node.type];
@@ -565,32 +584,16 @@ function UnknownNodeContent({ theme }: Pick<NodeContentRendererProps, "theme">) 
     );
 }
 
-function TextContent({ node, theme, isEditingContent, textareaRef, mentionReferences, onContentChange, onStopEditing, onGenerateImage }: NodeContentRendererProps) {
+function TextContent({ node, theme, isEditingContent, textareaRef, mentionReferences, onContentChange, onStopEditing }: NodeContentRendererProps) {
     const fontSize = node.metadata?.fontSize || 14;
     const textStyle = { fontSize: `${fontSize}px`, lineHeight: `${Math.round(fontSize * 1.65)}px`, color: theme.node.text, boxSizing: "border-box" } as React.CSSProperties;
 
     return (
-        <div className="flex h-full w-full flex-col overflow-hidden pt-8">
-            <button
-                type="button"
-                className="absolute right-3 top-3 z-20 inline-flex h-8 items-center gap-1 rounded-full border px-2.5 text-xs font-medium opacity-85 backdrop-blur-md transition hover:scale-[1.02] hover:opacity-100"
-                style={{ background: `${theme.toolbar.panel}dd`, borderColor: theme.node.stroke, color: theme.node.text }}
-                onClick={(event) => {
-                    event.stopPropagation();
-                    onGenerateImage?.(node);
-                }}
-                onMouseDown={(event) => event.stopPropagation()}
-                onPointerDown={(event) => event.stopPropagation()}
-                title="用文本生图"
-                aria-label="用文本生图"
-            >
-                <ImageIcon className="size-3.5" />
-                生图
-            </button>
+        <div className="flex h-full w-full flex-col overflow-hidden">
             {isEditingContent ? (
                 <CanvasResourceMentionTextarea
                     ref={textareaRef}
-                    className="thin-scrollbar block h-full w-full resize-none overflow-y-auto whitespace-pre-wrap break-words border-none bg-transparent pl-4 pr-14 pt-0 pb-4 m-0 font-mono outline-none select-text appearance-none"
+                    className="thin-scrollbar block h-full w-full resize-none overflow-y-auto whitespace-pre-wrap break-words border-none bg-transparent p-4 m-0 font-mono outline-none select-text appearance-none"
                     style={textStyle}
                     value={node.metadata?.content || ""}
                     references={mentionReferences}
@@ -606,7 +609,7 @@ function TextContent({ node, theme, isEditingContent, textareaRef, mentionRefere
                 />
             ) : (
                 <div
-                    className="thin-scrollbar block h-full w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent pl-4 pr-14 pt-0 pb-4 font-mono"
+                    className="thin-scrollbar block h-full w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent p-4 font-mono"
                     style={textStyle}
                     onWheel={(event) => event.stopPropagation()}
                 >
@@ -687,7 +690,20 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
     return content;
 }
 
-function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
+function VideoNodeContent({ node, theme, isSelected, onViewImage }: NodeContentRendererProps) {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [mediaDurationMs, setMediaDurationMs] = useState(0);
+    const togglePlayback = () => {
+        const video = videoRef.current;
+        if (!video) return;
+        if (video.paused) void video.play();
+        else video.pause();
+    };
+    useEffect(() => {
+        if (isSelected) videoRef.current?.focus({ preventScroll: true });
+        else if (document.activeElement === videoRef.current) videoRef.current?.blur();
+    }, [isSelected, node.metadata?.content]);
     if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
@@ -695,7 +711,25 @@ function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
                 <span className="text-sm">空视频节点</span>
             </div>
         );
-    return <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-no-zoom />;
+    const controlStyle = { background: theme.toolbar.panel, color: theme.toolbar.item };
+    const controlClassName = "absolute bottom-2 z-20 flex size-7 items-center justify-center rounded-md opacity-70 backdrop-blur transition-opacity hover:opacity-100";
+    const keepVideoFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isSelected) videoRef.current?.focus({ preventScroll: true });
+    };
+    return (
+        <div className="relative h-full w-full overflow-hidden rounded-[18px] bg-black" data-canvas-no-zoom>
+            <video ref={videoRef} src={node.metadata.content} tabIndex={-1} playsInline className="h-full w-full object-contain outline-none" onLoadedMetadata={(event) => setMediaDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
+            {mediaDurationMs > 0 ? <span className="pointer-events-none absolute left-2 top-2 z-20 flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium opacity-70 backdrop-blur" style={controlStyle}>{new Date(mediaDurationMs).toISOString().slice(mediaDurationMs >= 3_600_000 ? 11 : 14, 19)}</span> : null}
+            <button type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} className={`${controlClassName} left-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); togglePlayback(); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
+                {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+            </button>
+            <button type="button" title="放大预览" aria-label="放大预览" className={`${controlClassName} right-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); videoRef.current?.pause(); onViewImage?.(node); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
+                <Maximize2 className="size-3.5" />
+            </button>
+        </div>
+    );
 }
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {

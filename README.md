@@ -6,11 +6,15 @@
 
 <p align="center">
   <a href="https://github.com/tigerowo/infinite-canvas"><img src="https://img.shields.io/github/stars/tigerowo/infinite-canvas?style=flat-square&logo=github" alt="GitHub stars"></a>
-  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.5.5-2563eb?style=flat-square" alt="Version"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-f97316?style=flat-square" alt="License"></a>
+  <a href="VERSION"><img src="https://img.shields.io/badge/version-v0.6.0-2563eb?style=flat-square" alt="Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-f97316?style=flat-square" alt="License"></a>
   <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-ready-2496ed?style=flat-square&logo=docker&logoColor=white" alt="Docker ready"></a>
   <a href="https://nextjs.org/"><img src="https://img.shields.io/badge/Next.js-16.2-000000?style=flat-square&logo=nextdotjs" alt="Next.js"></a>
   <a href="https://go.dev/"><img src="https://img.shields.io/badge/Go-1.25-00add8?style=flat-square&logo=go&logoColor=white" alt="Go"></a>
+</p>
+
+<p align="center">
+  <a href="#联系方式"><img src="https://img.shields.io/badge/微信交流群已开放-扫码加入-07C160?style=flat-square&logo=wechat&logoColor=white" alt="微信群"></a>
 </p>
 
 <p align="center">
@@ -172,9 +176,22 @@ https://infinite-canvas-cpco.onrender.com?apiKey={key}&baseUrl={address}
 - [系统配置数据结构](docs/backend/system-settings.md)
 - [接口响应约定](docs/backend/api-response.md)
 
+## 联系方式
+
+项目定制二次开发需求，广告赞助合作其他可联系
+
+邮箱：yhb293933@gmail.com
+
+微信交流测试群：
+<p align="center">
+  <img src="assets/wc.png" alt="微信群二维码" width="180">
+</p>
+
 ## 赞助支持
 
 <div align="center">
+
+本项目长期开放广告赞助合作，欢迎品牌 / 产品投放
 
 如果这个项目对你有帮助，欢迎赞助支持，你的每一份鼓励都是持续更新的动力！
 
@@ -186,7 +203,7 @@ https://infinite-canvas-cpco.onrender.com?apiKey={key}&baseUrl={address}
 
 ## 开源协议
 
-本项目使用 MIT License，见 [LICENSE](LICENSE)。
+本项目使用 GNU Affero General Public License v3.0，见 [LICENSE](LICENSE)。
 
 ## Star History
 

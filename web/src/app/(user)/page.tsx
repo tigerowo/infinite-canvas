@@ -14,6 +14,7 @@ import { useEffectiveConfig } from "@/stores/use-config-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
 import { useCanvasStore } from "./canvas/stores/use-canvas-store";
+import { canvasResourceLabel } from "./canvas/utils/canvas-resource-references";
 import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
 import {
     CanvasNodeType,
@@ -32,13 +33,13 @@ const HOME_BANNERS: HomeBanner[] = [
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/3ddirector.webp", videoUrl: "", linkUrl: "", alt: "5" },
 ];
 
-function toPendingAgentAsset(payload: InsertAssetPayload): PendingAgentAsset {
+function toPendingAgentAsset(payload: InsertAssetPayload, label: string): PendingAgentAsset {
     const nodeId = nanoid();
     let reference: CanvasAssistantReference;
     if (payload.kind === "text") {
-        reference = { id: nodeId, type: CanvasNodeType.Text, title: payload.title, text: payload.content };
+        reference = { id: nodeId, type: CanvasNodeType.Text, title: payload.title, label, text: payload.content };
     } else {
-        const common = { id: nodeId, title: payload.title, storageKey: payload.storageKey, mimeType: payload.mimeType };
+        const common = { id: nodeId, title: payload.title, label, storageKey: payload.storageKey, mimeType: payload.mimeType };
         if (payload.kind === "image") reference = { ...common, type: CanvasNodeType.Image, dataUrl: payload.dataUrl };
         else if (payload.kind === "video") reference = { ...common, type: CanvasNodeType.Video, url: payload.url };
         else reference = { ...common, type: CanvasNodeType.Audio, url: payload.url };
@@ -60,12 +61,15 @@ export default function IndexPage() {
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig>(() => ({
+        textApiMode: "chat",
+        autoGenerateMedia: false,
         imageQuality: effectiveConfig.quality,
         imageSize: effectiveConfig.size,
         videoQuality: effectiveConfig.vquality,
         videoSize: effectiveConfig.videoSize,
     }));
     const uploadInputRef = useRef<HTMLInputElement>(null);
+    const pendingAssetCountsRef = useRef<Record<InsertAssetPayload["kind"], number>>({ text: 0, image: 0, video: 0, audio: 0 });
 
     useEffect(() => {
         void fetchPrompts({ pageSize: 12 })
@@ -74,7 +78,9 @@ export default function IndexPage() {
     }, [message]);
 
     const addPendingAsset = (payload: InsertAssetPayload) => {
-        setPendingAssets((current) => [...current, toPendingAgentAsset(payload)]);
+        const asset = toPendingAgentAsset(payload, canvasResourceLabel(payload.kind, pendingAssetCountsRef.current[payload.kind]++));
+        setPendingAssets((current) => [...current, asset]);
+        setPrompt((current) => `${current}${current.endsWith(" ") ? "" : " "}${asset.reference.label} `);
     };
 
     const uploadFile = async (file: File) => {
@@ -100,8 +106,8 @@ export default function IndexPage() {
         if (file) void uploadFile(file);
     };
 
-    const submit = () => {
-        const text = prompt.trim();
+    const submit = (nextPrompt = prompt, referenceIds = pendingAssets.map((asset) => asset.nodeId)) => {
+        const text = nextPrompt.trim();
         if (!text || submitting) return;
         if (!hydrated) {
             message.info("画布数据正在加载，请稍后再试");
@@ -113,7 +119,7 @@ export default function IndexPage() {
         for (let i = 1; titles.has(title); i++) title = `无限画布 ${i}`;
         const projectId = createProject(title, {
             agentConfig,
-            pendingAgentRequest: { prompt: text, assets: pendingAssets },
+            pendingAgentRequest: { prompt: text, assets: pendingAssets.filter((asset) => referenceIds.includes(asset.nodeId)) },
         });
         router.push(`/canvas/${projectId}`);
     };
@@ -131,10 +137,10 @@ export default function IndexPage() {
                             agentConfig={agentConfig}
                             onAgentConfigChange={(patch) => setAgentConfig((current) => ({ ...current, ...patch }))}
                             onPromptChange={setPrompt}
+                            onReferenceIdsChange={(ids) => setPendingAssets((current) => current.filter((asset) => ids.includes(asset.nodeId)))}
                             onSubmit={submit}
                             onOpenUpload={() => uploadInputRef.current?.click()}
                             onOpenAssets={() => setAssetPickerOpen(true)}
-                            onRemoveReference={(id) => setPendingAssets((current) => current.filter((asset) => asset.nodeId !== id))}
                             onPasteImage={(file) => void uploadFile(file)}
                         />
                     </div>

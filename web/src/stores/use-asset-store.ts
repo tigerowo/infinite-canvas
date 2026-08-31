@@ -8,6 +8,7 @@ import { localForageStorage } from "@/lib/localforage-storage";
 import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
 import { fetchUserAssetData, syncUserAssetData } from "@/services/api/user-config";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type AssetKind = "text" | "image" | "video" | "audio";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -48,27 +49,27 @@ let syncTimer: number | null = null;
 
 type AssetSnapshot = { assets: Asset[] };
 
+async function resolveStoredAsset(asset: Asset): Promise<Asset> {
+    if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
+    if (asset.kind === "audio" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
+    if (asset.kind !== "image") return asset;
+    if (asset.data.storageKey)
+        return {
+            ...asset,
+            coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
+            data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
+        };
+    if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
+    const image = await uploadImage(asset.data.dataUrl);
+    return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
+}
+
 const assetStorage: PersistStorage<AssetStore> = {
     getItem: async (name) => {
         const value = await localForageStorage.getItem(name);
         if (!value) return null;
         const parsed = JSON.parse(value) as StorageValue<AssetStore>;
-        parsed.state.assets = await Promise.all(
-            parsed.state.assets.map(async (asset) => {
-                if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind === "audio" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
-                if (asset.kind !== "image") return asset;
-                if (asset.data.storageKey)
-                    return {
-                        ...asset,
-                        coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
-                        data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
-                    };
-                if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
-                const image = await uploadImage(asset.data.dataUrl);
-                return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
-            }),
-        );
+        parsed.state.assets = await Promise.all(parsed.state.assets.map(resolveStoredAsset));
         return parsed;
     },
     setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(value)),
@@ -178,7 +179,11 @@ export const useAssetStore = create<AssetStore>()(
                 isHydratingAccountAssets = true;
                 try {
                     const remote = await fetchUserAssetData<AssetSnapshot>(token);
-                    const remoteAssets = Array.isArray(remote?.assets) ? remote.assets : [];
+                    const remoteAssets = await Promise.all(
+                        (Array.isArray(remote?.assets) ? remote.assets : []).map((asset) =>
+                            asset.kind === "image" && asset.data.storageKey?.startsWith("image:") ? resolveStoredAsset(asset) : asset,
+                        ),
+                    );
                     if (syncEnabled) {
                         set({ assets: remoteAssets });
                     } else {
@@ -203,6 +208,7 @@ export const useAssetStore = create<AssetStore>()(
             cleanupImages: (extra) => {
                 window.setTimeout(async () => {
                     const { useCanvasStore } = await import("@/app/(user)/canvas/stores/use-canvas-store");
+                    const { loadLocalAgentSkills, useAgentSkillStore } = await import("@/stores/use-agent-skill-store");
                     const logKeys: string[] = [];
                     try {
                         const localforage = (await import("localforage")).default;
@@ -238,7 +244,14 @@ export const useAssetStore = create<AssetStore>()(
                         console.error("Error gathering log keys in cleanupImages", e);
                     }
 
-                    await cleanupUnusedImages({ assets: get().assets, projects: useCanvasStore.getState().projects, extra, logKeys });
+                    try {
+                        await useAgentSkillStore.getState().loadSkills();
+                        const skillStore = useAgentSkillStore.getState();
+                        const localSkills = useUserStore.getState().token ? await loadLocalAgentSkills() : [];
+                        await cleanupUnusedImages({ assets: get().assets, projects: useCanvasStore.getState().projects, skills: [...skillStore.systemSkills, ...skillStore.userSkills, ...localSkills], extra, logKeys });
+                    } catch (error) {
+                        console.error("Error gathering Skill keys in cleanupImages", error);
+                    }
                     await cleanupUnusedMedia({ assets: get().assets, projects: useCanvasStore.getState().projects, extra, logKeys });
                 }, 0);
             },

@@ -114,7 +114,6 @@ export default function AdminPromptsPage() {
             title: "操作",
             key: "actions",
             width: 112,
-            align: "right",
             render: (_, item) => (
                 <Space size={4}>
                     <Tooltip title="详情">
@@ -307,7 +306,6 @@ export default function AdminPromptsPage() {
                             title: "",
                             key: "sync",
                             width: 96,
-                            align: "right",
                             render: (_, item) => (
                                 <Button
                                     type="primary"

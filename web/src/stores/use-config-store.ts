@@ -398,6 +398,16 @@ export function selectableModelsByCapability(config: AiConfig, capability?: Mode
     return filterChannelModelsByCapability(channels, capability, config.models);
 }
 
+export function resolveModelForCapability(config: AiConfig, currentModel: string | undefined, capability: ModelCapability) {
+    const configuredModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
+    const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
+    const selectableModels = selectableModelsByCapability(config, capability);
+    const matches = (model: string | undefined) => Boolean(model && (selectableModels.length ? selectableModels.includes(model) : modelMatchesCapability(model, capability)));
+    if (matches(currentModel)) return currentModel!;
+    if (matches(configuredModel)) return configuredModel;
+    return selectableModels[0] || fallbackModel;
+}
+
 function isAiConfigReady(config: AiConfig, model: string) {
     const channel = localChannelForActiveModel({ ...config, model });
     return (

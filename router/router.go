@@ -92,6 +92,11 @@ func New() *gin.Engine {
 	v1.DELETE("/workflows/:id", func(c *gin.Context) {
 		handler.DeleteUserWorkflow(c.Writer, c.Request, c.Param("id"))
 	})
+	v1.GET("/agent-skills", gin.WrapF(handler.UserAgentSkills))
+	v1.POST("/agent-skills", gin.WrapF(handler.SaveUserAgentSkill))
+	v1.DELETE("/agent-skills/:id", func(c *gin.Context) {
+		handler.DeleteUserAgentSkill(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/storage/measure", middleware.HeavyRequestBudget, gin.WrapF(handler.MeasureUserStorageProvider))
 	v1.POST("/files", middleware.UploadRequestBudget, gin.WrapF(handler.UploadFile))
 	v1.POST("/files/direct", gin.WrapF(handler.RegisterDirectFile))
@@ -182,6 +187,10 @@ func New() *gin.Engine {
 	api.GET("/proxy-image", middleware.ProxyRequestBudget, gin.WrapF(handler.ProxyImage))
 	api.GET("/proxy-media", middleware.ProxyRequestBudget, gin.WrapF(handler.ProxyMedia))
 	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
+	api.GET("/agent-skills", gin.WrapF(handler.AgentSkills))
+	api.GET("/agent-skills/:id/file", func(c *gin.Context) {
+		handler.AgentSkillFile(c.Writer, c.Request, c.Param("id"))
+	})
 	api.GET("/assets", middleware.OptionalAuth, gin.WrapF(handler.Assets))
 	api.POST("/admin/login", middleware.AuthRequestBudget, gin.WrapF(handler.AdminLogin))
 
@@ -214,6 +223,14 @@ func New() *gin.Engine {
 	admin.POST("/prompts/batch-delete", gin.WrapF(handler.AdminDeletePrompts))
 	admin.DELETE("/prompts/:id", func(c *gin.Context) {
 		handler.AdminDeletePrompt(c.Writer, c.Request, c.Param("id"))
+	})
+	admin.GET("/agent-skills", gin.WrapF(handler.AdminAgentSkills))
+	admin.GET("/agent-skills/:id/files", func(c *gin.Context) {
+		handler.AdminAgentSkillFiles(c.Writer, c.Request, c.Param("id"))
+	})
+	admin.POST("/agent-skills", gin.WrapF(handler.AdminSaveAgentSkill))
+	admin.DELETE("/agent-skills/:id", func(c *gin.Context) {
+		handler.AdminDeleteAgentSkill(c.Writer, c.Request, c.Param("id"))
 	})
 	admin.GET("/assets", gin.WrapF(handler.AdminAssets))
 	admin.POST("/assets", gin.WrapF(handler.AdminSaveAsset))

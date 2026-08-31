@@ -177,6 +177,7 @@ function PanelTabButton({ label, active, theme, onClick }: { label: string; acti
 function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, theme }: { nodes: CanvasNodeData[]; selectedNodeIds: Set<string>; onFocusNode: (nodeId: string) => void; theme: CanvasTheme }) {
     const [keyword, setKeyword] = useState("");
     const [typeFilter, setTypeFilter] = useState<string>("all");
+    const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
     const rowRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
     const filtered = useMemo(() => {
@@ -186,6 +187,22 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, theme }: { nodes:
             return !query || [node.title, NODE_TYPE_LABEL[node.type], node.metadata?.content, node.metadata?.prompt].filter(Boolean).join(" ").toLowerCase().includes(query);
         });
     }, [keyword, nodes, typeFilter]);
+    const treeRows = useMemo(() => {
+        const filteredIds = new Set(filtered.map((node) => node.id));
+        const groups = new Set(nodes.filter((node) => node.type === CanvasNodeType.Group).map((node) => node.id));
+        const children = new Map<string, CanvasNodeData[]>();
+        filtered.forEach((node) => {
+            const groupId = node.metadata?.groupId;
+            if (groupId && groups.has(groupId)) children.set(groupId, [...(children.get(groupId) || []), node]);
+        });
+        return nodes.flatMap((node) => {
+            if (node.metadata?.groupId && groups.has(node.metadata.groupId)) return [];
+            if (node.type !== CanvasNodeType.Group) return filteredIds.has(node.id) ? [{ node, depth: 0, hasChildren: false }] : [];
+            const groupChildren = children.get(node.id) || [];
+            if (!filteredIds.has(node.id) && !groupChildren.length) return [];
+            return [{ node, depth: 0, hasChildren: groupChildren.length > 0 }, ...(collapsedGroups.has(node.id) ? [] : groupChildren.map((child) => ({ node: child, depth: 1, hasChildren: false })))];
+        });
+    }, [collapsedGroups, filtered, nodes]);
 
     useEffect(() => {
         const selectedId = Array.from(selectedNodeIds)[0];
@@ -203,21 +220,27 @@ function CanvasNodesTab({ nodes, selectedNodeIds, onFocusNode, theme }: { nodes:
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder="搜索节点" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-                {filtered.length ? (
+                {treeRows.length ? (
                     <div className="space-y-1.5">
-                        {filtered.map((node) => {
+                        {treeRows.map(({ node, depth, hasChildren }) => {
                             const Icon = NODE_TYPE_ICON[node.type] || FileText;
                             const hasImage = isCanvasImageNodeType(node.type) && node.metadata?.content;
                             const active = selectedNodeIds.has(node.id);
                             return (
-                                <div key={node.id} className={cn("flex w-full items-center rounded-lg transition", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")} style={active ? { background: theme.toolbar.activeBg } : undefined}>
+                                <div key={node.id} className={cn("relative flex items-center rounded-lg transition", depth && "ml-5", active ? "" : "hover:bg-black/5 dark:hover:bg-white/5")} style={active ? { background: theme.toolbar.activeBg } : undefined}>
+                                    {depth ? <span className="pointer-events-none absolute -left-3 top-[calc(-50%-0.4rem)] h-[calc(100%+0.4rem)] w-3 rounded-bl-md border-b border-l opacity-45" style={{ borderColor: theme.node.stroke }} /> : null}
+                                    {node.type === CanvasNodeType.Group && hasChildren ? (
+                                        <button type="button" onClick={() => setCollapsedGroups((current) => (current.has(node.id) ? new Set([...current].filter((id) => id !== node.id)) : new Set(current).add(node.id)))} className="ml-1 grid size-6 shrink-0 place-items-center opacity-55 transition hover:opacity-100" aria-label={node.title}>
+                                            <ChevronRight className={cn("size-3.5 transition-transform", !collapsedGroups.has(node.id) && "rotate-90")} />
+                                        </button>
+                                    ) : null}
                                     <button
                                         ref={(element) => {
                                             rowRefs.current[node.id] = element;
                                         }}
                                         type="button"
                                         onClick={() => onFocusNode(node.id)}
-                                        className="flex min-w-0 flex-1 items-center gap-3 px-2 py-2 text-left"
+                                        className={cn("flex min-w-0 flex-1 items-center gap-3 py-2 pr-2 text-left", node.type === CanvasNodeType.Group && hasChildren ? "pl-0" : "pl-2")}
                                     >
                                         <span className="grid size-10 shrink-0 place-items-center overflow-hidden rounded-md">
                                             {hasImage ? <img src={node.metadata?.content} alt={node.title} className="size-full object-cover" /> : <Icon className="size-5 opacity-60" />}

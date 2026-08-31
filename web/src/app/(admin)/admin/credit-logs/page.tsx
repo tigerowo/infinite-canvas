@@ -76,7 +76,6 @@ export default function AdminCreditLogsPage() {
             title: "操作",
             key: "actions",
             width: 96,
-            align: "right",
             render: (_, item) => (
                 <Space size={4}>
                     <Tooltip title="编辑">
