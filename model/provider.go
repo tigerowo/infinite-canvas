@@ -30,6 +30,7 @@ type Provider struct {
 	CredentialsCiphertext string         `json:"-" gorm:"type:text"`
 	Capabilities          []string       `json:"capabilities" gorm:"serializer:json;type:text"`
 	Models                []string       `json:"models" gorm:"serializer:json;type:text"`
+	VerifiedModels        []string       `json:"verifiedModels" gorm:"serializer:json;type:text"`
 	DefaultModel          string         `json:"defaultModel"`
 	Timeout               int            `json:"timeout"`
 	Enabled               bool           `json:"enabled"`

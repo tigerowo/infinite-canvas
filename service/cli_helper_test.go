@@ -188,6 +188,7 @@ func TestExecuteCLICompanionVersionFetchesAntigravityModelsAndKeepsJimengDetecti
 		version   string
 	}{
 		{protocol: "gemini-cli", candidate: "agy", version: "agy 1.2.3"},
+		{protocol: "gemini-official-cli", candidate: "gemini", version: "0.57.0"},
 		{protocol: "jimeng", candidate: "dreamina", version: "dreamina 1.4.2"},
 	} {
 		t.Run(testCase.protocol, func(t *testing.T) {
@@ -234,6 +235,8 @@ func TestExecuteCLICompanionVersionFetchesAntigravityModelsAndKeepsJimengDetecti
 				if strings.Join(result.Models, ",") != "gemini-3.7-flash-low,gemini-3.1-pro-high,nano-banana-2" {
 					t.Fatalf("models=%q", result.Models)
 				}
+			} else if testCase.protocol == "gemini-official-cli" && strings.Join(result.Models, ",") != "flash-lite,flash,pro,auto" {
+				t.Fatalf("models=%q", result.Models)
 			}
 			if err != nil || string(args) != expectedArgs {
 				t.Fatalf("args=%q error=%v", args, err)

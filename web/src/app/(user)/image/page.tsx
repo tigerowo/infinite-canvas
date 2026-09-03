@@ -1970,7 +1970,7 @@ function ResultImageCard({
 
 function PendingImageCard({ result, now, cancelling, cancelDisabled, onCancel, onCopyPrompt }: { result: GenerationResult; now: number; cancelling: boolean; cancelDisabled: boolean; onCancel: () => void; onCopyPrompt: (text: string) => void | Promise<void> }) {
     const elapsedMs = Math.max(0, now - result.createdAt);
-    const subscriptionTask = result.config.channelProtocol === "gpt-image-2" || result.config.channelProtocol === "codex-image-emergency" || result.config.channelProtocol === "gemini-cli";
+    const subscriptionTask = result.config.channelProtocol === "gpt-image-2" || result.config.channelProtocol === "codex-image-emergency" || result.config.channelProtocol === "gemini-cli" || result.config.channelProtocol === "chatgpt-subscription-proxy" || result.config.channelProtocol === "antigravity-subscription-proxy";
     const checkingSubscriptionEndpoint = subscriptionTask && result.config.channelProtocol !== "gemini-cli" && elapsedMs < SUBSCRIPTION_IMAGE_PREFLIGHT_MS;
     const stageIndex = checkingSubscriptionEndpoint || !result.task || result.task.status === "queued" ? 0 : result.task.status === "completed" ? 2 : 1;
     const stageLabels = ["准备", "生成", "保存", "完成"];
@@ -2505,7 +2505,7 @@ function imageLogTaskId(log: GenerationLog) {
 
 function isExpiredSubscriptionImageLog(log: GenerationLog, now: number) {
     const protocol = log.config.channelProtocol || "";
-    const subscriptionTask = protocol === "gpt-image-2" || protocol === "codex-image-emergency" || protocol === "gemini-cli" || log.task?.id.startsWith("subscription-image:");
+    const subscriptionTask = protocol === "gpt-image-2" || protocol === "codex-image-emergency" || protocol === "gemini-cli" || protocol === "chatgpt-subscription-proxy" || protocol === "antigravity-subscription-proxy" || log.task?.id.startsWith("subscription-image:");
     return Boolean(subscriptionTask && log.status === "生成中" && now - log.createdAt >= SUBSCRIPTION_IMAGE_TIMEOUT_MS);
 }
 
@@ -2886,7 +2886,7 @@ function useGenerationChannelMeta(config: GenerationLogConfig, task?: CanvasImag
     const protocol = config.channelProtocol || channel?.protocol || "";
     return {
         name: task?.channelName?.trim() || config.channelName?.trim() || channel?.name?.trim() || channelId || "未记录",
-        routeLabel: protocol === "gpt-image-2" ? "订阅登录态 · 无 API 回退" : protocol === "codex-image-emergency" ? "Codex 应急额度" : protocol === "gemini-cli" ? "Google 登录态 · generate_image · 无 API 回退" : "",
+        routeLabel: protocol === "gpt-image-2" ? "订阅登录态 · 无 API 回退" : protocol === "codex-image-emergency" ? "Codex 应急额度" : protocol === "gemini-cli" ? "Google 登录态 · generate_image · 无 API 回退" : protocol === "chatgpt-subscription-proxy" ? "ChatGPT 订阅代理 · 无付费 API 回退" : protocol === "antigravity-subscription-proxy" ? "Antigravity 订阅代理 · 无付费 API 回退" : "",
     };
 }
 

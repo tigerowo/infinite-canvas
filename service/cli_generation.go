@@ -116,7 +116,10 @@ func QueryCurrentUserCLIGeneration(ctx context.Context, providerID string, taskI
 	if err != nil {
 		return CLIHelperResult{Protocol: item.Protocol, TaskID: taskID, Message: "CLI 伴随进程未连接或授权失败"}, nil
 	}
-	if result.TaskStatus == "succeeded" && (item.Protocol == "gpt-image-2" || item.Protocol == "codex-image-emergency" || item.Protocol == "gemini-cli") {
+	if err := saveCLIModelVerification(item, result.Model, result.TaskStatus, result.Message); err != nil {
+		return CLIHelperResult{}, err
+	}
+	if result.TaskStatus == "succeeded" && (item.Protocol == "gpt-image-2" || item.Protocol == "codex-image-emergency" || item.Protocol == "gemini-cli" || isCLIProxyProtocol(item.Protocol)) {
 		return finalizeSubscriptionImageResult(ctx, result)
 	}
 	return result, nil
@@ -139,7 +142,7 @@ func currentUserGenerationProvider(ctx context.Context, providerID string) (mode
 	if err != nil {
 		return model.Provider{}, err
 	}
-	if item.Kind != model.ProviderKindCLI || !map[string]bool{"jimeng": true, "gpt-image-2": true, "codex-image-emergency": true, "gemini-cli": true}[item.Protocol] || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
+	if item.Kind != model.ProviderKindCLI || !map[string]bool{"jimeng": true, "gpt-image-2": true, "codex-image-emergency": true, "gemini-cli": true, cliChatGPTProxyProtocol: true, cliAntigravityProxyProtocol: true}[item.Protocol] || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
 		return model.Provider{}, safeMessageError{message: "CLI 生成渠道不可用，请先检查连接状态"}
 	}
 	if !config.Cfg.CLIHelperEnabled {
@@ -209,7 +212,7 @@ func executeJimengGenerationStart(parent context.Context, input cliCompanionActi
 		timeout = jimengVideoTimeout
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
-	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, GenerationType: input.GenerationType, Status: "running", Message: "即梦任务正在执行", UpdatedAt: time.Now(), Cancel: cancel}
+	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Model: input.Model, GenerationType: input.GenerationType, Status: "running", Message: "即梦任务正在执行", UpdatedAt: time.Now(), Cancel: cancel}
 	cliModelProbeState.Tasks[taskID] = task
 	cliModelProbeState.ActiveID = taskID
 	go runJimengGeneration(ctx, cancel, executable, input, taskID)

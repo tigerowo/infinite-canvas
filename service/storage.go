@@ -82,6 +82,8 @@ type StorageCapacityResult struct {
 
 const defaultStorageCapacityLimitBytes int64 = 9 * 1024 * 1024 * 1024
 const storageBudgetProtectedMessage = "对象存储预算保护已触发，已停止新的云端写入"
+const s3UploadAttemptTimeout = 90 * time.Second
+const s3UploadMaxAttempts = 3
 
 var (
 	storageCapacityCron *cron.Cron
@@ -309,7 +311,7 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	nowTime := time.Now()
 	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/"+nowTime.Format("2006/01/02")+"/"+objectID+ext, "/")
 	sum := sha256.Sum256(data)
-	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
+	if err := putStorageObject(ctx, provider, objectKey, contentType, data); err != nil {
 		return UploadedStorageObject{}, err
 	}
 	publicURL := objectURL(provider, objectKey)
@@ -693,10 +695,10 @@ func storageProviderConfigured(provider model.StorageProvider) bool {
 	}
 }
 
-func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
+func putStorageObject(ctx context.Context, provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
 	switch provider.Type {
 	case model.StorageProviderTypeS3:
-		return putS3Object(provider, objectKey, contentType, data)
+		return putS3Object(ctx, provider, objectKey, contentType, data)
 	case model.StorageProviderTypeWebDAV:
 		return putWebDAVObject(provider, objectKey, data)
 	default:
@@ -727,23 +729,55 @@ func measureStorageProvider(ctx context.Context, provider model.StorageProvider)
 }
 
 // putS3Object 上传对象到 S3 兼容存储。
-func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
-	request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)))
-	if err != nil {
-		return err
+func putS3Object(ctx context.Context, provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
+	var lastErr error
+	for attempt := 0; attempt < s3UploadMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, s3UploadAttemptTimeout)
+		request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)))
+		if err != nil {
+			cancel()
+			return err
+		}
+		request = request.WithContext(attemptCtx)
+		request.Header.Set("Content-Type", contentType)
+		response, err := SafeProxyHTTPClient().Do(request)
+		if err == nil {
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
+			_ = response.Body.Close()
+			cancel()
+			if readErr != nil {
+				lastErr = readErr
+			} else if response.StatusCode >= 200 && response.StatusCode < 300 {
+				recordStorageOperation(provider, "a")
+				return nil
+			} else {
+				lastErr = fmt.Errorf("对象存储上传失败: %s %s", response.Status, string(body))
+				if response.StatusCode < 500 && response.StatusCode != http.StatusTooManyRequests {
+					return lastErr
+				}
+			}
+		} else {
+			cancel()
+			lastErr = err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			SafeProxyHTTPClient().CloseIdleConnections()
+		}
+		if attempt+1 < s3UploadMaxAttempts {
+			timer := time.NewTimer(time.Duration(attempt+1) * 500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
 	}
-	request.Header.Set("Content-Type", contentType)
-	response, err := SafeProxyHTTPClient().Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("对象存储上传失败: %s %s", response.Status, string(body))
-	}
-	recordStorageOperation(provider, "a")
-	return nil
+	return lastErr
 }
 
 // getS3ObjectStream 从 S3 兼容存储流式读取对象。

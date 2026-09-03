@@ -96,6 +96,7 @@ description: 当前后端主要数据表与字段说明
 | `credentials_ciphertext` | text | AES-GCM 密文，包含 API Key 与自定义请求头；不通过 JSON 返回 |
 | `capabilities` | json | `text`、`image`、`video`、`audio` 能力列表 |
 | `models` | json | 模型列表 |
+| `verified_models` | json | CLI 真实调用成功的模型列表；画布和工作台只消费该列表，API Provider 不使用此字段过滤目录 |
 | `default_model` | string | 默认模型 |
 | `timeout` | number | 请求超时秒数，范围 1–600 |
 | `enabled` | boolean | 是否启用 |

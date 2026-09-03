@@ -32,13 +32,13 @@ scripts/macos/install-cli-helper-dev.sh
 
 如果没有安装 `gpt-image-2-skill`，开发安装仍可完成 Codex 文本与应急生图清单，但连接中心的 `GPT Image 2（订阅登录态）` 检测会明确显示不可用。安装或升级 helper 后必须重新运行开发安装器，以固定新的绝对路径和 SHA-256。
 
-开发安装器只接受零参数，使用当前仓库源码和当前 `PATH` 中的 `go`、`codex`；如果同时检测到 `gpt-image-2-skill`、官方 Antigravity `agy` 或即梦 `dreamina`，也会分别纳入本机可信清单：
+开发安装器只接受零参数，使用当前仓库源码和当前 `PATH` 中的 `go`、`codex`；如果同时检测到 `gpt-image-2-skill`、官方 Antigravity `agy`、官方 Gemini `gemini` 或即梦 `dreamina`，也会分别纳入本机可信清单：
 
 - 只构建当前 Mac 架构，并使用本机 ad-hoc 签名；不会伪造 Developer ID、Team ID、Gatekeeper 或 Apple 公证通过。
-- 在安装期间生成临时 Ed25519 私钥和 30 天有效清单，只允许当前解析到的 Codex、可选 GPT Image 2 helper、官方 Antigravity `agy` 与即梦 CLI 二进制 SHA-256；Codex 文本和 Codex 应急生图使用不同协议项但绑定同一受控二进制。私钥不会保留，公钥和清单使用 `0600` 权限安装。
+- 在安装期间生成临时 Ed25519 私钥和 30 天有效清单，只允许当前解析到的 Codex、可选 GPT Image 2 helper、官方 Antigravity `agy`、官方 Gemini `gemini` 与即梦 CLI 二进制 SHA-256；Codex 文本和 Codex 应急生图使用不同协议项但绑定同一受控二进制。私钥不会保留，公钥和清单使用 `0600` 权限安装。
 - 使用独立目录 `~/Library/Application Support/Infinite Canvas/cli-helper-dev`、独立 LaunchAgent `com.tigerowo.infinite-canvas.cli-helper.dev` 和独立日志，不覆盖正式安装；Unix Socket 位于权限为 `0700` 的短路径 `~/.infinite-canvas/cli-helper-dev/helper.sock`，避免触及 macOS Socket 路径长度上限。
 - 首次安装生成随机共享密钥，重复安装保留该密钥；Socket、公钥、清单、共享密钥、环境文件和 LaunchAgent 均只允许当前用户访问。
-- Codex、GPT Image 2 helper、Antigravity 或即梦 CLI 更新、安装路径变化或清单到期后必须重新运行安装器，重新计算二进制哈希并生成新清单。
+- Codex、GPT Image 2 helper、Antigravity、Gemini 官方 CLI 或即梦 CLI 更新、安装路径变化或清单到期后必须重新运行安装器，重新计算二进制哈希并生成新清单。
 
 开发安装完成后，按脚本提示加载：
 
@@ -48,6 +48,27 @@ source "$HOME/Library/Application Support/Infinite Canvas/cli-helper-dev/backend
 set +a
 go run .
 ```
+
+### 实验性本机订阅代理
+
+开发安装器可把单独运行的 CLIProxyAPI 接到受控 helper，但默认关闭。CLIProxyAPI 的二进制、配置、OAuth 登录材料和访问密钥均由用户在仓库外自行安装和管理，项目不会下载、更新或提交这些文件。代理必须只监听 `127.0.0.1:8317`；helper 不读取页面填写的 Base URL，也不接受其他地址、重定向或系统代理。
+
+先把 CLIProxyAPI 的访问密钥单独保存到仓库外的普通文件，并把权限设为 `0600`。安装时只传文件路径，禁止把密钥正文放入命令、`.env`、报告或 Git：
+
+```bash
+CLI_PROXY_ENABLED=true \
+CLI_PROXY_API_KEY_FILE="/absolute/private/path/to/cli-proxy-api-key" \
+scripts/macos/install-cli-helper-dev.sh
+```
+
+脚本拒绝项目目录内、软链接、非当前用户所有或权限不是 `0600` 的密钥文件，并只把外部路径写入当前用户 LaunchAgent 与 `backend.env`。重新加载该环境文件并启动后端后，连接中心才会显示两个实验协议：
+
+- ChatGPT 订阅代理仅允许 `gpt-5.5` 文本和 `gpt-image-2` 图片。
+- Antigravity 订阅代理仅允许 `gemini-3.1-flash-lite` 文本和 `gemini-3.1-flash-image` 图片。
+
+模型检测只读取 `/v1/models` 并与上述白名单取交集；该受控交集会进入可测试目录，明确的模型不可用失败会撤销对应记录。文本只调用 `/v1/chat/completions`，ChatGPT 图片只调用 `/v1/images/generations`，Antigravity 图片仍通过受限的 chat completions 图片结构读取。所有请求固定走回环地址，禁止远端图片 URL，只接收限额内的 Base64 PNG、JPEG 或 WebP。文本沿用两分钟 deadline 和 4 KiB 最终输出，图片沿用三分钟 deadline 和 32 MiB 图片上限，全局仍只允许一个活动 CLI 任务并支持取消传播。两条路径都需要逐次确认，不会自动切换其他渠道或按次计费 API。
+
+这只是个人本机实验桥接，不代表订阅额度与开发额度独立，也不把外部 CLIProxyAPI 纳入正式签名发布包。其进程启动、OAuth 登录、版本固定和升级仍由用户在项目外管理。
 
 开发模式仅限本机个人使用，不能作为发布包发送给其他用户。独立卸载不会删除正式 helper 或 Codex 登录凭据：
 

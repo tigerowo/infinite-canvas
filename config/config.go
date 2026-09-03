@@ -33,6 +33,8 @@ type Config struct {
 	CLIHelperSocket          string `env:"CLI_HELPER_SOCKET"`
 	CLIHelperSecret          string `env:"CLI_HELPER_SHARED_SECRET"`
 	CLIHelperSecretFile      string `env:"CLI_HELPER_SHARED_SECRET_FILE"`
+	CLIProxyEnabled          bool   `env:"CLI_PROXY_ENABLED" envDefault:"false"`
+	CLIProxyAPIKeyFile       string `env:"CLI_PROXY_API_KEY_FILE"`
 }
 
 var Cfg Config

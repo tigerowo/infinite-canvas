@@ -1,7 +1,7 @@
 export type ProviderKind = "api" | "cli";
 export type ProviderStatus = "untested" | "connected" | "failed" | "timeout" | "disabled" | "unavailable";
 export type ProviderCapability = "text" | "image" | "video" | "audio";
-export type ProviderProtocol = "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "runninghub" | "volcengine" | "codex" | "codex-image-emergency" | "gpt-image-2" | "gemini-cli" | "jimeng";
+export type ProviderProtocol = "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "runninghub" | "volcengine" | "codex" | "codex-image-emergency" | "gpt-image-2" | "gemini-cli" | "gemini-official-cli" | "jimeng" | "chatgpt-subscription-proxy" | "antigravity-subscription-proxy";
 export type ManagedProviderProtocol = "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
 
 export type Provider = {
@@ -16,6 +16,7 @@ export type Provider = {
     headerNames: string[];
     capabilities: ProviderCapability[];
     models: string[];
+    verifiedModels: string[];
     defaultModel: string;
     timeout: number;
     enabled: boolean;
@@ -74,6 +75,7 @@ export type CLIHelperResult = {
     taskId?: string;
     taskStatus?: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
     output?: string;
+    model?: string;
     models?: string[];
     account?: CLIAccountSummary;
     message: string;
@@ -128,29 +130,37 @@ export const CODEX_CLI_DEFAULT_MODEL = "codex-cli-default";
 export const CODEX_EMERGENCY_IMAGE_MODEL = "codex-image-emergency";
 export const GPT_IMAGE_2_SUBSCRIPTION_MODEL = "gpt-image-2";
 export const GEMINI_CLI_IMAGE_MODEL = "nano-banana-2";
+export const CHATGPT_SUBSCRIPTION_PROXY_PROTOCOL = "chatgpt-subscription-proxy";
+export const ANTIGRAVITY_SUBSCRIPTION_PROXY_PROTOCOL = "antigravity-subscription-proxy";
 
 export function providerModelChannels(providers: Provider[]) {
     return providers
         .filter(
             (provider) =>
                 (provider.kind === "api" && managedProviderProtocols.has(provider.protocol)) ||
-                (provider.kind === "cli" && ["codex", "codex-image-emergency", "gpt-image-2", "gemini-cli", "jimeng"].includes(provider.protocol) && provider.connectionStatus === "connected" && (provider.protocol === "codex" || provider.models.length > 0)),
+                (provider.kind === "cli" && ["codex", "codex-image-emergency", "gpt-image-2", "gemini-cli", "gemini-official-cli", "jimeng", CHATGPT_SUBSCRIPTION_PROXY_PROTOCOL, ANTIGRAVITY_SUBSCRIPTION_PROXY_PROTOCOL].includes(provider.protocol)),
         )
-        .map((provider) => ({
-            id: provider.id,
-            protocol: provider.protocol as ManagedProviderProtocol | "codex" | "codex-image-emergency" | "gpt-image-2" | "gemini-cli" | "jimeng",
-            name: provider.name,
-            baseUrl: provider.baseUrl,
-            apiKey: "",
-            models: provider.protocol === "codex" && provider.models.length === 0 ? [CODEX_CLI_DEFAULT_MODEL] : provider.models,
-            capabilities: provider.protocol === "codex" ? ["text" as const] : provider.capabilities,
-            defaultModel: provider.protocol === "codex" ? provider.defaultModel || CODEX_CLI_DEFAULT_MODEL : provider.defaultModel,
-            managed: true as const,
-            hasApiKey: provider.hasApiKey,
-            hasHeaders: provider.hasHeaders,
-            enabled: provider.enabled,
-            isDefault: provider.isDefault,
-        }));
+        .map((provider) => {
+            const providerModels = provider.models || [];
+            const models = provider.kind === "cli" ? providerModels.filter((model) => provider.verifiedModels?.includes(model)) : providerModels;
+            return {
+                id: provider.id,
+                protocol: provider.protocol as ManagedProviderProtocol | "codex" | "codex-image-emergency" | "gpt-image-2" | "gemini-cli" | "gemini-official-cli" | "jimeng" | "chatgpt-subscription-proxy" | "antigravity-subscription-proxy",
+                name: provider.name,
+                baseUrl: provider.baseUrl,
+                apiKey: "",
+                models,
+                capabilities: provider.protocol === "codex" ? ["text" as const] : provider.capabilities,
+                defaultModel: models.includes(provider.defaultModel) ? provider.defaultModel : models[0] || "",
+                managed: true as const,
+                hasApiKey: provider.hasApiKey,
+                hasHeaders: provider.hasHeaders,
+                enabled: provider.enabled,
+                isDefault: provider.isDefault,
+                connectionStatus: provider.connectionStatus,
+                statusMessage: provider.statusMessage,
+            };
+        });
 }
 
 export function isRunningHubReference(value: string) {

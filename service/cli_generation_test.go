@@ -89,6 +89,18 @@ func TestSubscriptionImageDiagnosticIsBoundedAndRedacted(t *testing.T) {
 	if message := subscriptionImageFailureMessage("gpt-image-2", "HTTP 429 too many requests"); message != "GPT Image 2 订阅请求频率受限，请稍后重试" {
 		t.Fatalf("rate-limit message=%q", message)
 	}
+	for _, test := range []struct {
+		diagnostic string
+		want       string
+	}{
+		{"HTTP 429 rate limit exceeded; retryDelay=30s", "Nano Banana 2请求频率受限，请稍后重试，建议约 30 秒后重试"},
+		{"RESOURCE_EXHAUSTED quota exceeded; retryDelay=2m", "Nano Banana 2额度已用尽，建议约 2 分钟后重试"},
+		{"PERMISSION_DENIED account is not eligible", "Nano Banana 2当前账户未开放该能力或账户受限"},
+	} {
+		if message := subscriptionImageFailureMessage("gemini-cli", test.diagnostic); message != test.want {
+			t.Fatalf("message=%q want=%q", message, test.want)
+		}
+	}
 	if len([]rune(safeSubscriptionImageDiagnostic(strings.Repeat("x", 800), "", "", errors.New("exit status 1")))) != 512 {
 		t.Fatal("diagnostic should be capped at 512 runes")
 	}
@@ -127,6 +139,23 @@ func TestAntigravityImageStreamKeepsConversationForArtifactLookup(t *testing.T) 
 	stream.finish()
 	if stream.conversationID == "" {
 		t.Fatalf("stream=%#v", stream)
+	}
+}
+
+func TestAntigravityImageStreamKeepsOnlySafeFailureDiagnostic(t *testing.T) {
+	var stream antigravityImageStream
+	_, _ = stream.Write([]byte("{\"type\":\"assistant\",\"message\":\"private prompt must not be captured\"}\n"))
+	_, _ = stream.Write([]byte("{\"type\":\"tool_error\",\"error\":{\"code\":\"FAILED_PRECONDITION\",\"message\":\"User location is not supported for the API use\",\"details\":[{\"retryDelay\":\"30s\",\"stack\":\"/Users/private/secret.js\"}]}}\n"))
+	stream.finish()
+	if strings.Contains(stream.diagnostic, "private prompt") || strings.Contains(stream.diagnostic, "/Users/private") {
+		t.Fatalf("diagnostic contains non-error content: %q", stream.diagnostic)
+	}
+	if !strings.Contains(stream.diagnostic, "retryDelay=30s") {
+		t.Fatalf("diagnostic omitted safe retry hint: %q", stream.diagnostic)
+	}
+	diagnostic := safeSubscriptionImageDiagnostic(stream.diagnostic, "", "private prompt", errors.New("exit status 1"))
+	if message := subscriptionImageFailureMessage("gemini-cli", diagnostic); message != "Nano Banana 2 当前代理出口地区不受 Google 支持，请切换代理节点后重试" {
+		t.Fatalf("message=%q diagnostic=%q", message, diagnostic)
 	}
 }
 

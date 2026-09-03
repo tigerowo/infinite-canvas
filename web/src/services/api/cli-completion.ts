@@ -15,7 +15,7 @@ export class CLICompletionRequestError extends Error {
 export async function requestControlledCLICompletion(config: AiConfig, prompt: string, signal?: AbortSignal) {
     const channel = localChannelForActiveModel(config);
     const token = useUserStore.getState().token;
-    if (!channel?.id || !["codex", "gemini-cli"].includes(channel.protocol) || !token) throw new CLICompletionRequestError("受控 CLI 渠道不可用", 400);
+    if (!channel?.id || !["codex", "gemini-cli", "gemini-official-cli", "chatgpt-subscription-proxy", "antigravity-subscription-proxy"].includes(channel.protocol) || !token) throw new CLICompletionRequestError("受控 CLI 渠道不可用", 400);
 
     const started = await requestCLIAction(`/api/v1/providers/${encodeURIComponent(channel.id)}/cli/completions`, token, { model: config.model, prompt }, signal);
     if (!started.taskId || started.taskStatus !== "running") throw new CLICompletionRequestError(started.message || "受控 CLI 调用未启动", 400);
@@ -24,6 +24,7 @@ export async function requestControlledCLICompletion(config: AiConfig, prompt: s
             await waitForCLICompletion(2500, signal);
             const result = await requestCLIAction(`/api/v1/providers/${encodeURIComponent(channel.id)}/cli/model-probe/${encodeURIComponent(started.taskId)}/status`, token, {}, signal);
             if (result.taskStatus === "running") continue;
+            if (typeof window !== "undefined" && (result.taskStatus === "succeeded" || result.taskStatus === "failed")) window.dispatchEvent(new Event("provider-catalog-invalidated"));
             if (result.taskStatus === "succeeded" && result.output) return result.output;
             throw new CLICompletionRequestError(result.message || "受控 CLI 调用失败", 502);
         }

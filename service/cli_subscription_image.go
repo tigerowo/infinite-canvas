@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ const (
 	cliSubscriptionImageTimeout          = 3 * time.Minute
 	cliSubscriptionImagePreflightTimeout = 15 * time.Second
 	cliSubscriptionImageLimit            = int64(32 * 1024 * 1024)
+	cliAntigravityImageDiagnosticLimit   = 2048
 )
 
 type cliSubscriptionImageOutput struct {
@@ -57,11 +59,13 @@ var (
 	cliSubscriptionImageURLQueryPattern = regexp.MustCompile(`(https?://[^\s?]+)\?[^\s]+`)
 	cliSubscriptionImageJWTPattern      = regexp.MustCompile(`\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b`)
 	cliAntigravityConversationPattern   = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	cliSubscriptionImageRetryPattern    = regexp.MustCompile(`(?i)\b(?:retrydelay|retry_after|retryafter|resettime|reset_time)=([A-Za-z0-9:.+\-TZ]+)`)
 )
 
 type antigravityImageStream struct {
 	pending        []byte
 	conversationID string
+	diagnostic     string
 }
 
 func (stream *antigravityImageStream) Write(data []byte) (int, error) {
@@ -102,6 +106,13 @@ func inspectAntigravityImageEvent(value any, stream *antigravityImageStream) {
 		if id, ok := item["conversation_id"].(string); ok && cliAntigravityConversationPattern.MatchString(id) {
 			stream.conversationID = id
 		}
+		eventType, _ := item["type"].(string)
+		status, _ := item["status"].(string)
+		if antigravityImageFailureEvent(eventType) || antigravityImageFailureEvent(status) {
+			collectAntigravityImageDiagnostic(item, stream)
+		} else if failure, ok := item["error"]; ok {
+			collectAntigravityImageDiagnostic(failure, stream)
+		}
 		for _, child := range item {
 			inspectAntigravityImageEvent(child, stream)
 		}
@@ -112,16 +123,69 @@ func inspectAntigravityImageEvent(value any, stream *antigravityImageStream) {
 	}
 }
 
+func antigravityImageFailureEvent(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return value == "error" || value == "failed" || value == "failure" || strings.HasSuffix(value, "_error") || strings.HasSuffix(value, "_failed")
+}
+
+func collectAntigravityImageDiagnostic(value any, stream *antigravityImageStream) {
+	switch item := value.(type) {
+	case string:
+		stream.appendDiagnostic(item)
+	case map[string]any:
+		for _, key := range []string{"message", "detail", "reason", "code"} {
+			if child, ok := item[key]; ok {
+				collectAntigravityImageDiagnostic(child, stream)
+			}
+		}
+		for _, key := range []string{"retryDelay", "retry_after", "retryAfter", "resetTime", "reset_time"} {
+			if child, ok := item[key].(string); ok {
+				stream.appendDiagnostic(key + "=" + child)
+			}
+		}
+		for _, key := range []string{"error", "details"} {
+			if child, ok := item[key]; ok {
+				collectAntigravityImageDiagnostic(child, stream)
+			}
+		}
+	case []any:
+		for _, child := range item {
+			collectAntigravityImageDiagnostic(child, stream)
+		}
+	}
+}
+
+func (stream *antigravityImageStream) appendDiagnostic(value string) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(stream.diagnostic, value) {
+		return
+	}
+	separator := ""
+	if stream.diagnostic != "" {
+		separator = "; "
+	}
+	remaining := cliAntigravityImageDiagnosticLimit - len([]rune(stream.diagnostic)) - len([]rune(separator))
+	if remaining <= 0 {
+		return
+	}
+	runes := []rune(value)
+	if len(runes) > remaining {
+		runes = runes[:remaining]
+	}
+	stream.diagnostic += separator + string(runes)
+}
+
 func validSubscriptionImageGenerationRequest(input cliCompanionActionRequest) bool {
 	if input.Action != cliCompanionActionGenerationStart || input.GenerationType != "image" || input.TaskID != "" || input.Duration != 0 || len(input.Prompt) == 0 || len(input.Prompt) > jimengPromptLimit || strings.ContainsRune(input.Prompt, '\x00') {
 		return false
 	}
-	if !map[string]bool{"1:1": true, "16:9": true, "9:16": true, "3:2": true, "2:3": true}[input.Ratio] || !map[string]bool{"low": true, "medium": true, "high": true}[input.Resolution] {
+	if !map[string]bool{"1:1": true, "21:9": true, "16:9": true, "3:2": true, "4:3": true, "9:16": true, "2:3": true, "3:4": true}[input.Ratio] || !map[string]bool{"low": true, "medium": true, "high": true}[input.Resolution] {
 		return false
 	}
 	return input.Protocol == "gpt-image-2" && input.Model == cliGPTImage2Model ||
 		input.Protocol == "codex-image-emergency" && input.Model == cliCodexEmergencyImageModel ||
-		input.Protocol == "gemini-cli" && input.Model == cliAntigravityImageModel
+		input.Protocol == "gemini-cli" && input.Model == cliAntigravityImageModel ||
+		cliProxyImageModel(input.Protocol, input.Model)
 }
 
 func executeSubscriptionImageGenerationStart(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
@@ -129,6 +193,9 @@ func executeSubscriptionImageGenerationStart(parent context.Context, input cliCo
 	if !validSubscriptionImageGenerationRequest(input) {
 		result.Message = "订阅生图参数无效"
 		return result, model.ProviderStatusUnavailable
+	}
+	if isCLIProxyProtocol(input.Protocol) {
+		return executeCLIProxyImageGenerationStart(parent, input)
 	}
 	hashes, err := loadCLIHelperHashes(input.Protocol, time.Now())
 	if err != nil {
@@ -162,7 +229,7 @@ func executeSubscriptionImageGenerationStart(parent context.Context, input cliCo
 	if input.Protocol == "codex-image-emergency" {
 		taskType = "codex-image-emergency"
 	}
-	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, GenerationType: "image", TaskType: taskType, Status: "running", Message: subscriptionImageRunningMessage(input.Protocol), UpdatedAt: time.Now(), Cancel: cancel}
+	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Model: input.Model, GenerationType: "image", TaskType: taskType, Status: "running", Message: subscriptionImageRunningMessage(input.Protocol), UpdatedAt: time.Now(), Cancel: cancel}
 	cliModelProbeState.Tasks[taskID] = task
 	cliModelProbeState.ActiveID = taskID
 	go runSubscriptionImageGeneration(ctx, cancel, executable, directory, input, taskID)
@@ -172,6 +239,12 @@ func executeSubscriptionImageGenerationStart(parent context.Context, input cliCo
 }
 
 func subscriptionImageRunningMessage(protocol string) string {
+	if protocol == cliChatGPTProxyProtocol {
+		return "GPT Image 2 正在通过 ChatGPT 订阅代理生成"
+	}
+	if protocol == cliAntigravityProxyProtocol {
+		return "Gemini 图片正在通过 Antigravity 订阅代理生成"
+	}
 	if protocol == "gemini-cli" {
 		return "Nano Banana 2 正在通过 Antigravity 生图工具生成"
 	}
@@ -248,7 +321,7 @@ func runAntigravityImageGeneration(ctx context.Context, executable string, direc
 	command.Stderr = &errorOutput
 	err := command.Run()
 	stream.finish()
-	diagnostic := safeSubscriptionImageDiagnostic("", errorOutput.String(), input.Prompt, err)
+	diagnostic := safeSubscriptionImageDiagnostic(stream.diagnostic, errorOutput.String(), input.Prompt, err)
 	if err != nil {
 		return "", "", diagnostic, err
 	}
@@ -342,24 +415,41 @@ func safeSubscriptionImageDiagnostic(stdout string, stderr string, prompt string
 
 func subscriptionImageFailureMessage(protocol string, diagnostic string) string {
 	prefix := "GPT Image 2 订阅"
+	if protocol == cliChatGPTProxyProtocol {
+		prefix = "ChatGPT 订阅代理"
+	}
+	if protocol == cliAntigravityProxyProtocol {
+		prefix = "Antigravity 订阅代理"
+	}
 	if protocol == "gemini-cli" {
 		prefix = "Nano Banana 2"
 	}
 	detail := strings.ToLower(diagnostic)
 	switch {
+	case protocol == "gemini-cli" && (strings.Contains(detail, "user location is not supported") || strings.Contains(detail, "location is not supported") || strings.Contains(detail, "unsupported location") || strings.Contains(detail, "region is not supported")):
+		return "Nano Banana 2 当前代理出口地区不受 Google 支持，请切换代理节点后重试"
+	case isCLIProxyProtocol(protocol) && (strings.Contains(detail, "disabled") || strings.Contains(detail, "key file")):
+		return prefix + "未启用或本地密钥文件无效"
 	case strings.Contains(detail, "unauthorized"), strings.Contains(detail, "unauthenticated"), strings.Contains(detail, "invalid_grant"), strings.Contains(detail, "token expired"), strings.Contains(detail, "login required"), strings.Contains(detail, "not logged in"):
 		if protocol == "gemini-cli" {
 			return "Antigravity 登录已失效，请重新登录 Google"
 		}
+		if isCLIProxyProtocol(protocol) {
+			return prefix + "本地访问密钥无效或上游登录已失效"
+		}
 		return "GPT Image 2 订阅登录已失效，请重新登录 Codex"
-	case strings.Contains(detail, "insufficient"), strings.Contains(detail, "quota"), strings.Contains(detail, "credit"), strings.Contains(detail, "balance"), strings.Contains(detail, "额度"), strings.Contains(detail, "余额"):
-		return prefix + "额度不足或当前账户受限"
+	case strings.Contains(detail, "permission_denied"), strings.Contains(detail, "permission denied"), strings.Contains(detail, "ineligible"), strings.Contains(detail, "not eligible"), strings.Contains(detail, "account restricted"), strings.Contains(detail, "access denied"):
+		return prefix + "当前账户未开放该能力或账户受限"
+	case strings.Contains(detail, "resource_exhausted"), strings.Contains(detail, "resource exhausted"), strings.Contains(detail, "quota"), strings.Contains(detail, "insufficient credit"), strings.Contains(detail, "insufficient balance"), strings.Contains(detail, "credit exhausted"), strings.Contains(detail, "balance exhausted"), strings.Contains(detail, "额度"), strings.Contains(detail, "余额"):
+		return prefix + "额度已用尽" + subscriptionImageRetryHint(diagnostic)
 	case strings.Contains(detail, "429"), strings.Contains(detail, "rate limit"), strings.Contains(detail, "too many requests"), strings.Contains(detail, "限流"):
-		return prefix + "请求频率受限，请稍后重试"
+		return prefix + "请求频率受限，请稍后重试" + subscriptionImageRetryHint(diagnostic)
 	case strings.Contains(detail, "model"), strings.Contains(detail, "image_generation"), strings.Contains(detail, "unsupported"), strings.Contains(detail, "not available"):
 		return prefix + "模型或生图能力当前不可用"
 	case strings.Contains(detail, "network"), strings.Contains(detail, "connection"), strings.Contains(detail, "connect"), strings.Contains(detail, "dns"), strings.Contains(detail, "tls"):
 		return prefix + "网络请求失败"
+	case isCLIProxyProtocol(protocol) && (strings.Contains(detail, "internal server error") || strings.Contains(detail, "bad gateway") || strings.Contains(detail, "service unavailable") || strings.Contains(detail, "gateway timeout")):
+		return prefix + "上游服务暂时不可用"
 	case diagnostic != "" && !strings.HasPrefix(detail, "exit status"):
 		return prefix + "调用失败：" + diagnostic
 	default:
@@ -367,11 +457,30 @@ func subscriptionImageFailureMessage(protocol string, diagnostic string) string 
 	}
 }
 
+func subscriptionImageRetryHint(diagnostic string) string {
+	match := cliSubscriptionImageRetryPattern.FindStringSubmatch(diagnostic)
+	if len(match) != 2 {
+		return ""
+	}
+	if delay, err := time.ParseDuration(strings.ToLower(match[1])); err == nil && delay > 0 && delay <= 7*24*time.Hour {
+		if delay < 90*time.Second {
+			seconds := (delay + time.Second - 1) / time.Second
+			return "，建议约 " + strconv.FormatInt(int64(seconds), 10) + " 秒后重试"
+		}
+		minutes := (delay + time.Minute - 1) / time.Minute
+		return "，建议约 " + strconv.FormatInt(int64(minutes), 10) + " 分钟后重试"
+	}
+	if resetAt, err := time.Parse(time.RFC3339, match[1]); err == nil {
+		return "，建议在 " + resetAt.Local().Format("1月2日 15:04") + " 后重试"
+	}
+	return ""
+}
+
 func subscriptionImageSize(ratio string) string {
 	switch ratio {
-	case "16:9", "3:2":
+	case "21:9", "16:9", "3:2", "4:3":
 		return "1536x1024"
-	case "9:16", "2:3":
+	case "9:16", "2:3", "3:4":
 		return "1024x1536"
 	default:
 		return "1024x1024"
@@ -568,7 +677,7 @@ func finalizeSubscriptionImageResult(ctx context.Context, result CLIHelperResult
 	}
 	object, err := UploadStorageObject(ctx, subscriptionImageObjectName(result.Protocol, contentType), contentType, data)
 	if err != nil {
-		return CLIHelperResult{}, err
+		return CLIHelperResult{}, subscriptionImageStorageError{cause: err}
 	}
 	_ = os.RemoveAll(directory)
 	body, _ := json.Marshal(jimengGenerationOutput{SubmitID: result.TaskID, URLs: []string{object.URL}})
@@ -576,6 +685,18 @@ func finalizeSubscriptionImageResult(ctx context.Context, result CLIHelperResult
 	result.Message = "订阅生图已保存到素材存储"
 	cliSubscriptionImageFinalized.Results[result.TaskID] = result
 	return result, nil
+}
+
+type subscriptionImageStorageError struct {
+	cause error
+}
+
+func (err subscriptionImageStorageError) Error() string {
+	return err.cause.Error()
+}
+
+func (err subscriptionImageStorageError) SafeMessage() string {
+	return "图片已经生成，但保存到对象存储失败；请检查 R2 网络后重试"
 }
 
 func forgetSubscriptionImageResult(taskID string) {
@@ -590,6 +711,10 @@ func subscriptionImageObjectName(protocol string, contentType string) string {
 		name = "nano-banana-2"
 	} else if protocol == "codex-image-emergency" {
 		name = "codex-image-emergency"
+	} else if protocol == cliChatGPTProxyProtocol {
+		name = "chatgpt-subscription-proxy"
+	} else if protocol == cliAntigravityProxyProtocol {
+		name = "antigravity-subscription-proxy"
 	}
 	return name + imageExtensionForContentType(contentType)
 }

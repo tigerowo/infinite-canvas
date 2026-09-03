@@ -258,7 +258,7 @@ export function CanvasAssistantPanel({
 
     const sendMessage = async (text: string, savedReferences?: CanvasAssistantReference[], skillOverride?: CanvasAgentSkillSelection[] | null) => {
         const session = activeSession || createSession();
-        const activeSkills = skillOverride !== undefined ? skillOverride || [] : selectedSkills.length ? selectedSkills : session.activeSkills || [];
+        const activeSkills = agentConfig.interactionMode === "quick" ? [] : skillOverride !== undefined ? skillOverride || [] : selectedSkills.length ? selectedSkills : session.activeSkills || [];
         let activeSkillContents: Array<{ id: string; source: CanvasAgentSkillSelection["source"]; name: string; content: string; hasFiles?: boolean }> = [];
 
         if (activeSkills.length) {
@@ -293,7 +293,7 @@ export function CanvasAssistantPanel({
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, skills: activeSkills, skillsSelected: skillOverride === undefined && selectedSkills.length > 0, status: "success" };
         const assistantId = nanoid();
         appendMessage(session.id, userMessage);
-        appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
+        appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: agentConfig.interactionMode === "quick" ? "正在快速回答" : "正在理解画布和创作目标" });
         setPrompt("");
         setComposerReferenceIds([]);
         setSelectedSkills([]);
@@ -332,6 +332,7 @@ export function CanvasAssistantPanel({
             );
             const result = await runCanvasAgent({
                 config: requestConfig,
+                interactionMode: agentConfig.interactionMode,
                 initialState: session.agentState,
                 protocolMessages: session.protocolMessages,
                 userText: text,
@@ -518,7 +519,9 @@ export function CanvasAssistantPanel({
                                 <Sparkles className="size-5" />
                             </div>
                             <div className="mt-4 text-base font-medium">从一个想法开始</div>
-                            <div className="mt-2 max-w-[260px] text-sm leading-6 opacity-55">描述故事、宣传片或现有素材，Agent 会与你沟通并直接操作当前画布</div>
+                            <div className="mt-2 max-w-[260px] text-sm leading-6 opacity-55">
+                                {agentConfig.interactionMode === "quick" ? "快速模式只回答问题；需要创建或修改节点时切换到画布 Agent" : "描述故事、宣传片或现有素材，Agent 会与你沟通并直接操作当前画布"}
+                            </div>
                         </div>
                     )}
                 </div>

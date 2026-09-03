@@ -21,6 +21,11 @@ if [[ -n "$agy_path" && "$agy_path" != /* ]]; then
     echo "Antigravity CLI 必须使用绝对路径" >&2
     exit 1
 fi
+gemini_path="$(command -v gemini || true)"
+if [[ -n "$gemini_path" && "$gemini_path" != /* ]]; then
+    echo "Gemini 官方 CLI 必须使用绝对路径" >&2
+    exit 1
+fi
 dreamina_path="$(command -v dreamina || true)"
 if [[ -n "$dreamina_path" && "$dreamina_path" != /* ]]; then
     echo "即梦 CLI 必须使用绝对路径" >&2
@@ -30,6 +35,19 @@ gpt_image_2_path="$(command -v gpt-image-2-skill || true)"
 if [[ -n "$gpt_image_2_path" && "$gpt_image_2_path" != /* ]]; then
     echo "GPT Image 2 helper 必须使用绝对路径" >&2
     exit 1
+fi
+
+cli_proxy_enabled="${CLI_PROXY_ENABLED:-false}"
+cli_proxy_key_file="${CLI_PROXY_API_KEY_FILE:-}"
+if [[ "$cli_proxy_enabled" != "true" && "$cli_proxy_enabled" != "false" ]]; then
+    echo "CLI_PROXY_ENABLED 只能是 true 或 false" >&2
+    exit 1
+fi
+if [[ "$cli_proxy_enabled" == "true" ]]; then
+    [[ "$cli_proxy_key_file" = /* && -f "$cli_proxy_key_file" && ! -L "$cli_proxy_key_file" ]] || { echo "订阅代理密钥必须是仓库外的普通绝对路径文件" >&2; exit 1; }
+    [[ "$cli_proxy_key_file" != "$repo_root"/* ]] || { echo "订阅代理密钥不能放在项目仓库内" >&2; exit 1; }
+    /usr/bin/stat -f '%Su' "$cli_proxy_key_file" | /usr/bin/grep -Fxq "$(/usr/bin/id -un)" || { echo "订阅代理密钥文件所有者不正确" >&2; exit 1; }
+    /usr/bin/stat -f '%Lp' "$cli_proxy_key_file" | /usr/bin/grep -Fxq '600' || { echo "订阅代理密钥文件权限必须是 0600" >&2; exit 1; }
 fi
 
 label="com.tigerowo.infinite-canvas.cli-helper.dev"
@@ -94,6 +112,9 @@ fi
 if [[ -n "$agy_path" ]]; then
     manifest_entries+=(-entry "gemini-cli=agy=$agy_path")
 fi
+if [[ -n "$gemini_path" ]]; then
+    manifest_entries+=(-entry "gemini-official-cli=gemini=$gemini_path")
+fi
 if [[ -n "$dreamina_path" ]]; then
     manifest_entries+=(-entry "jimeng=dreamina=$dreamina_path")
 fi
@@ -127,6 +148,8 @@ stdout_xml="$(printf '%s' "$logs_dir/cli-helper-dev.log" | xml_escape)"
 stderr_xml="$(printf '%s' "$logs_dir/cli-helper-dev-error.log" | xml_escape)"
 path_value="/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin:/Applications/ChatGPT.app/Contents/Resources:$HOME/.local/bin:$HOME/.npm/bin:$HOME/.bun/bin:$HOME/.codex/bin"
 path_xml="$(printf '%s' "$path_value" | xml_escape)"
+cli_proxy_enabled_xml="$(printf '%s' "$cli_proxy_enabled" | xml_escape)"
+cli_proxy_key_file_xml="$(printf '%s' "$cli_proxy_key_file" | xml_escape)"
 proxy_xml=""
 for proxy_name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
     proxy_value="$(/usr/bin/printenv "$proxy_name" 2>/dev/null || true)"
@@ -148,6 +171,8 @@ done
 <key>CLI_HELPER_PUBLIC_KEY_FILE</key><string>$public_key_xml</string>
 <key>CLI_HELPER_SHARED_SECRET_FILE</key><string>$secret_xml</string>
 <key>CLI_HELPER_SOCKET</key><string>$socket_xml</string>
+<key>CLI_PROXY_ENABLED</key><string>$cli_proxy_enabled_xml</string>
+<key>CLI_PROXY_API_KEY_FILE</key><string>$cli_proxy_key_file_xml</string>
 <key>PATH</key><string>$path_xml</string>
 $proxy_xml</dict>
 <key>RunAtLoad</key><true/>
@@ -165,6 +190,8 @@ EOF
     printf 'CLI_HELPER_PUBLIC_KEY_FILE=%q\n' "$public_key_path"
     printf 'CLI_HELPER_SHARED_SECRET_FILE=%q\n' "$secret_path"
     printf 'CLI_HELPER_SOCKET=%q\n' "$socket_path"
+    printf 'CLI_PROXY_ENABLED=%q\n' "$cli_proxy_enabled"
+    printf 'CLI_PROXY_API_KEY_FILE=%q\n' "$cli_proxy_key_file"
 } > "$work_dir/backend.env"
 /bin/chmod 600 "$work_dir/backend.env" "$work_dir/manifest.json" "$work_dir/public-key.txt"
 

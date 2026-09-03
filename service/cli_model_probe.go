@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -31,11 +32,14 @@ const (
 	cliAntigravityImageReasoner = "gemini-3.7-flash-low"
 )
 
+var cliGeminiOfficialModels = []string{"flash-lite", "flash", "pro", "auto"}
+
 type cliModelProbeTask struct {
 	ID             string
 	UserID         string
 	ProviderID     string
 	Protocol       string
+	Model          string
 	Status         string
 	Output         string
 	Message        string
@@ -73,6 +77,9 @@ func QueryCurrentUserCLIModelProbe(ctx context.Context, providerID string, taskI
 	if err != nil {
 		return CLIHelperResult{Protocol: item.Protocol, TaskID: taskID, Message: "CLI 伴随进程未连接或授权失败"}, nil
 	}
+	if err := saveCLIModelVerification(item, result.Model, result.TaskStatus, result.Message); err != nil {
+		return CLIHelperResult{}, err
+	}
 	return result, nil
 }
 
@@ -96,6 +103,12 @@ func currentUserProbeCLIProvider(ctx context.Context, providerID string) (model.
 	if item.Protocol == "gemini-cli" && (item.DefaultModel == cliAntigravityImageModel || !cliModelNamePattern.MatchString(item.DefaultModel) || !userLocalChannelHasModel(item.Models, item.DefaultModel)) {
 		return model.Provider{}, safeMessageError{message: "请先检测 Antigravity CLI 并选择默认模型"}
 	}
+	if item.Protocol == "gemini-official-cli" && (!userLocalChannelHasModel(cliGeminiOfficialModels, item.DefaultModel) || !userLocalChannelHasModel(item.Models, item.DefaultModel)) {
+		return model.Provider{}, safeMessageError{message: "请先检测 Gemini 官方 CLI 并选择默认模型"}
+	}
+	if isCLIProxyProtocol(item.Protocol) && (!cliProxyTextModel(item.Protocol, item.DefaultModel) || !userLocalChannelHasModel(item.Models, item.DefaultModel)) {
+		return model.Provider{}, safeMessageError{message: "请先检测订阅代理并选择允许的文本模型"}
+	}
 	return item, nil
 }
 
@@ -107,7 +120,7 @@ func currentUserCLIProbeTaskProvider(ctx context.Context, providerID string) (mo
 	if item.Kind != model.ProviderKindCLI || !item.Enabled {
 		return model.Provider{}, safeMessageError{message: "CLI 渠道不可用"}
 	}
-	if item.Protocol != "codex" && item.Protocol != "gemini-cli" {
+	if item.Protocol != "codex" && item.Protocol != "gemini-cli" && item.Protocol != "gemini-official-cli" && !isCLIProxyProtocol(item.Protocol) {
 		return model.Provider{}, safeMessageError{message: "该 CLI 尚不支持受控最小调用"}
 	}
 	if !config.Cfg.CLIHelperEnabled {
@@ -121,13 +134,21 @@ func currentUserCLIProbeTaskProvider(ctx context.Context, providerID string) (mo
 
 func executeCLIModelProbeStart(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
 	result := CLIHelperResult{Protocol: input.Protocol}
-	if input.Protocol != "codex" && input.Protocol != "gemini-cli" {
+	if input.Protocol != "codex" && input.Protocol != "gemini-cli" && input.Protocol != "gemini-official-cli" && !isCLIProxyProtocol(input.Protocol) {
 		result.Message = "该 CLI 尚不支持受控最小调用"
 		return result, model.ProviderStatusUnavailable
 	}
 	if input.Protocol == "gemini-cli" {
 		input.Prompt = cliModelProbePrompt
 		return executeAntigravityCompletionStart(parent, input)
+	}
+	if input.Protocol == "gemini-official-cli" {
+		input.Prompt = cliModelProbePrompt
+		return executeGeminiOfficialCompletionStart(parent, input)
+	}
+	if isCLIProxyProtocol(input.Protocol) {
+		input.Prompt = cliModelProbePrompt
+		return executeCLIProxyCompletionStart(parent, input)
 	}
 	hashes, err := loadCLIHelperHashes(input.Protocol, time.Now())
 	if err != nil {
@@ -185,6 +206,7 @@ func executeCLIModelProbeStart(parent context.Context, input cliCompanionActionR
 		UserID:     input.UserID,
 		ProviderID: input.ProviderID,
 		Protocol:   input.Protocol,
+		Model:      input.Model,
 		Status:     "running",
 		Message:    "Codex 最小调用正在执行",
 		UpdatedAt:  time.Now(),
@@ -239,7 +261,6 @@ func executeAntigravityCompletionStart(parent context.Context, input cliCompanio
 		"--effort", "low",
 		"--print-timeout", "90s",
 		"--disable-slash-commands",
-		"--mode", "plan",
 		"--sandbox",
 	)
 	command.Dir = directory
@@ -254,10 +275,73 @@ func executeAntigravityCompletionStart(parent context.Context, input cliCompanio
 		result.Message = "Antigravity CLI 调用启动失败"
 		return result, model.ProviderStatusFailed
 	}
-	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Status: "running", Message: "Antigravity CLI 调用正在执行", UpdatedAt: time.Now(), Cancel: cancel}
+	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Model: input.Model, Status: "running", Message: "Antigravity CLI 调用正在执行", UpdatedAt: time.Now(), Cancel: cancel}
 	cliModelProbeState.Tasks[taskID] = task
 	cliModelProbeState.ActiveID = taskID
 	go finishAntigravityCompletion(command, ctx, cancel, directory, input.Prompt, &output, &errorOutput, taskID)
+	return cliModelProbeResult(task), model.ProviderStatusConnected
+}
+
+func executeGeminiOfficialCompletionStart(parent context.Context, input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
+	result := CLIHelperResult{Protocol: input.Protocol}
+	if input.Protocol != "gemini-official-cli" || !userLocalChannelHasModel(cliGeminiOfficialModels, input.Model) || len(input.Prompt) == 0 || len(input.Prompt) > cliCompletionPromptLimit {
+		result.Message = "Gemini 官方 CLI 调用参数无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	hashes, err := loadCLIHelperHashes(input.Protocol, time.Now())
+	if err != nil {
+		result.Message = "CLI helper 可信清单未配置或无效"
+		return result, model.ProviderStatusUnavailable
+	}
+	executable, err := findControlledCLIExecutable(cliSpecs[input.Protocol].Candidates, hashes)
+	if err != nil {
+		result.Message = "未检测到受支持的 CLI"
+		return result, model.ProviderStatusUnavailable
+	}
+	result.Available = true
+	result.Executable = executable
+	cliModelProbeState.Lock()
+	defer cliModelProbeState.Unlock()
+	pruneCLIModelProbeTasks(time.Now())
+	if cliModelProbeState.ActiveID != "" {
+		result.Message = "CLI helper 正在执行另一个模型调用"
+		return result, model.ProviderStatusTimeout
+	}
+	taskID, err := newCLIModelProbeTaskID()
+	if err != nil {
+		result.Message = "模型调用任务创建失败"
+		return result, model.ProviderStatusFailed
+	}
+	directory, err := os.MkdirTemp("", "infinite-canvas-gemini-official-")
+	if err != nil {
+		result.Message = "模型调用临时目录创建失败"
+		return result, model.ProviderStatusFailed
+	}
+	ctx, cancel := context.WithTimeout(parent, cliModelProbeTimeout)
+	command := exec.CommandContext(ctx, executable,
+		"--prompt", "",
+		"--output-format", "json",
+		"--model", input.Model,
+		"--approval-mode", "plan",
+		"--sandbox",
+		"--skip-trust",
+	)
+	command.Dir = directory
+	command.Env = controlledCLIEnvironment()
+	command.Stdin = strings.NewReader(input.Prompt)
+	var output, errorOutput cappedCLIOutput
+	command.Stdout = &output
+	command.Stderr = &errorOutput
+	if err := command.Start(); err != nil {
+		cancel()
+		_ = os.RemoveAll(directory)
+		result.Message = "Gemini 官方 CLI 调用启动失败"
+		return result, model.ProviderStatusFailed
+	}
+	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Model: input.Model, Status: "running", Message: "Gemini 官方 CLI 调用正在执行", TaskType: "completion", UpdatedAt: time.Now(), Cancel: cancel}
+	cliModelProbeState.Tasks[taskID] = task
+	cliModelProbeState.ActiveID = taskID
+	go finishGeminiOfficialCompletion(command, ctx, cancel, directory, input.Prompt, &output, &errorOutput, taskID)
 	return cliModelProbeResult(task), model.ProviderStatusConnected
 }
 
@@ -318,7 +402,7 @@ func executeCodexCompletionStart(parent context.Context, input cliCompanionActio
 		result.Message = "Codex CLI 调用启动失败"
 		return result, model.ProviderStatusFailed
 	}
-	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Status: "running", Message: "Codex CLI 调用正在执行", TaskType: "completion", UpdatedAt: time.Now(), Cancel: cancel}
+	task := &cliModelProbeTask{ID: taskID, UserID: input.UserID, ProviderID: input.ProviderID, Protocol: input.Protocol, Model: input.Model, Status: "running", Message: "Codex CLI 调用正在执行", TaskType: "completion", UpdatedAt: time.Now(), Cancel: cancel}
 	cliModelProbeState.Tasks[taskID] = task
 	cliModelProbeState.ActiveID = taskID
 	go finishCodexCompletion(command, ctx, cancel, directory, outputPath, taskID)
@@ -390,6 +474,39 @@ func finishAntigravityCompletion(command *exec.Cmd, ctx context.Context, cancel 
 	}
 }
 
+func finishGeminiOfficialCompletion(command *exec.Cmd, ctx context.Context, cancel context.CancelFunc, directory string, prompt string, output *cappedCLIOutput, errorOutput *cappedCLIOutput, taskID string) {
+	err := command.Wait()
+	contextErr := ctx.Err()
+	cancel()
+	response, responseErr := parseGeminiOfficialCompletion(output.String())
+	diagnostic := safeAntigravityCompletionDiagnostic(output.String(), errorOutput.String(), directory, prompt, err)
+	_ = os.RemoveAll(directory)
+	cliModelProbeState.Lock()
+	defer cliModelProbeState.Unlock()
+	task := cliModelProbeState.Tasks[taskID]
+	if task == nil {
+		return
+	}
+	if task.Status != "cancelled" {
+		switch {
+		case errors.Is(contextErr, context.DeadlineExceeded):
+			task.Status, task.Message = "timed_out", "Gemini 官方 CLI 调用超时"
+		case errors.Is(contextErr, context.Canceled):
+			task.Status, task.Message = "cancelled", "Gemini 官方 CLI 调用已取消"
+		case err != nil:
+			task.Status, task.Message = "failed", geminiOfficialCompletionFailureMessage(diagnostic)
+		case responseErr != nil:
+			task.Status, task.Message = "failed", "Gemini 官方 CLI 未返回有效文本"
+		default:
+			task.Status, task.Output, task.Message = "succeeded", response, "Gemini 官方 CLI 调用成功"
+		}
+	}
+	task.UpdatedAt = time.Now()
+	if cliModelProbeState.ActiveID == taskID {
+		cliModelProbeState.ActiveID = ""
+	}
+}
+
 func safeAntigravityCompletionDiagnostic(stdout string, stderr string, directory string, prompt string, commandErr error) string {
 	diagnostic := safeSubscriptionImageDiagnostic(stdout, stderr, prompt, commandErr)
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
@@ -404,6 +521,8 @@ func safeAntigravityCompletionDiagnostic(stdout string, stderr string, directory
 func antigravityCompletionFailureMessage(diagnostic string) string {
 	detail := strings.ToLower(diagnostic)
 	switch {
+	case strings.Contains(detail, "user location is not supported"), strings.Contains(detail, "location is not supported"), strings.Contains(detail, "unsupported location"), strings.Contains(detail, "region is not supported"):
+		return "Antigravity 当前代理出口地区不受 Google 支持，请切换代理节点后重试"
 	case strings.Contains(detail, "unauthorized"), strings.Contains(detail, "unauthenticated"), strings.Contains(detail, "invalid_grant"), strings.Contains(detail, "token expired"), strings.Contains(detail, "login required"), strings.Contains(detail, "not logged in"):
 		return "Antigravity 登录已失效，请重新登录 Google"
 	case strings.Contains(detail, "permission denied"), strings.Contains(detail, "forbidden"), strings.Contains(detail, "403"):
@@ -433,6 +552,44 @@ func parseAntigravityCompletion(value string) (string, error) {
 	return response, nil
 }
 
+func parseGeminiOfficialCompletion(value string) (string, error) {
+	var result struct {
+		Response string `json:"response"`
+	}
+	if json.Unmarshal([]byte(value), &result) != nil {
+		return "", errors.New("Gemini official completion response is invalid")
+	}
+	response := sanitizeCLIOutput(result.Response)
+	if response == "" || len(response) > cliModelProbeOutputLimit {
+		return "", errors.New("Gemini official completion response is invalid")
+	}
+	return response, nil
+}
+
+func geminiOfficialCompletionFailureMessage(diagnostic string) string {
+	detail := strings.ToLower(diagnostic)
+	switch {
+	case strings.Contains(detail, "ineligibletiererror"), strings.Contains(detail, "no longer supported for gemini code assist for individuals"), strings.Contains(detail, "migrate to the antigravity"):
+		return "Gemini 官方 CLI 当前个人账户已不受此客户端支持，请改用 Antigravity"
+	case strings.Contains(detail, "unauthorized"), strings.Contains(detail, "unauthenticated"), strings.Contains(detail, "invalid_grant"), strings.Contains(detail, "login required"), strings.Contains(detail, "not logged in"):
+		return "Gemini 官方 CLI 登录已失效，请在官方 CLI 重新登录"
+	case strings.Contains(detail, "permission denied"), strings.Contains(detail, "forbidden"), strings.Contains(detail, "403"):
+		return "Gemini 官方 CLI 当前账号无权使用所选模型"
+	case strings.Contains(detail, "resource exhausted"), strings.Contains(detail, "quota"), strings.Contains(detail, "额度"):
+		return "Gemini 官方 CLI 额度不足或当前账户受限"
+	case strings.Contains(detail, "429"), strings.Contains(detail, "rate limit"), strings.Contains(detail, "too many requests"):
+		return "Gemini 官方 CLI 请求频率受限，请稍后重试"
+	case strings.Contains(detail, "model"), strings.Contains(detail, "unsupported"), strings.Contains(detail, "not available"), strings.Contains(detail, "not found"):
+		return "Gemini 官方 CLI 所选模型当前不可用"
+	case strings.Contains(detail, "network"), strings.Contains(detail, "connection"), strings.Contains(detail, "connect"), strings.Contains(detail, "dns"), strings.Contains(detail, "tls"):
+		return "Gemini 官方 CLI 网络请求失败"
+	case diagnostic != "":
+		return "Gemini 官方 CLI 调用失败（上游错误详情已隐藏）"
+	default:
+		return "Gemini 官方 CLI 调用失败（上游未返回可识别原因）"
+	}
+}
+
 func executeCLIModelProbeStatus(input cliCompanionActionRequest) (CLIHelperResult, model.ProviderStatus) {
 	cliModelProbeState.Lock()
 	defer cliModelProbeState.Unlock()
@@ -460,6 +617,8 @@ func executeCLIModelProbeCancel(input cliCompanionActionRequest) (CLIHelperResul
 			task.Message = "本机生图调用已取消"
 		} else if task.Protocol == "gemini-cli" {
 			task.Message = "Antigravity CLI 调用已取消"
+		} else if task.Protocol == "gemini-official-cli" {
+			task.Message = "Gemini 官方 CLI 调用已取消"
 		} else if task.TaskType == "completion" {
 			task.Message = "Codex CLI 调用已取消"
 		} else {
@@ -539,7 +698,7 @@ func matchingCLIModelProbeTask(task *cliModelProbeTask, input cliCompanionAction
 }
 
 func cliModelProbeResult(task *cliModelProbeTask) CLIHelperResult {
-	return CLIHelperResult{Available: true, Protocol: task.Protocol, TaskID: task.ID, TaskStatus: task.Status, Output: task.Output, Message: task.Message}
+	return CLIHelperResult{Available: true, Protocol: task.Protocol, TaskID: task.ID, TaskStatus: task.Status, Output: task.Output, Model: task.Model, Message: task.Message}
 }
 
 func cliModelProbeProviderStatus(status string) model.ProviderStatus {

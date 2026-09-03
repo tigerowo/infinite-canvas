@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { defaultConfig, filterChannelModelsByCapability, modelChannelHeaders, modelChannelsForConfig, normalizeLocalChannels, resolveEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, filterChannelModelsByCapability, modelChannelHeaders, modelChannelsForConfig, normalizeLocalChannels, resolveEffectiveConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
 
 describe("connection center model catalog", () => {
     it("prefers a managed provider without deleting its legacy fallback", () => {
@@ -46,5 +46,22 @@ describe("connection center model catalog", () => {
     it("keeps public remote providers on the system channel header", () => {
         const config = { ...defaultConfig, channelMode: "remote" as const, model: "public-image", imageModel: "public-image", imageChannelId: "public-image-channel", publicChannels: [{ id: "public-image-channel", protocol: "openai" as const, name: "公共生图", models: ["public-image"] }] };
         expect(modelChannelHeaders(config)).toEqual({ "X-Model-Channel-ID": "public-image-channel" });
+    });
+
+    it("does not switch an unverified managed model to another paid channel", () => {
+        const config = {
+            ...defaultConfig,
+            channelMode: "local" as const,
+            textModel: "gemini-3.7-flash-high",
+            textChannelId: "antigravity",
+            localChannels: [
+                { id: "antigravity", protocol: "gemini-cli" as const, name: "Gemini CLI", baseUrl: "", apiKey: "", models: [], capabilities: ["text" as const], managed: true, enabled: true },
+                { id: "paid", protocol: "openai" as const, name: "付费 API", baseUrl: "https://api.example.test", apiKey: "configured", models: ["paid-text"], capabilities: ["text" as const], enabled: true },
+            ],
+        };
+        const effective = resolveEffectiveConfig(config, null, false);
+
+        expect(effective.textModel).toBe("");
+        expect(resolveModelForCapability(effective, "gemini-3.7-flash-high", "text")).toBe("");
     });
 });

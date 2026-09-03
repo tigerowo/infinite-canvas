@@ -66,4 +66,51 @@ describe("Chat image responses", () => {
         expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-codex/cli/completions");
         expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ model: "codex-cli-default", prompt: "user: 只回复 Codex OK" });
     });
+
+    it("routes a canvas text node through the selected ChatGPT subscription proxy", async () => {
+        vi.useFakeTimers();
+        useUserStore.setState({ token: "test-token" });
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-chatgpt", taskStatus: "running", message: "running" } }))
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-chatgpt", taskStatus: "succeeded", output: "订阅文本 OK", message: "success" } }));
+        const config = {
+            ...defaultConfig,
+            model: "gpt-5.5",
+            textModel: "gpt-5.5",
+            textChannelId: "provider-chatgpt-proxy",
+            localChannels: [{ id: "provider-chatgpt-proxy", protocol: "chatgpt-subscription-proxy" as const, name: "ChatGPT 订阅代理", baseUrl: "", apiKey: "", models: ["gpt-5.5"], capabilities: ["text" as const], managed: true, enabled: true }],
+        };
+        const onDelta = vi.fn();
+
+        const pending = requestImageQuestion(config, [{ role: "user", content: "只回复订阅文本 OK" }], onDelta);
+        await vi.advanceTimersByTimeAsync(2500);
+        await expect(pending).resolves.toBe("订阅文本 OK");
+        expect(onDelta).toHaveBeenCalledWith("订阅文本 OK");
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-chatgpt-proxy/cli/completions");
+    });
+
+    it("routes a canvas text node through the selected Gemini official CLI connection", async () => {
+        vi.useFakeTimers();
+        useUserStore.setState({ token: "test-token" });
+        const fetchMock = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-gemini", taskStatus: "running", message: "running" } }))
+            .mockResolvedValueOnce(Response.json({ code: 0, data: { taskId: "task-gemini", taskStatus: "succeeded", output: "Gemini CLI OK", message: "success" } }));
+        const config = {
+            ...defaultConfig,
+            model: "flash-lite",
+            textModel: "flash-lite",
+            textChannelId: "provider-gemini-official",
+            localChannels: [{ id: "provider-gemini-official", protocol: "gemini-official-cli" as const, name: "Gemini 官方 CLI", baseUrl: "", apiKey: "", models: ["flash-lite"], capabilities: ["text" as const], managed: true, enabled: true }],
+        };
+        const onDelta = vi.fn();
+
+        const pending = requestImageQuestion(config, [{ role: "user", content: "只回复 Gemini CLI OK" }], onDelta);
+        await vi.advanceTimersByTimeAsync(2500);
+        await expect(pending).resolves.toBe("Gemini CLI OK");
+        expect(onDelta).toHaveBeenCalledWith("Gemini CLI OK");
+        expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/providers/provider-gemini-official/cli/completions");
+        expect(JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body))).toEqual({ model: "flash-lite", prompt: "user: 只回复 Gemini CLI OK" });
+    });
 });

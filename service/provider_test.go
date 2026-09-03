@@ -139,6 +139,45 @@ func TestApplyTrustedCLIProviderModelsRejectsUserSuppliedCatalog(t *testing.T) {
 	}
 }
 
+func TestGeminiOfficialCLIUsesDetectedTextCatalog(t *testing.T) {
+	saved := model.Provider{Kind: model.ProviderKindCLI, Protocol: "gemini-official-cli", Models: []string{"flash-lite", "flash", "pro", "auto"}}
+	input := ProviderInput{ID: "provider-gemini-official", Kind: model.ProviderKindCLI, Protocol: "gemini-official-cli", Capabilities: []string{"image"}, Models: []string{"custom-model"}, DefaultModel: "flash-lite"}
+	if err := applyTrustedCLIProviderModels(saved, &input); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(input.Models, saved.Models) || !reflect.DeepEqual(input.Capabilities, []string{"text"}) {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestProviderModelsInCatalogOrder(t *testing.T) {
+	models := providerModelsInCatalogOrder(
+		[]string{"gemini-3.6-flash-low", "missing", "gemini-3.7-flash-low"},
+		[]string{"gemini-3.7-flash-high", "gemini-3.7-flash-low", "gemini-3.6-flash-low"},
+	)
+	if strings.Join(models, ",") != "gemini-3.7-flash-low,gemini-3.6-flash-low" {
+		t.Fatalf("unexpected verified models: %v", models)
+	}
+	if remaining := removeProviderModel(models, "gemini-3.7-flash-low"); strings.Join(remaining, ",") != "gemini-3.6-flash-low" {
+		t.Fatalf("unexpected remaining models: %v", remaining)
+	}
+}
+
+func TestCLIFailureInvalidatesOnlyUnavailableModel(t *testing.T) {
+	for message, want := range map[string]bool{
+		"Antigravity 所选模型当前不可用":                 true,
+		"Nano Banana 2模型或生图能力当前不可用":          true,
+		"Nano Banana 2额度已用尽":                   false,
+		"Nano Banana 2请求频率受限，请稍后重试":          false,
+		"Nano Banana 2 当前代理出口地区不受 Google 支持": false,
+		"Nano Banana 2网络请求失败":                   false,
+	} {
+		if got := cliFailureInvalidatesModel(message); got != want {
+			t.Fatalf("message=%q invalidates=%t want=%t", message, got, want)
+		}
+	}
+}
+
 func TestUpdateSavedProviderConnectionStatusKeepsConnectedCLIOnOrdinarySave(t *testing.T) {
 	item := model.Provider{
 		Kind:             model.ProviderKindCLI,

@@ -118,7 +118,7 @@ export function syncProviderCatalog(providers: Provider[]) {
     ];
     for (const [field, capability] of fields) {
         if (managed.some((channel) => channel.id === configStore.config[field] && channel.enabled !== false && channel.capabilities?.includes(capability))) continue;
-        const preferred = managed.find((channel) => channel.enabled !== false && channel.isDefault && channel.capabilities?.includes(capability)) || managed.find((channel) => channel.enabled !== false && channel.capabilities?.includes(capability));
+        const preferred = managed.find((channel) => channel.enabled !== false && channel.models.length > 0 && channel.isDefault && channel.capabilities?.includes(capability)) || managed.find((channel) => channel.enabled !== false && channel.models.length > 0 && channel.capabilities?.includes(capability));
         if (preferred) configStore.updateConfig(field, preferred.id);
     }
 }

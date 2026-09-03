@@ -42,6 +42,7 @@ export type CanvasAgentRuntimeEvent = {
 
 export type RunCanvasAgentInput = {
     config: AiConfig;
+    interactionMode: "quick" | "agent";
     initialState: CanvasAgentState;
     protocolMessages: CanvasAgentProtocolMessage[];
     userText: string;
@@ -112,6 +113,23 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         emitCheckpoint();
         return true;
     };
+
+    if (input.interactionMode === "quick") {
+        throwIfAborted(input.signal);
+        input.onEvent?.({ status: "thinking", label: "正在快速回答" });
+        const turn = await requestCanvasAgentTurn({
+            config: input.config,
+            systemPrompt: buildQuickCanvasPrompt(input.getContext(state)),
+            messages: quickCanvasMessages(protocolMessages),
+            tools: [],
+            allowTools: false,
+            signal: input.signal,
+        });
+        const parsedJson = parseCanvasAgentJson(turn.content);
+        const reply = (parsedJson.parsed ? parsedJson.reply : turn.content).trim() || "模型没有返回内容，请重试或切换到画布 Agent。";
+        protocolMessages = [...protocolMessages, { role: "assistant", content: reply, ...(turn.responseItems?.length ? { responseItems: turn.responseItems } : {}) }];
+        return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint };
+    }
 
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
         throwIfAborted(input.signal);
@@ -212,6 +230,36 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     const reply = "本轮已达到安全操作步数上限，当前已完成的节点和任务都已保存。你可以让我继续下一步。";
     protocolMessages = [...protocolMessages, { role: "assistant" as const, content: reply }];
     return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint };
+}
+
+function quickCanvasMessages(messages: CanvasAgentProtocolMessage[]) {
+    return persistCanvasAgentProtocolMessages(messages).flatMap((message): CanvasAgentProtocolMessage[] => {
+        if (message.role !== "user" && message.role !== "assistant") return [];
+        const content = typeof message.content === "string" ? message.content.trim() : "";
+        if (!content) return [];
+        return message.role === "user"
+            ? [{ role: "user", content }]
+            : [{ role: "assistant", content }];
+    }).slice(-8);
+}
+
+function buildQuickCanvasPrompt(context: CanvasAgentContext) {
+    const selectedIds = new Set(context.selectedNodeIds);
+    const selectedNodes = context.nodes.filter((node) => selectedIds.has(node.id));
+    const nodes = (selectedNodes.length ? selectedNodes : context.nodes.slice(0, 12)).map((node) => ({
+        id: node.id,
+        type: node.type,
+        title: node.title,
+        text: node.text?.slice(0, 600),
+        prompt: node.prompt?.slice(0, 600),
+        status: node.status,
+        model: node.model,
+    }));
+    return [
+        "你是 Infinite Canvas 的快速对话助手。直接、简洁地回答用户问题。",
+        "本模式不调用工具，不创建、删除或修改画布节点。用户要求操作画布时，请明确提示切换到“画布 Agent”模式。",
+        `当前画布摘要：${JSON.stringify({ project: context.project, selectedNodeIds: context.selectedNodeIds, nodes })}`,
+    ].join("\n");
 }
 
 async function executeActions(

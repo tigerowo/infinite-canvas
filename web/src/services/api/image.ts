@@ -1188,7 +1188,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
-    if (["codex", "gemini-cli"].includes(channelProtocolForConfig(config))) {
+    if (["codex", "gemini-cli", "gemini-official-cli", "chatgpt-subscription-proxy", "antigravity-subscription-proxy"].includes(channelProtocolForConfig(config))) {
         const answer = await requestControlledCLICompletion(config, formatCLITextPrompt(withSystemMessage(config, messages)));
         onDelta(answer);
         return answer;

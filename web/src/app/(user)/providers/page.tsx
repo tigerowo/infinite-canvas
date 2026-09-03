@@ -57,8 +57,21 @@ const cliProtocolOptions = [
     { label: "GPT Image 2（订阅登录态）", value: "gpt-image-2" },
     { label: "Codex 应急生图", value: "codex-image-emergency" },
     { label: "Antigravity CLI（Google）", value: "gemini-cli" },
+    { label: "Gemini 官方 CLI（文本）", value: "gemini-official-cli" },
+    { label: "ChatGPT 订阅代理（实验）", value: "chatgpt-subscription-proxy" },
+    { label: "Antigravity 订阅代理（实验）", value: "antigravity-subscription-proxy" },
     { label: "即梦 CLI", value: "jimeng" },
 ];
+
+const cliProbeProtocols = ["codex", "gemini-cli", "gemini-official-cli", "chatgpt-subscription-proxy", "antigravity-subscription-proxy"];
+
+function cliDisplayName(protocol?: ProviderProtocol) {
+    if (protocol === "gemini-cli") return "Antigravity";
+    if (protocol === "gemini-official-cli") return "Gemini 官方 CLI";
+    if (protocol === "chatgpt-subscription-proxy") return "ChatGPT 订阅代理";
+    if (protocol === "antigravity-subscription-proxy") return "Antigravity 订阅代理";
+    return "Codex";
+}
 
 const capabilityOptions = [
     { label: "文本", value: "text" },
@@ -219,8 +232,8 @@ export default function ProvidersPage() {
                 baseUrl: values.kind === "api" ? values.baseUrl : undefined,
                 apiKey: values.apiKey || undefined,
                 headers: headersText ? (JSON.parse(headersText) as Record<string, string>) : undefined,
-                capabilities: values.capabilities,
-                models: values.models,
+                capabilities: values.capabilities || [],
+                models: values.models || [],
                 defaultModel: values.defaultModel,
                 timeout: values.timeout,
                 enabled: values.enabled,
@@ -251,7 +264,7 @@ export default function ProvidersPage() {
             }
             const testedItem = useProviderStore.getState().items.find((item) => item.id === editing.id) || editing;
             setEditing(testedItem);
-            if ((refreshModels && testedItem.kind === "api" && testedItem.protocol !== "runninghub") || ["codex", "gemini-cli"].includes(testedItem.protocol)) {
+            if ((refreshModels && testedItem.kind === "api" && testedItem.protocol !== "runninghub") || cliProbeProtocols.includes(testedItem.protocol)) {
                 form.setFieldsValue({ models: testedItem.models, defaultModel: testedItem.defaultModel });
             }
         } catch (testError) {
@@ -325,14 +338,15 @@ export default function ProvidersPage() {
     }
 
     function confirmCLIModelProbe() {
-        if (!token || !editing || !["codex", "gemini-cli"].includes(editing.protocol) || startingProbe) return;
+        if (!token || !editing || !cliProbeProtocols.includes(editing.protocol) || startingProbe) return;
         const providerId = editing.id;
         const providerName = editing.name;
         const protocol = editing.protocol;
-        const modelName = protocol === "gemini-cli" ? editing.defaultModel : "Codex CLI 当前默认模型";
+        const modelName = protocol === "codex" ? "Codex CLI 当前默认模型" : editing.defaultModel;
+        const cliName = cliDisplayName(protocol);
         setStartingProbe(true);
         modal.confirm({
-            title: `确认执行${protocol === "gemini-cli" ? " Antigravity" : " Codex"} 最小调用？`,
+            title: `确认执行 ${cliName} 最小调用？`,
             width: 560,
             content: (
                 <div className="space-y-3 text-sm leading-6 text-stone-600 dark:text-stone-400">
@@ -347,7 +361,7 @@ export default function ProvidersPage() {
                         <code className="break-all text-xs">Reply with exactly OK. Do not inspect files, run commands, or use tools.</code>
                     </div>
                     <p>伴随进程只会在临时目录和沙箱中执行一次非交互调用，最长 2 分钟，最终输出最多读取 4 KiB；不会接收页面自定义命令、参数或工作目录。</p>
-                    <Alert type="warning" showIcon title="此操作可能产生少量模型调用费用，不会自动重试。" />
+                    <Alert type="warning" showIcon title="此操作会占用所选订阅通道额度，不会自动重试或切换付费 API。" />
                 </div>
             ),
             okText: "确认调用",
@@ -744,7 +758,7 @@ export default function ProvidersPage() {
                                     className="mb-5"
                                     type="info"
                                     showIcon
-                                    title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : formProtocol === "gpt-image-2" ? "GPT Image 2 订阅 helper" : formProtocol === "codex-image-emergency" ? "Codex 应急生图" : formProtocol === "gemini-cli" ? "Antigravity CLI 受控接入" : "即梦 CLI 受控接入"}
+                                    title={formProtocol === "codex" ? "Codex 登录状态可只读检测" : formProtocol === "gpt-image-2" ? "GPT Image 2 订阅 helper" : formProtocol === "codex-image-emergency" ? "Codex 应急生图" : formProtocol === "gemini-cli" ? "Antigravity CLI 受控接入" : formProtocol === "gemini-official-cli" ? "Gemini 官方 CLI 文本接入" : formProtocol === "chatgpt-subscription-proxy" ? "ChatGPT 订阅代理（实验）" : formProtocol === "antigravity-subscription-proxy" ? "Antigravity 订阅代理（实验）" : "即梦 CLI 受控接入"}
                                     description={
                                         formProtocol === "codex"
                                             ? "保存后可逐次授权检查状态；文本调用使用官方 codex exec。codex-image-emergency 仅供生图主路径失效时手动确认，不会自动调用。"
@@ -754,6 +768,12 @@ export default function ProvidersPage() {
                                               ? "仅在主路径失效时手动选择。固定执行 codex exec --model gpt-5.5，可能占用 Codex 开发额度，系统绝不自动切换到此连接。"
                                             : formProtocol === "gemini-cli"
                                               ? "检测时只读执行 agy models 拉取文本模型，并在当前账号支持时加入 Nano Banana 2 生图工具。它不是 reasoning model，不会作为默认文本模型；每次真实调用仍需单独确认。"
+                                              : formProtocol === "gemini-official-cli"
+                                                ? "独立调用官方 gemini CLI，仅开放 flash-lite、flash、pro、auto 文本别名。检测只确认受控二进制并载入别名，不猜测登录状态；请用最小调用确认当前 Google 会话。"
+                                                : formProtocol === "chatgpt-subscription-proxy"
+                                                  ? "仅连接本机 127.0.0.1:8317，严格开放 gpt-5.5 文本与 gpt-image-2 图片。访问密钥由后端从仓库外 0600 文件读取，不会回退其他渠道或付费 API。"
+                                                  : formProtocol === "antigravity-subscription-proxy"
+                                                    ? "仅连接本机 127.0.0.1:8317，严格开放已确认的 Gemini 文本与图片模型。OAuth 和访问密钥不进入页面、数据库或 Git，也不会回退付费 API。"
                                               : "登录检测不会回传账户信息；账户概览仅在点击刷新时通过受控 helper 读取账号名、会员等级和当前积分，不保存凭据或积分数据。"
                                     }
                                 />
@@ -766,21 +786,19 @@ export default function ProvidersPage() {
                                                 检测 CLI
                                             </Button>
                                             {["codex", "gemini-cli", "jimeng"].includes(formProtocol) ? (
-                                                <>
-                                                    <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
-                                                        检查登录状态
-                                                    </Button>
-                                                    {formProtocol === "codex" ? (
-                                                        <Button type="primary" icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>
-                                                            登录 Codex
-                                                        </Button>
-                                                    ) : null}
-                                                    {formProtocol !== "jimeng" ? (
-                                                        <Button icon={<Play className="size-4" />} loading={startingProbe} disabled={formProtocol === "gemini-cli" && !editing.defaultModel} onClick={confirmCLIModelProbe}>
-                                                            最小调用
-                                                        </Button>
-                                                    ) : null}
-                                                </>
+                                                <Button icon={<KeyRound className="size-4" />} loading={checkingAuth} onClick={() => void checkLoginStatus()}>
+                                                    检查登录状态
+                                                </Button>
+                                            ) : null}
+                                            {formProtocol === "codex" ? (
+                                                <Button type="primary" icon={<LogIn className="size-4" />} loading={startingLogin} onClick={confirmCLILogin}>
+                                                    登录 Codex
+                                                </Button>
+                                            ) : null}
+                                            {cliProbeProtocols.includes(formProtocol) ? (
+                                                <Button icon={<Play className="size-4" />} loading={startingProbe} disabled={formProtocol !== "codex" && !editing.defaultModel} onClick={confirmCLIModelProbe}>
+                                                    最小调用
+                                                </Button>
                                             ) : null}
                                         </div>
                                     </div>
@@ -848,7 +866,7 @@ export default function ProvidersPage() {
                         </Form.Item>
                         <div className="grid grid-cols-1 gap-x-4 md:grid-cols-2">
                             <Form.Item name="defaultModel" label="默认模型">
-                                <Select allowClear showSearch options={models.filter((model) => formProtocol !== "gemini-cli" || model !== GEMINI_CLI_IMAGE_MODEL).map((model) => ({ label: model, value: model }))} placeholder="选择默认模型" />
+                                <Select allowClear showSearch options={models.filter((model) => (formProtocol !== "gemini-cli" || model !== GEMINI_CLI_IMAGE_MODEL) && (formProtocol !== "chatgpt-subscription-proxy" || model !== "gpt-image-2") && (formProtocol !== "antigravity-subscription-proxy" || model !== "gemini-3.1-flash-image")).map((model) => ({ label: model, value: model }))} placeholder="选择默认文本模型" />
                             </Form.Item>
                             <Form.Item name="timeout" label="请求超时（秒）">
                                 <InputNumber className="w-full" min={1} max={600} />
@@ -865,7 +883,7 @@ export default function ProvidersPage() {
                     </Form>
                 </Drawer>
                 <Modal
-                    title={`${probe?.protocol === "gemini-cli" ? "Antigravity" : "Codex"} 最小调用`}
+                    title={`${cliDisplayName(probe?.protocol)} 最小调用`}
                     width={560}
                     open={probeOpen}
                     closable={probe?.result.taskStatus !== "running"}

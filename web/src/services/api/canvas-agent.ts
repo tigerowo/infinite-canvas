@@ -96,7 +96,7 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         textChannelId: input.config.textChannelId,
     };
     const systemPrompt = canvasAgentSystemPrompt(requestConfig, input.systemPrompt);
-    if (["codex", "gemini-cli"].includes(channelProtocolForConfig(requestConfig))) {
+    if (["codex", "gemini-cli", "gemini-official-cli", "chatgpt-subscription-proxy", "antigravity-subscription-proxy"].includes(channelProtocolForConfig(requestConfig))) {
         const content = await requestControlledCLICompletion(requestConfig, buildControlledCLIPrompt(systemPrompt, input.messages, input.allowTools ? input.tools : []), input.signal);
         return { content, toolCalls: [], usedJsonFallback: true };
     }

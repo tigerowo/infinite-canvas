@@ -91,6 +91,13 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [token, updateConfig, user?.id]);
 
     useEffect(() => {
+        if (!token) return;
+        const refreshProviders = () => void useProviderStore.getState().load(token, true).catch(() => []);
+        window.addEventListener("provider-catalog-invalidated", refreshProviders);
+        return () => window.removeEventListener("provider-catalog-invalidated", refreshProviders);
+    }, [token]);
+
+    useEffect(() => {
         if (handledConfigParams.current) return;
         const searchParams = new URLSearchParams(window.location.search);
         const baseUrl = searchParams.get("baseUrl") || searchParams.get("baseurl");

@@ -129,15 +129,29 @@ export function CanvasAssistantComposer({
                             placement="topRight"
                             menu={{
                                 selectable: true,
-                                selectedKeys: [agentConfig.textApiMode],
+                                selectedKeys: [`mode:${agentConfig.interactionMode}`, `api:${agentConfig.textApiMode}`],
                                 items: [
-                                    { key: "chat", label: "Chat" },
-                                    { key: "responses", label: "Responses" },
+                                    { key: "mode:quick", label: "快速对话 · 单次无工具调用" },
+                                    { key: "mode:agent", label: "画布 Agent · 可操作画布" },
+                                    { type: "divider" },
+                                    { key: "api:chat", label: "接口 · Chat" },
+                                    { key: "api:responses", label: "接口 · Responses" },
                                 ],
-                                onClick: ({ key }) => onAgentConfigChange({ textApiMode: key as CanvasAgentConfig["textApiMode"] }),
+                                onClick: ({ key }) => {
+                                    if (key.startsWith("mode:")) onAgentConfigChange({ interactionMode: key.slice(5) as CanvasAgentConfig["interactionMode"] });
+                                    else if (key.startsWith("api:")) onAgentConfigChange({ textApiMode: key.slice(4) as CanvasAgentConfig["textApiMode"] });
+                                },
                             }}
                         >
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={{ color: theme.node.text }} icon={<Brain className="size-4" />} aria-label={`文本接口：${agentConfig.textApiMode === "responses" ? "Responses" : "Chat"}`} />
+                            <Button
+                                type="text"
+                                className="!h-8 !rounded-full !px-2"
+                                style={{ color: theme.node.text }}
+                                icon={<Brain className="size-4" />}
+                                aria-label={`${agentConfig.interactionMode === "quick" ? "快速对话" : "画布 Agent"}，文本接口：${agentConfig.textApiMode === "responses" ? "Responses" : "Chat"}`}
+                            >
+                                {agentConfig.interactionMode === "quick" ? "快速" : "Agent"}
+                            </Button>
                         </Dropdown>
                         <Button
                             type="primary"

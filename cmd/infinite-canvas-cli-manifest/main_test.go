@@ -37,6 +37,7 @@ func TestGenerateKeyAndSignManifest(t *testing.T) {
 		"codex=codex=" + executablePath,
 		"codex-image-emergency=codex=" + executablePath,
 		"gpt-image-2=gpt-image-2-skill=" + executablePath,
+		"gemini-official-cli=gemini=" + executablePath,
 	}
 	if err := signManifest(privateKeyPath, manifestPath, time.Now().Add(time.Hour).UTC().Format(time.RFC3339), entries); err != nil {
 		t.Fatal(err)

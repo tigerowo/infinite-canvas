@@ -119,6 +119,7 @@ description: 当前项目已实现的主要功能
 登录用户还可以通过连接中心使用受控 Mac CLI 渠道：
 
 - Codex 文本渠道固定通过受控 `codex exec` 调用当前登录账号，不接受页面传入命令、路径或额外 CLI 参数，可用于无限画布普通文本节点和 Agent
+- ChatGPT 订阅代理的 `gpt-5.5 · CLI` 文本模型通过受控 CLI completion 调用订阅登录态，不进入普通 API Provider 代理，也不会自动回退到付费 OpenAI API；当前 Mac 已在无限画布普通文本节点完成真实调用
 - Antigravity 文本渠道固定通过官方 `agy` 调用 Google 登录账号，可同步当前账号公开的文本模型并用于连接中心最低成本验证；命令运行在临时目录与 sandbox 中，不接受页面传入命令、路径或额外参数。当前 Mac 已完成真实文本调用；模型目录、helper 通信和真实任务使用分层 deadline，最终回答使用官方 `text` 输出，避免 `agy` JSON 回答中未转义换行导致解析失败
 - Nano Banana 2 图片渠道固定通过 Antigravity 的 Google 登录态调用内置 `generate_image`，不接受页面命令、路径或自定义参数，也不会回退到其他渠道或付费 API；当前 Mac 已完成单图真实验证，约 1 分 16 秒返回结果。Google 会拒绝不受支持的网络出口，出现地区限制错误时需切换到可用代理出口后重新确认调用
 - GPT Image 2 订阅主通道固定使用本机 `gpt-image-2-skill` 和 Codex 登录态；每次生成前展示渠道、模型、任务与路径并要求确认，不读取 OpenAI API Key，也不会自动回退到付费 API 或 Codex 应急生图

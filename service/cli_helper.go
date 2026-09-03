@@ -51,7 +51,10 @@ var (
 		"codex-image-emergency": {Candidates: []string{"codex"}, Version: []string{"--version"}},
 		"gpt-image-2":           {Candidates: []string{"gpt-image-2-skill"}, Version: []string{"--version"}},
 		"gemini-cli":            {Candidates: []string{"agy"}, Version: []string{"--version"}},
+		"gemini-official-cli":   {Candidates: []string{"gemini"}, Version: []string{"--version"}},
 		"jimeng":                {Candidates: []string{"dreamina"}, Version: []string{"--version"}},
+		cliChatGPTProxyProtocol:     {Candidates: []string{}},
+		cliAntigravityProxyProtocol: {Candidates: []string{}},
 	}
 	cliModelNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 	cliCreditPattern    = regexp.MustCompile(`^\d{1,18}(?:\.\d{1,8})?$`)
@@ -73,6 +76,7 @@ type CLIHelperResult struct {
 	TaskID       string             `json:"taskId,omitempty"`
 	TaskStatus   string             `json:"taskStatus,omitempty"`
 	Output       string             `json:"output,omitempty"`
+	Model        string             `json:"model,omitempty"`
 	Models       []string           `json:"models,omitempty"`
 	Account      *CLIAccountSummary `json:"account,omitempty"`
 	Message      string             `json:"message"`
@@ -114,6 +118,11 @@ func DetectCurrentUserCLIProvider(ctx context.Context, providerID string) (CLIHe
 	}
 	if len(result.Models) > 0 {
 		item.Models = result.Models
+		if isCLIProxyProtocol(item.Protocol) && result.Available {
+			item.VerifiedModels = append([]string(nil), item.Models...)
+		} else {
+			item.VerifiedModels = providerModelsInCatalogOrder(item.VerifiedModels, item.Models)
+		}
 		item.Capabilities = trustedCLIProviderCapabilities(item.Protocol)
 		if !userLocalChannelHasModel(item.Models, item.DefaultModel) {
 			item.DefaultModel = item.Models[0]
@@ -157,6 +166,7 @@ func CheckCurrentUserCLIProviderAuth(ctx context.Context, providerID string) (CL
 	}
 	if len(result.Models) > 0 {
 		item.Models = result.Models
+		item.VerifiedModels = providerModelsInCatalogOrder(item.VerifiedModels, item.Models)
 		item.Capabilities = trustedCLIProviderCapabilities(item.Protocol)
 		if !userLocalChannelHasModel(item.Models, item.DefaultModel) {
 			item.DefaultModel = item.Models[0]
@@ -239,6 +249,9 @@ func detectCLIProvider(parent context.Context, item model.Provider) (CLIHelperRe
 
 func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHelperResult, model.ProviderStatus) {
 	result := CLIHelperResult{Protocol: protocol}
+	if isCLIProxyProtocol(protocol) {
+		return executeCLIProxyVersion(parent, protocol)
+	}
 	spec, ok := cliSpecs[protocol]
 	if !ok {
 		result.Message = "CLI 类型不受支持"
@@ -321,6 +334,11 @@ func executeCLICompanionVersion(parent context.Context, protocol string) (CLIHel
 		}
 		return result, model.ProviderStatusConnected
 	}
+	if protocol == "gemini-official-cli" {
+		result.Models = append([]string(nil), cliGeminiOfficialModels...)
+		result.Message = "Gemini 官方 CLI 检测成功，已载入官方模型别名；登录状态需通过最小调用确认"
+		return result, model.ProviderStatusConnected
+	}
 	result.Message = "CLI 检测成功"
 	return result, model.ProviderStatusConnected
 }
@@ -357,10 +375,18 @@ func executeCLICompanionAction(parent context.Context, input cliCompanionActionR
 	case cliCompanionActionProbeCancel:
 		return executeCLIModelProbeCancel(input)
 	case cliCompanionActionCompletionStart:
-		if input.Protocol == "codex" {
+		switch input.Protocol {
+		case "codex":
 			return executeCodexCompletionStart(parent, input)
+		case "gemini-cli":
+			return executeAntigravityCompletionStart(parent, input)
+		case "gemini-official-cli":
+			return executeGeminiOfficialCompletionStart(parent, input)
+		case cliChatGPTProxyProtocol, cliAntigravityProxyProtocol:
+			return executeCLIProxyCompletionStart(parent, input)
+		default:
+			return CLIHelperResult{Protocol: input.Protocol, Message: "该 CLI 尚不支持受控文本调用"}, model.ProviderStatusUnavailable
 		}
-		return executeAntigravityCompletionStart(parent, input)
 	case cliCompanionActionGenerationStart:
 		if input.Protocol == "jimeng" {
 			return executeJimengGenerationStart(parent, input)

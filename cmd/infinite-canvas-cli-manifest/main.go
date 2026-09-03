@@ -27,6 +27,7 @@ var allowedCandidates = map[string]map[string]bool{
 	"codex-image-emergency": {"codex": true},
 	"gpt-image-2":           {"gpt-image-2-skill": true},
 	"gemini-cli":            {"agy": true},
+	"gemini-official-cli":   {"gemini": true},
 	"jimeng":                {"dreamina": true},
 }
 

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 
@@ -25,7 +26,7 @@ var providerAPIProtocols = map[string]bool{
 	"apimart": true, "kie": true, "mimo": true, "runninghub": true, "volcengine": true,
 }
 
-var providerCLIProtocols = map[string]bool{"codex": true, "codex-image-emergency": true, "gpt-image-2": true, "gemini-cli": true, "jimeng": true}
+var providerCLIProtocols = map[string]bool{"codex": true, "codex-image-emergency": true, "gpt-image-2": true, "gemini-cli": true, "gemini-official-cli": true, "jimeng": true, cliChatGPTProxyProtocol: true, cliAntigravityProxyProtocol: true}
 var providerCapabilities = map[string]bool{"text": true, "image": true, "video": true, "audio": true}
 
 type ProviderInput struct {
@@ -60,6 +61,7 @@ type ProviderView struct {
 	HeaderNames      []string             `json:"headerNames"`
 	Capabilities     []string             `json:"capabilities"`
 	Models           []string             `json:"models"`
+	VerifiedModels   []string             `json:"verifiedModels"`
 	DefaultModel     string               `json:"defaultModel"`
 	Timeout          int                  `json:"timeout"`
 	Enabled          bool                 `json:"enabled"`
@@ -195,6 +197,7 @@ func SaveCurrentUserProvider(ctx context.Context, input ProviderInput) (Provider
 	if item.Kind == model.ProviderKindCLI && protocolChanged {
 		item.Executable = ""
 		item.Version = ""
+		item.VerifiedModels = nil
 	}
 	item.WorkingDirectory = input.WorkingDirectory
 	item.UpdatedAt = now()
@@ -371,11 +374,15 @@ func providerView(item model.Provider) (ProviderView, error) {
 		headerNames = append(headerNames, name)
 	}
 	sort.Strings(headerNames)
+	verifiedModels := item.VerifiedModels
+	if verifiedModels == nil {
+		verifiedModels = []string{}
+	}
 	return ProviderView{
 		ID: item.ID, Kind: item.Kind, Protocol: item.Protocol, Name: item.Name,
 		BaseURL: item.BaseURL, HasAPIKey: credentials.APIKey != "",
 		APIKeyMasked: maskedProviderSecret(credentials.APIKey), HasHeaders: len(credentials.Headers) > 0,
-		HeaderNames: headerNames, Capabilities: item.Capabilities, Models: item.Models,
+		HeaderNames: headerNames, Capabilities: item.Capabilities, Models: item.Models, VerifiedModels: verifiedModels,
 		DefaultModel: item.DefaultModel, Timeout: item.Timeout, Enabled: item.Enabled,
 		IsDefault: item.IsDefault, SortOrder: item.SortOrder, ConnectionStatus: item.ConnectionStatus,
 		StatusMessage: item.StatusMessage, LastCheckedAt: item.LastCheckedAt,
@@ -396,6 +403,64 @@ func saveProviderTestResult(item model.Provider, status model.ProviderStatus, me
 		return ProviderTestResult{}, err
 	}
 	return ProviderTestResult{Status: status, Message: message, Models: models, CheckedAt: item.LastCheckedAt}, nil
+}
+
+func saveCLIModelVerification(item model.Provider, modelName string, taskStatus string, taskMessage string) error {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || taskStatus != "succeeded" && taskStatus != "failed" {
+		return nil
+	}
+	fresh, found, err := repository.GetProvider(item.OwnerUserID, item.ID)
+	if err != nil || !found {
+		return err
+	}
+	if fresh.Kind != model.ProviderKindCLI || fresh.Protocol != item.Protocol || !userLocalChannelHasModel(fresh.Models, modelName) {
+		return nil
+	}
+	verified := append([]string(nil), fresh.VerifiedModels...)
+	if taskStatus == "succeeded" && !userLocalChannelHasModel(verified, modelName) {
+		verified = append(verified, modelName)
+	}
+	if taskStatus == "failed" && cliFailureInvalidatesModel(taskMessage) {
+		verified = removeProviderModel(verified, modelName)
+	}
+	verified = providerModelsInCatalogOrder(verified, fresh.Models)
+	if slices.Equal(verified, fresh.VerifiedModels) {
+		return nil
+	}
+	fresh.VerifiedModels = verified
+	fresh.UpdatedAt = now()
+	_, err = repository.SaveProvider(fresh)
+	return err
+}
+
+func cliFailureInvalidatesModel(message string) bool {
+	detail := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(detail, "所选模型当前不可用") ||
+		strings.Contains(detail, "模型或生图能力当前不可用") ||
+		strings.Contains(detail, "model not found") ||
+		strings.Contains(detail, "unknown model") ||
+		strings.Contains(detail, "unsupported model")
+}
+
+func providerModelsInCatalogOrder(values []string, catalog []string) []string {
+	result := make([]string, 0, len(values))
+	for _, modelName := range catalog {
+		if userLocalChannelHasModel(values, modelName) {
+			result = append(result, modelName)
+		}
+	}
+	return result
+}
+
+func removeProviderModel(values []string, target string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != target {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func normalizeProviderInput(input ProviderInput) ProviderInput {
@@ -481,6 +546,12 @@ func trustedCLIProviderCapabilities(protocol string) []string {
 	}
 	if protocol == "gemini-cli" {
 		return []string{"text", "image"}
+	}
+	if isCLIProxyProtocol(protocol) {
+		return []string{"text", "image"}
+	}
+	if protocol == "gemini-official-cli" {
+		return []string{"text"}
 	}
 	if protocol == "gpt-image-2" {
 		return []string{"image"}

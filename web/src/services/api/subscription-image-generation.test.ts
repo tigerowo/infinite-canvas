@@ -43,6 +43,39 @@ describe("subscription image controlled adapter", () => {
         expect(request.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ data: expect.objectContaining({ confirmed: true, generationType: "image", model, resolution: "low" }) }));
     });
 
+    it("keeps an explicitly selected Nano Banana retry on the controlled CLI after a failed verification", async () => {
+        useUserStore.setState({ token: "test-token" });
+        const retryConfig = config("gemini-cli", "nano-banana-2");
+        retryConfig.localChannels = retryConfig.localChannels.map((channel) => ({ ...channel, models: [] }));
+        const request = vi.spyOn(axios, "request").mockResolvedValueOnce({ status: 200, data: { code: 0, data: { protocol: "gemini-cli", taskId, taskStatus: "running", message: "running" } } });
+
+        await createCanvasImageTask(retryConfig, "纸艺老虎", [], { source: "canvas" });
+
+        expect(request.mock.calls[0]?.[0]).toEqual(
+            expect.objectContaining({
+                url: "/api/v1/providers/provider-gemini-cli/cli/generations",
+                data: expect.objectContaining({ confirmed: true, generationType: "image", model: "nano-banana-2" }),
+            }),
+        );
+    });
+
+    it.each([
+        ["21:9", "3:2"],
+        ["4:3", "3:2"],
+        ["3136x1344", "3:2"],
+        ["3:4", "2:3"],
+        ["2160x3840", "2:3"],
+    ])("maps %s to the nearest supported subscription image orientation", async (size, ratio) => {
+        useUserStore.setState({ token: "test-token" });
+        const request = vi.spyOn(axios, "request").mockResolvedValueOnce({ status: 200, data: { code: 0, data: { protocol: "gpt-image-2", taskId, taskStatus: "running", message: "running" } } });
+        const requestConfig = config("gpt-image-2", "gpt-image-2");
+        requestConfig.size = size;
+
+        await createCanvasImageTask(requestConfig, "纸艺老虎", [], { source: "image-workbench" });
+
+        expect(request.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ data: expect.objectContaining({ ratio }) }));
+    });
+
     it("accepts the exact same-origin storage proxy and rejects unsafe relative output", () => {
         expect(parseJimengGenerationOutput(succeededResult(JSON.stringify({ submitId: taskId, urls: [`/api/files/${objectId}/content`] })))).toEqual({ submitId: taskId, urls: [`/api/files/${objectId}/content`] });
         expect(parseJimengGenerationOutput(succeededResult(JSON.stringify({ submitId: taskId, urls: ["/api/files/../../private/content"] })))).toBeNull();

@@ -9,7 +9,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { CanvasResourceMentionTextarea } from "./canvas-resource-mention-textarea";
-import { CanvasNodeType, type CanvasNodeData, type Position } from "../types";
+import { CanvasNodeType, type CanvasGenerationTrace, type CanvasNodeData, type Position } from "../types";
 import { isCanvasImageNodeType } from "../utils/canvas-panorama";
 import type { CanvasResourceReference } from "../utils/canvas-resource-references";
 
@@ -131,6 +131,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const [titleDraft, setTitleDraft] = useState(data.title || "");
     const isGroup = data.type === CanvasNodeType.Group;
     const hasImageContent = isCanvasImageNodeType(data.type) && Boolean(data.metadata?.content);
+    const isGeneratedImage = hasImageContent && Boolean(data.metadata?.generationTrace || data.metadata?.imageTaskId || data.metadata?.imageTaskResultId);
     const hasVideoContent = data.type === CanvasNodeType.Video && Boolean(data.metadata?.content);
     const hasAudioContent = data.type === CanvasNodeType.Audio && Boolean(data.metadata?.content);
     const isBatchRoot = isCanvasImageNodeType(data.type) && Boolean(data.metadata?.isBatchRoot) && batchCount > 1;
@@ -429,7 +430,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                     ) : null}
                 </div>
 
-                {showImageInfo && hasImageContent ? <ImageInfoBar node={data} /> : null}
+                {hasImageContent && (showImageInfo || isGeneratedImage) ? <ImageInfoBar node={data} /> : null}
+                {hasImageContent && data.metadata?.generationTrace ? <GenerationTraceBadge trace={data.metadata.generationTrace} theme={theme} /> : null}
 
                 {!isGroup && !hasImageContent && !hasVideoContent && !hasAudioContent ? <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12" style={{ background: `linear-gradient(to top, ${theme.canvas.background}66, transparent)` }} /> : null}
 
@@ -520,12 +522,14 @@ function LoadingContent({ node, theme, now, onCancel, cancelDisabled, isCancelli
     }
 
     return (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.activeStroke }}>
-            <div className="size-10 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
-            <span className="text-[10px] tracking-[0.2em]">{progress > 0 ? `生成中 ${progress}%` : "生成中"}</span>
-            <span className="rounded-full border px-2 py-1 text-xs tracking-normal" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
-                {formatDuration(elapsedMs)}
-            </span>
+        <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-3" style={{ color: theme.node.activeStroke }}>
+            <div className="size-8 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+            <span className="text-[10px] tracking-[0.18em]">{node.metadata?.generationTrace ? generationPhaseLabel(node.metadata.generationTrace.phase) : progress > 0 ? `生成中 ${progress}%` : "生成中"}</span>
+            {node.metadata?.generationTrace ? <GenerationTracePanel node={node} trace={node.metadata.generationTrace} theme={theme} now={currentNow} /> : (
+                <span className="rounded-full border px-2 py-1 text-xs tracking-normal" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+                    {formatDuration(elapsedMs)}
+                </span>
+            )}
             <CancelTaskButton node={node} theme={theme} disabled={cancelDisabled} loading={isCancelling} onCancel={onCancel} />
             {progress > 0 ? (
                 <div className="h-1.5 w-28 overflow-hidden rounded-full" style={{ background: theme.node.stroke }}>
@@ -557,8 +561,9 @@ function CancelTaskButton({ node, theme, disabled, loading, onCancel }: { node: 
 
 function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
     return (
-        <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
+        <div className="flex w-full max-w-[320px] flex-col items-center gap-3 px-4 text-center">
             <div className="text-xs leading-5 text-red-300">{node.metadata?.errorDetails || "生成失败"}</div>
+            {node.metadata?.generationTrace ? <GenerationTracePanel node={node} trace={node.metadata.generationTrace} theme={theme} now={Date.now()} /> : null}
             <button
                 type="button"
                 className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
@@ -574,6 +579,80 @@ function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "
             </button>
         </div>
     );
+}
+
+function GenerationTracePanel({ node, trace, theme, now }: { node: CanvasNodeData; trace: CanvasGenerationTrace; theme: (typeof canvasThemes)[keyof typeof canvasThemes]; now: number }) {
+    const stages = generationTraceStages(trace, now);
+    const totalMs = stages.reduce((total, stage) => total + (stage.ms || 0), 0);
+    const params = [node.metadata?.size, node.metadata?.quality, node.metadata?.count ? `${node.metadata.count}张` : ""].filter(Boolean).join(" · ");
+    return (
+        <div className="w-full rounded-xl border px-3 py-2 text-left" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}>
+            <div className="flex items-center justify-between gap-3 text-[11px] font-medium">
+                <span className="min-w-0 truncate">{trace.channelName} · {protocolLabel(trace.protocol)}</span>
+                <span className="shrink-0 tabular-nums" style={{ color: theme.node.muted }}>{formatTraceDuration(totalMs)}</span>
+            </div>
+            <div className="mt-1 truncate text-[10px]" style={{ color: theme.node.muted }} title={`${trace.model}${params ? ` · ${params}` : ""}`}>
+                {trace.model}{params ? ` · ${params}` : ""}
+            </div>
+            <div className="mt-2 grid grid-cols-4 gap-1">
+                {stages.map((stage) => (
+                    <div key={stage.label} className="min-w-0">
+                        <div className="mb-1 h-0.5 rounded-full" style={{ background: stage.active ? theme.node.activeStroke : stage.done ? selectionBlue : theme.node.stroke }} />
+                        <div className="truncate text-[9px]" style={{ color: stage.active ? theme.node.text : theme.node.muted }}>{stage.label}</div>
+                        <div className="truncate text-[9px] tabular-nums" style={{ color: theme.node.muted }}>{stage.value}</div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+function GenerationTraceBadge({ trace, theme }: { trace: CanvasGenerationTrace; theme: (typeof canvasThemes)[keyof typeof canvasThemes] }) {
+    const stages = generationTraceStages(trace, trace.phase === "completed" || trace.phase === "failed" ? 0 : Date.now());
+    const totalMs = stages.reduce((total, stage) => total + (stage.ms || 0), 0);
+    const title = `${trace.channelName} · ${protocolLabel(trace.protocol)} · ${trace.model}\n${stages.map((stage) => `${stage.label} ${stage.value}`).join(" · ")}`;
+    return (
+        <div className="pointer-events-none absolute bottom-3 left-3 z-40 max-w-[calc(100%-96px)]" title={title}>
+            <span className="block max-w-full truncate rounded-md border px-2 py-1 text-[10px] font-medium leading-none backdrop-blur-sm" style={{ background: `color-mix(in srgb, ${theme.toolbar.panel} 86%, transparent)`, borderColor: theme.toolbar.border, color: theme.node.text }}>
+                {formatTraceDuration(totalMs)} · {trace.channelName} · {protocolLabel(trace.protocol)}
+            </span>
+        </div>
+    );
+}
+
+function generationTraceStages(trace: CanvasGenerationTrace, now: number) {
+    const submittingMs = trace.submitMs ?? (trace.phase === "submitting" ? Math.max(0, now - trace.submitStartedAt) : 0);
+    const upstreamMs = trace.upstreamMs ?? (trace.phase === "generating" && trace.upstreamStartedAt ? Math.max(0, now - trace.upstreamStartedAt) : 0);
+    const directCompletion = (trace.phase === "completed" || trace.phase === "failed") && trace.submitMs !== undefined && trace.upstreamStartedAt === undefined;
+    return [
+        { label: "准备", ms: trace.contextMs, value: formatTraceDuration(trace.contextMs), done: true, active: false },
+        { label: directCompletion ? "同步生成" : "提交", ms: submittingMs, value: formatTraceDuration(submittingMs), done: trace.phase !== "submitting", active: trace.phase === "submitting" },
+        { label: "上游", ms: upstreamMs, value: directCompletion ? "包含于提交" : trace.upstreamStartedAt ? formatTraceDuration(upstreamMs) : "等待", done: trace.phase === "completed" || trace.phase === "failed", active: trace.phase === "generating" },
+        { label: "落位", ms: trace.materializeMs || 0, value: trace.materializeMs === undefined ? "等待" : formatTraceDuration(trace.materializeMs), done: trace.materializeMs !== undefined, active: false },
+    ];
+}
+
+function generationPhaseLabel(phase: CanvasGenerationTrace["phase"]) {
+    if (phase === "submitting") return "正在提交任务";
+    if (phase === "generating") return "上游生成中";
+    if (phase === "completed") return "生成完成";
+    return "生成失败";
+}
+
+function formatTraceDuration(ms: number) {
+    if (ms < 1000) return `${Math.max(0, Math.round(ms))}毫秒`;
+    return formatDuration(ms);
+}
+
+function protocolLabel(protocol: string) {
+    if (protocol === "gemini-cli") return "Antigravity CLI";
+    if (protocol === "gpt-image-2") return "订阅 CLI";
+    if (protocol === "chatgpt-subscription-proxy") return "ChatGPT 订阅代理";
+    if (protocol === "antigravity-subscription-proxy") return "Antigravity 订阅代理";
+    if (protocol === "jimeng") return "即梦 CLI";
+    if (protocol === "remote") return "系统渠道";
+    if (protocol === "unknown") return "默认协议";
+    return protocol.toUpperCase();
 }
 
 function UnknownNodeContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
@@ -826,11 +905,31 @@ function ImageContent({
 }
 
 function ImageInfoBar({ node }: { node: CanvasNodeData }) {
-    const width = Math.round(node.metadata?.naturalWidth || node.width);
-    const height = Math.round(node.metadata?.naturalHeight || node.height);
+    const content = node.metadata?.content;
+    const [decodedSize, setDecodedSize] = useState<{ width: number; height: number } | null>(null);
+
+    useEffect(() => {
+        setDecodedSize(null);
+        if (!content) return;
+        const image = new window.Image();
+        let active = true;
+        image.onload = () => {
+            if (active && image.naturalWidth > 0 && image.naturalHeight > 0) {
+                setDecodedSize({ width: image.naturalWidth, height: image.naturalHeight });
+            }
+        };
+        image.src = content;
+        return () => {
+            active = false;
+            image.onload = null;
+        };
+    }, [content]);
+
+    const width = Math.round(decodedSize?.width || node.metadata?.naturalWidth || node.width);
+    const height = Math.round(decodedSize?.height || node.metadata?.naturalHeight || node.height);
     const size = formatBytes(node.metadata?.bytes || 0);
     return (
-        <div className="pointer-events-none absolute bottom-3 right-3 z-40 max-w-[calc(100%-24px)]">
+        <div className="pointer-events-none absolute left-3 top-3 z-40 max-w-[calc(100%-24px)]">
             <span className="max-w-full truncate rounded-md bg-black/55 px-2 py-1 text-[11px] font-medium leading-none text-white backdrop-blur-sm">
                 {width} x {height}
                 {size ? ` · ${size}` : ""}

@@ -53,8 +53,10 @@ export function startCLICompletion(token: string, id: string, model: string, pro
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/completions`, { model, prompt }, token);
 }
 
-export function queryCLIModelProbe(token: string, id: string, taskId: string) {
-    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/model-probe/${encodeURIComponent(taskId)}/status`, {}, token);
+export async function queryCLIModelProbe(token: string, id: string, taskId: string) {
+    const result = await apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/model-probe/${encodeURIComponent(taskId)}/status`, {}, token);
+    notifyProviderCatalogChanged(result);
+    return result;
 }
 
 export function cancelCLIModelProbe(token: string, id: string, taskId: string) {
@@ -65,12 +67,18 @@ export function startCLIGeneration(token: string, id: string, input: { generatio
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations`, { confirmed: true, ...input }, token);
 }
 
-export function queryCLIGeneration(token: string, id: string, taskId: string) {
-    return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations/${encodeURIComponent(taskId)}/status`, {}, token);
+export async function queryCLIGeneration(token: string, id: string, taskId: string) {
+    const result = await apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations/${encodeURIComponent(taskId)}/status`, {}, token);
+    notifyProviderCatalogChanged(result);
+    return result;
 }
 
 export function cancelCLIGeneration(token: string, id: string, taskId: string) {
     return apiPost<CLIHelperResult>(`/api/v1/providers/${encodeURIComponent(id)}/cli/generations/${encodeURIComponent(taskId)}/cancel`, {}, token);
+}
+
+function notifyProviderCatalogChanged(result: CLIHelperResult) {
+    if (typeof window !== "undefined" && (result.taskStatus === "succeeded" || result.taskStatus === "failed")) window.dispatchEvent(new Event("provider-catalog-invalidated"));
 }
 
 export function submitRunningHubTask(token: string, id: string, reference: string, nodeInfoList: RunningHubNodeInfo[]) {

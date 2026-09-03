@@ -20,10 +20,10 @@ func StartCurrentUserCLICompletion(ctx context.Context, providerID string, input
 	}
 	input.Model = strings.TrimSpace(input.Model)
 	input.Prompt = strings.TrimSpace(input.Prompt)
-	if item.Kind != model.ProviderKindCLI || item.Protocol != "codex" && item.Protocol != "gemini-cli" || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
+	if item.Kind != model.ProviderKindCLI || item.Protocol != "codex" && item.Protocol != "gemini-cli" && item.Protocol != "gemini-official-cli" && !isCLIProxyProtocol(item.Protocol) || !item.Enabled || item.ConnectionStatus != model.ProviderStatusConnected {
 		return CLIHelperResult{}, safeMessageError{message: "受控 CLI 渠道不可用"}
 	}
-	if !cliModelNamePattern.MatchString(input.Model) || item.Protocol == "codex" && input.Model != cliCodexDefaultModel || item.Protocol == "gemini-cli" && (input.Model == cliAntigravityImageModel || !userLocalChannelHasModel(item.Models, input.Model)) {
+	if !cliModelNamePattern.MatchString(input.Model) || item.Protocol == "codex" && input.Model != cliCodexDefaultModel || item.Protocol == "gemini-cli" && (input.Model == cliAntigravityImageModel || !userLocalChannelHasModel(item.Models, input.Model)) || item.Protocol == "gemini-official-cli" && (!userLocalChannelHasModel(cliGeminiOfficialModels, input.Model) || !userLocalChannelHasModel(item.Models, input.Model)) || isCLIProxyProtocol(item.Protocol) && (!cliProxyTextModel(item.Protocol, input.Model) || !userLocalChannelHasModel(item.Models, input.Model)) {
 		return CLIHelperResult{}, safeMessageError{message: "受控 CLI 模型不可用"}
 	}
 	if input.Prompt == "" || len(input.Prompt) > cliCompletionPromptLimit || strings.ContainsRune(input.Prompt, '\x00') {
