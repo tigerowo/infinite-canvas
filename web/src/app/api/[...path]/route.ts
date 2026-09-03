@@ -9,10 +9,16 @@ type RouteContext = {
 
 function proxyHeaders(request: NextRequest) {
     const headers = new Headers(request.headers);
+    // nextUrl.host can be the bind address (for example 0.0.0.0), not the browser-visible host.
+    const forwardedHost = request.headers.get("host");
     headers.delete("host");
     headers.delete("content-length");
     headers.delete("connection");
-    headers.set("x-forwarded-host", request.nextUrl.host);
+    if (forwardedHost) {
+        headers.set("x-forwarded-host", forwardedHost);
+    } else {
+        headers.delete("x-forwarded-host");
+    }
     headers.set("x-forwarded-proto", request.nextUrl.protocol.replace(":", ""));
     return headers;
 }

@@ -3,9 +3,9 @@ package service
 import (
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
 )
 
 type CanvasAudioTaskCreateInput struct {
@@ -53,6 +53,10 @@ func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bo
 	return repository.GetUserCanvasAudioTask(strings.TrimSpace(userID), strings.TrimSpace(id))
 }
 
+func CancelUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bool, error) {
+	return repository.CancelUserCanvasAudioTask(strings.TrimSpace(userID), strings.TrimSpace(id), now())
+}
+
 func SaveCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, error) {
 	task.UpdatedAt = now()
 	return repository.UpdateCanvasAudioTask(task)
@@ -66,7 +70,7 @@ func CanvasAudioTaskResponse(task model.CanvasAudioTask) map[string]any {
 		"source_id":    task.SourceID,
 		"node_id":      task.NodeID,
 		"model":        task.Model,
-		"status":       task.Status,
+		"status":       NormalizeVideoTaskStatus(task.Status),
 		"progress":     task.Progress,
 		"prompt":       task.Prompt,
 		"created_at":   task.CreatedAt,

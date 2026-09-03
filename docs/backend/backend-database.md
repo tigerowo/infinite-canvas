@@ -34,6 +34,8 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `storage_usages`
+- `providers`
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -79,6 +81,38 @@ description: 当前后端主要数据表与字段说明
 
 `storage_provider.s3` 保存 Endpoint、Region、Bucket、Access Key、Secret、公开域名和路径前缀；`storage_provider.webdav` 保存 WebDAV 地址、远程目录、用户名和密码/应用密码。自动同步开关不重复写入 Provider；后端下载和删除旧媒体时仍会读取已保存但已停用的 Provider。
 
+### providers
+
+连接中心的用户 API/CLI Provider 表。每条记录按 `owner_user_id` 隔离；API Key 和自定义请求头序列化后使用由本地 `JWT_SECRET` 派生的 AES-GCM 密钥加密，接口只返回密钥是否存在和固定掩码。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | Provider 主键 |
+| `owner_user_id` | string | 所属用户 ID，索引的一部分 |
+| `kind` | string | `api` 或 `cli` |
+| `protocol` | string | API 协议或 CLI 类型 |
+| `name` | string | 连接名称 |
+| `base_url` | string | API Base URL；CLI 记录可为空 |
+| `credentials_ciphertext` | text | AES-GCM 密文，包含 API Key 与自定义请求头；不通过 JSON 返回 |
+| `capabilities` | json | `text`、`image`、`video`、`audio` 能力列表 |
+| `models` | json | 模型列表 |
+| `verified_models` | json | CLI 真实调用成功的模型列表；画布和工作台只消费该列表，API Provider 不使用此字段过滤目录 |
+| `default_model` | string | 默认模型 |
+| `timeout` | number | 请求超时秒数，范围 1–600 |
+| `enabled` | boolean | 是否启用 |
+| `is_default` | boolean | 是否为同类型默认连接 |
+| `sort_order` | number | 同类型排序值 |
+| `connection_status` | string | `untested`、`connected`、`failed`、`timeout`、`disabled`、`unavailable` |
+| `status_message` | text | 最近状态说明，不保存响应正文或密钥 |
+| `last_checked_at` | string | 最近检测时间 |
+| `executable` | string | 最近检测到的 CLI 可执行程序元数据；实际执行只认签名清单和固定候选名，不信任该字段 |
+| `working_directory` | string | CLI 默认工作目录元数据 |
+| `version` | string | CLI 版本元数据 |
+| `created_at` | string | 创建时间 |
+| `updated_at` | string | 更新时间 |
+
+索引：`idx_providers_owner_kind_sort (owner_user_id, kind, sort_order)`。删除前会检查视频任务、画布图片/音频任务和 AI 调用日志中的渠道引用；存在引用时应禁用而不是删除。更换 `JWT_SECRET` 会导致既有 Provider 密文无法解密，轮换前必须先设计密钥重加密流程。
+
 ### storage_objects
 
 S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表或生成记录。
@@ -99,6 +133,20 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `created_by` | string | 创建用户 ID |
 | `created_at` | string | 创建时间 |
 | `deleted_at` | string | 预留字段；当前删除链路直接删除索引记录 |
+
+### storage_usages
+
+S3/R2 月度操作预算的本机计数表。只记录由 Infinite Canvas 后端实际发起并获得成功响应的请求，不包含公开域名直连、Cloudflare 控制台或其他客户端产生的操作，因此用于本机预算保护和趋势预警，不作为供应商账单依据。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `provider_id` | string | 存储 Provider ID，与 `period` 组成联合主键 |
+| `period` | string | 自然月，格式 `YYYY-MM` |
+| `class_a_operations` | number | 上传和 S3 列表分页等 A 类操作累计值 |
+| `class_b_operations` | number | 后端代理读取等 B 类操作累计值 |
+| `updated_at` | string | 最近一次计数更新时间 |
+
+容量或 A 类操作达到配置的保护比例后，后端停止新的 S3/R2 写入；已有对象读取与免费删除保持可用。B 类操作达到预警线时只提示，不主动切断历史素材。
 
 ### prompts
 
@@ -189,7 +237,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `source_id` | string | 来源内 ID，画布任务记录画布节点 ID，视频创作台为空 |
 | `upstream_task_id` | string | 上游任务 ID |
 | `upstream_video_id` | string | 上游视频 ID，例如 Agnes 的 `video_...` |
-| `status` | string | 状态：`queued`、`processing`、`completed`、`failed` |
+| `status` | string | 状态：`queued`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out`；旧状态读取时会归一化 |
 | `progress` | number | 生成进度，0-100 |
 | `seconds` | string | 视频秒数 |
 | `size` | string | 视频尺寸 |
@@ -199,6 +247,8 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `request_body` | text | 创建任务时的请求摘要 |
 | `response_body` | text | 创建任务时的响应摘要 |
 | `last_response` | text | 最近一次状态响应摘要 |
+| `poll_count` | number | 后端已发起的累计轮询次数，达到 360 次后停止 |
+| `response_bytes` | number | 后端轮询成功响应体的累计读取字节数，达到 32 MiB 后停止 |
 | `credits` | number | 创建任务时预扣算力点 |
 | `created_at` | string | 创建时间 |
 | `updated_at` | string | 更新时间 |
@@ -206,7 +256,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `completed_at` | string | 完成时间 |
 | `last_polled_at` | string | 最近轮询时间 |
 
-后台轮询器按 `status + created_at` 查询未完成任务；旧数据库中如果残留废弃列，不再参与代码查询。
+后台轮询器按 `status + created_at` 查询未完成任务；每个任务还受 360 次请求、32 MiB 累计响应体和自创建起 30 分钟总体 deadline 限制。超过总体 deadline 时写入 `timed_out`；取消任务时停止当前轮询并使用条件更新阻止陈旧结果覆盖。旧数据库由 AutoMigrate 增加计数字段；如果残留废弃列，不再参与代码查询。
 
 ### video_generation_logs
 
@@ -255,7 +305,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `node_id` | string | 画布节点 ID |
 | `model` | string | 模型名称 |
 | `channel_id` | string | 模型渠道 ID |
-| `status` | string | 状态：`queued`、`processing`、`completed`、`failed` |
+| `status` | string | 状态：`queued`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out` |
 | `progress` | number | 生成进度 |
 | `prompt` | text | 提示词 |
 | `generation_type` | string | `generation` 或 `edit` |
@@ -269,7 +319,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `started_at` | string | 开始时间 |
 | `completed_at` | string | 完成时间 |
 
-索引：`idx_canvas_image_tasks_user_source_node (user_id, source, source_id, node_id)`
+索引：`idx_canvas_image_tasks_user_source_node (user_id, source, source_id, node_id)`。单个运行任务受 5 分钟总体 deadline 和 32 MiB 代理响应限制，支持显式取消。
 
 ### canvas_audio_tasks
 
@@ -284,7 +334,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `node_id` | string | 画布节点 ID |
 | `model` | string | 模型名称 |
 | `channel_id` | string | 模型渠道 ID |
-| `status` | string | 状态：`queued`、`processing`、`completed`、`failed` |
+| `status` | string | 状态：`queued`、`running`、`succeeded`、`failed`、`cancelled`、`timed_out` |
 | `progress` | number | 生成进度 |
 | `prompt` | text | 提示词 |
 | `audio_url` | text | 完成后音频 URL |
@@ -296,7 +346,7 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `started_at` | string | 开始时间 |
 | `completed_at` | string | 完成时间 |
 
-索引：`idx_canvas_audio_tasks_user_source_node (user_id, source, source_id, node_id)`
+索引：`idx_canvas_audio_tasks_user_source_node (user_id, source, source_id, node_id)`。单个运行任务受 5 分钟总体 deadline 和 32 MiB 代理响应限制，支持显式取消。
 
 ### canvas_projects
 

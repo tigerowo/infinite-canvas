@@ -24,6 +24,19 @@ export type CanvasNodeStatus = "idle" | "success" | "loading" | "error";
 export type CanvasGenerationMode = "text" | "image" | "video" | "audio";
 export type CanvasImageGenerationType = "generation" | "edit";
 
+export type CanvasGenerationTrace = {
+    phase: "submitting" | "generating" | "completed" | "failed";
+    channelName: string;
+    protocol: string;
+    model: string;
+    contextMs: number;
+    submitStartedAt: number;
+    submitMs?: number;
+    upstreamStartedAt?: number;
+    upstreamMs?: number;
+    materializeMs?: number;
+};
+
 export type CameraControlOptions = {
     enabled: boolean;
     camera: string;
@@ -87,6 +100,7 @@ export type CanvasNodeMetadata = {
     durationMs?: number;
     startedAt?: number;
     progress?: number;
+    generationTrace?: CanvasGenerationTrace;
     imageTaskId?: string;
     imageTaskResultId?: string;
     audioTaskId?: string;
@@ -202,12 +216,15 @@ export type CanvasAgentPhase =
     | "complete";
 
 export type CanvasAgentConfig = {
+    interactionMode: "quick" | "agent";
     textApiMode: "chat" | "responses";
     autoGenerateMedia: boolean;
     imageQuality: string;
     imageSize: string;
     videoQuality: string;
     videoSize: string;
+    textModel?: string;
+    textChannelId?: string;
 };
 
 export type CanvasAgentState = {

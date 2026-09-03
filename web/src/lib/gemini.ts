@@ -29,7 +29,10 @@ export function geminiActionUrl(baseUrl: string, model: string, action: "generat
 }
 
 export function geminiOperationUrl(baseUrl: string, operation: string) {
-    const name = operation.trim().replace(/^\/+/, "").replace(/^v1beta\//i, "");
+    const name = operation
+        .trim()
+        .replace(/^\/+/, "")
+        .replace(/^v1beta\//i, "");
     return `${normalizeGeminiBaseUrl(baseUrl)}/v1beta/${name}`;
 }
 
@@ -41,16 +44,16 @@ export function geminiDirectHeaders(config: AiConfig) {
 }
 
 export function dataUrlToGeminiInlineData(dataUrl: string) {
-    const match = dataUrl.match(/^data:([^;,]+);base64,(.+)$/s);
+    const match = dataUrl.match(/^data:([^;,]+);base64,([\s\S]+)$/);
     if (!match) throw new Error("Gemini 素材必须是 Base64 图片数据");
     return { inlineData: { mimeType: match[1], data: match[2] } };
 }
 
 export function geminiErrorMessage(payload: unknown, fallback: string) {
-    const root = payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
-    const error = root.error && typeof root.error === "object" ? root.error as Record<string, unknown> : {};
-    const feedback = root.promptFeedback && typeof root.promptFeedback === "object" ? root.promptFeedback as Record<string, unknown> : {};
-    const candidates = Array.isArray(root.candidates) ? root.candidates as Array<Record<string, unknown>> : [];
+    const root = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+    const error = root.error && typeof root.error === "object" ? (root.error as Record<string, unknown>) : {};
+    const feedback = root.promptFeedback && typeof root.promptFeedback === "object" ? (root.promptFeedback as Record<string, unknown>) : {};
+    const candidates = Array.isArray(root.candidates) ? (root.candidates as Array<Record<string, unknown>>) : [];
     return firstText(error.message, feedback.blockReason, ...candidates.map((item) => item.finishReason), fallback);
 }
 

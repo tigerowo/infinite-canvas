@@ -19,11 +19,25 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/service"
+)
+
+const canvasGenerationTaskDeadline = 5 * time.Minute
+const canvasGenerationResponseLimit = int64(32 * 1024 * 1024)
+
+var errCanvasGenerationResponseTooLarge = errors.New("画布生成任务响应超过 32 MiB 限制")
+
+var embeddedImageDataURLPattern = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+`)
+
+var (
+	canvasImageTaskCancels sync.Map
+	canvasAudioTaskCancels sync.Map
 )
 
 func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +46,11 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	releaseSlot, ok := reserveGenerationTaskSlot(w, r, user.ID)
+	if !ok {
+		return
+	}
+	defer releaseSlot()
 	body, contentType, endpoint, source, nodeID, sourceID, clientTaskID, prompt, channelID, err := readCanvasTaskAIRequest(r, "/images/generations")
 	if err != nil {
 		Fail(w, err.Error())
@@ -77,7 +96,34 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	OK(w, service.CanvasImageTaskResponse(task))
-	go runCanvasImageTask(task, user, body, contentType, task.ChannelID, task.UserChannelID)
+	taskContext, cancel := context.WithTimeout(context.Background(), canvasGenerationTaskDeadline)
+	canvasImageTaskCancels.Store(task.ID, context.CancelFunc(cancel))
+	go runCanvasImageTask(taskContext, cancel, task, user, body, contentType, task.ChannelID, task.UserChannelID)
+}
+
+func CancelUserCanvasImageTask(w http.ResponseWriter, r *http.Request, id string) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	id = strings.TrimSpace(id)
+	if value, found := canvasImageTaskCancels.Load(id); found {
+		value.(context.CancelFunc)()
+	}
+	task, changed, err := service.CancelUserCanvasImageTask(user.ID, id)
+	if err != nil {
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	if !changed {
+		task, changed, err = service.GetUserCanvasImageTask(user.ID, id)
+	}
+	if err != nil || !changed {
+		Fail(w, "图片任务不存在")
+		return
+	}
+	OK(w, service.CanvasImageTaskResponse(task))
 }
 
 func GetCanvasImageTask(w http.ResponseWriter, r *http.Request, id string) {
@@ -146,6 +192,10 @@ func DeleteUserCanvasImageTask(w http.ResponseWriter, r *http.Request, id string
 		Fail(w, "图片任务不存在")
 		return
 	}
+	if value, found := canvasImageTaskCancels.Load(id); found {
+		value.(context.CancelFunc)()
+	}
+	_, _, _ = service.CancelUserCanvasImageTask(user.ID, id)
 	if err := service.DeleteUserCanvasImageTask(user.ID, id); err != nil {
 		log.Printf("delete canvas image task failed: user=%s id=%s err=%v", user.ID, id, err)
 		Fail(w, "AI 接口请求失败")
@@ -185,6 +235,11 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	releaseSlot, ok := reserveGenerationTaskSlot(w, r, user.ID)
+	if !ok {
+		return
+	}
+	defer releaseSlot()
 	body, contentType, endpoint, _, nodeID, sourceID, clientTaskID, prompt, channelID, err := readCanvasTaskAIRequest(r, "/audio/speech")
 	if err != nil {
 		Fail(w, err.Error())
@@ -228,7 +283,34 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	OK(w, service.CanvasAudioTaskResponse(task))
-	go runCanvasAudioTask(task, user, body, contentType, task.ChannelID, task.UserChannelID)
+	taskContext, cancel := context.WithTimeout(context.Background(), canvasGenerationTaskDeadline)
+	canvasAudioTaskCancels.Store(task.ID, context.CancelFunc(cancel))
+	go runCanvasAudioTask(taskContext, cancel, task, user, body, contentType, task.ChannelID, task.UserChannelID)
+}
+
+func CancelUserCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
+	user, ok := service.UserFromContext(r.Context())
+	if !ok {
+		Fail(w, "未登录或权限不足")
+		return
+	}
+	id = strings.TrimSpace(id)
+	if value, found := canvasAudioTaskCancels.Load(id); found {
+		value.(context.CancelFunc)()
+	}
+	task, changed, err := service.CancelUserCanvasAudioTask(user.ID, id)
+	if err != nil {
+		Fail(w, "AI 接口请求失败")
+		return
+	}
+	if !changed {
+		task, changed, err = service.GetUserCanvasAudioTask(user.ID, id)
+	}
+	if err != nil || !changed {
+		Fail(w, "音频任务不存在")
+		return
+	}
+	OK(w, service.CanvasAudioTaskResponse(task))
 }
 
 func GetCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
@@ -250,14 +332,20 @@ func GetCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
 	OK(w, service.CanvasAudioTaskResponse(task))
 }
 
-func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+func runCanvasImageTask(ctx context.Context, cancel context.CancelFunc, task model.CanvasImageTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+	defer cancel()
+	defer canvasImageTaskCancels.Delete(task.ID)
 	current := taskTime()
-	task.Status = "processing"
+	task.Status = "running"
 	task.Progress = 10
 	task.StartedAt = current
 	task, _ = service.SaveCanvasImageTask(task)
 
-	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequest(ctx, user, task.Endpoint, body, contentType, channelID, userChannelID)
+	if ctx.Err() != nil {
+		saveStoppedCanvasImageTask(task, ctx.Err())
+		return
+	}
 	if err != nil {
 		saveFailedCanvasImageTask(task, err.Error(), err.Error())
 		return
@@ -277,10 +365,10 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		saveFailedCanvasImageTask(task, err.Error(), string(payload))
 		return
 	}
-	task.Status = "completed"
+	task.Status = "succeeded"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
-	task.ResponseBody = string(payload)
+	task.ResponseBody = service.SanitizeAIStoredPayload(string(payload))
 	task.ImageURL = imageURLs[0]
 	if collectAll {
 		task.ImageURLs = imageURLs
@@ -295,14 +383,20 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	_, _ = service.SaveCanvasImageTask(task)
 }
 
-func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+func runCanvasAudioTask(ctx context.Context, cancel context.CancelFunc, task model.CanvasAudioTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+	defer cancel()
+	defer canvasAudioTaskCancels.Delete(task.ID)
 	current := taskTime()
-	task.Status = "processing"
+	task.Status = "running"
 	task.Progress = 10
 	task.StartedAt = current
 	task, _ = service.SaveCanvasAudioTask(task)
 
-	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequest(ctx, user, task.Endpoint, body, contentType, channelID, userChannelID)
+	if ctx.Err() != nil {
+		saveStoppedCanvasAudioTask(task, ctx.Err())
+		return
+	}
 	if err != nil {
 		saveFailedCanvasAudioTask(task, err.Error(), err.Error())
 		return
@@ -327,7 +421,7 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	if task.ContentType != "" && strings.HasPrefix(task.ContentType, "audio/") {
 		mimeType = task.ContentType
 	}
-	task.Status = "completed"
+	task.Status = "succeeded"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
 	task.ResponseBody = "[binary audio]"
@@ -340,9 +434,9 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	_, _ = service.SaveCanvasAudioTask(task)
 }
 
-func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
+func executeCanvasAIRequest(ctx context.Context, user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
 	request := httptest.NewRequest(http.MethodPost, "http://canvas.local/api/v1"+endpoint, bytes.NewReader(body))
-	request = request.WithContext(service.WithUser(context.Background(), user))
+	request = request.WithContext(service.WithUser(ctx, user))
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -351,33 +445,88 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 	} else if strings.TrimSpace(channelID) != "" {
 		request.Header.Set("X-Model-Channel-ID", channelID)
 	}
-	recorder := httptest.NewRecorder()
+	recorder := newLimitedResponseRecorder(canvasGenerationResponseLimit)
 	proxyAIRequest(recorder, request, endpoint)
+	if recorder.exceeded {
+		return nil, recorder.Code, recorder.Header().Get("Content-Type"), errCanvasGenerationResponseTooLarge
+	}
 	response := recorder.Result()
 	defer response.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+	payload, readErr := readLimitedUpstreamResponse(response.Body, "画布生成任务", 32*1024*1024)
+	if readErr != nil {
+		return nil, response.StatusCode, response.Header.Get("Content-Type"), readErr
+	}
 	return payload, response.StatusCode, response.Header.Get("Content-Type"), nil
+}
+
+type limitedResponseRecorder struct {
+	*httptest.ResponseRecorder
+	remaining int64
+	exceeded  bool
+}
+
+func newLimitedResponseRecorder(limit int64) *limitedResponseRecorder {
+	return &limitedResponseRecorder{ResponseRecorder: httptest.NewRecorder(), remaining: limit}
+}
+
+func (recorder *limitedResponseRecorder) Write(value []byte) (int, error) {
+	if int64(len(value)) <= recorder.remaining {
+		recorder.remaining -= int64(len(value))
+		return recorder.ResponseRecorder.Write(value)
+	}
+	writeBytes := max(int64(0), recorder.remaining)
+	written := 0
+	if writeBytes > 0 {
+		written, _ = recorder.ResponseRecorder.Write(value[:writeBytes])
+		recorder.remaining -= int64(written)
+	}
+	recorder.exceeded = true
+	return written, errCanvasGenerationResponseTooLarge
 }
 
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
-	task.Error = firstNonEmpty(message, "图片生成失败")
-	task.ErrorDetail = detail
+	task.Error = service.RedactSensitiveText(firstNonEmpty(message, "图片生成失败"))
+	task.ErrorDetail = service.SanitizeAIStoredPayload(detail)
 	_, _ = service.SaveCanvasImageTask(task)
 }
 
 func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detail string) {
 	task.Status = "failed"
 	task.CompletedAt = taskTime()
-	task.Error = firstNonEmpty(message, "音频生成失败")
-	task.ErrorDetail = detail
+	task.Error = service.RedactSensitiveText(firstNonEmpty(message, "音频生成失败"))
+	task.ErrorDetail = service.SanitizeAIStoredPayload(detail)
+	_, _ = service.SaveCanvasAudioTask(task)
+}
+
+func saveStoppedCanvasImageTask(task model.CanvasImageTask, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		task.Status = "timed_out"
+		task.Error = "图片任务超过 5 分钟总体 deadline"
+	} else {
+		task.Status = "cancelled"
+		task.Error = "图片任务已取消"
+	}
+	task.CompletedAt = taskTime()
+	_, _ = service.SaveCanvasImageTask(task)
+}
+
+func saveStoppedCanvasAudioTask(task model.CanvasAudioTask, err error) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		task.Status = "timed_out"
+		task.Error = "音频任务超过 5 分钟总体 deadline"
+	} else {
+		task.Status = "cancelled"
+		task.Error = "音频任务已取消"
+	}
+	task.CompletedAt = taskTime()
 	_, _ = service.SaveCanvasAudioTask(task)
 }
 
 func readCanvasTaskAIRequest(r *http.Request, fallbackEndpoint string) ([]byte, string, string, string, string, string, string, string, string, error) {
 	contentType := r.Header.Get("Content-Type")
-	raw, err := io.ReadAll(r.Body)
+	raw, err := readLimitedRequestBody(r.Body, "画布任务请求", canvasTaskRequestMaxBytes)
 	if err != nil {
 		return nil, "", "", "", "", "", "", "", "", err
 	}
@@ -420,7 +569,7 @@ func stripCanvasTaskMultipartFields(raw []byte, contentType string, normalizeIma
 	if err != nil {
 		return nil, "", nil, err
 	}
-	form, err := multipart.NewReader(bytes.NewReader(raw), params["boundary"]).ReadForm(256 << 20)
+	form, err := multipart.NewReader(bytes.NewReader(raw), params["boundary"]).ReadForm(canvasTaskRequestMaxBytes)
 	if err != nil {
 		return nil, "", nil, err
 	}
@@ -671,6 +820,7 @@ func collectImageCandidates(value any, depth int, includeChatImages bool) []stri
 		if strings.HasPrefix(text, "http://") || strings.HasPrefix(text, "https://") || strings.HasPrefix(text, "data:image/") || looksLikeBase64(text) {
 			return []string{text}
 		}
+		return embeddedImageDataURLPattern.FindAllString(text, -1)
 	case []any:
 		var result []string
 		for _, item := range typed {
@@ -701,7 +851,10 @@ func imageCandidateBytes(value string) ([]byte, string, error) {
 		if response.StatusCode < 200 || response.StatusCode >= 300 {
 			return nil, "", errors.New(response.Status)
 		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
+		if response.ContentLength > 32*1024*1024 {
+			return nil, "", errors.New("图片响应超过 32 MiB 限制")
+		}
+		data, err := readLimitedUpstreamResponse(response.Body, "画布图片下载", 32*1024*1024)
 		if err != nil {
 			return nil, "", err
 		}

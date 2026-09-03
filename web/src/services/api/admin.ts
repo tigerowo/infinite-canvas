@@ -180,7 +180,7 @@ export async function deleteAdminAsset(token: string, id: string) {
 
 export type AdminModelChannel = {
     id: string;
-    protocol: "openai" | "gemini" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo";
+    protocol: "openai" | "gemini" | "http" | "grok2api" | "metaso" | "apimart" | "kie" | "mimo" | "volcengine";
     name: string;
     baseUrl: string;
     apiKey: string;
@@ -294,6 +294,13 @@ export type AdminPrivateSettings = {
             cron: string;
         };
         capacityLimitBytes: number;
+        operationBudget: {
+            enabled: boolean;
+            classALimit: number;
+            classBLimit: number;
+            warningPercent: number;
+            stopPercent: number;
+        };
     };
 };
 
@@ -361,6 +368,15 @@ export type StorageCapacityResult = {
     overLimit: boolean;
     checkedAt: string;
     providerName: string;
+    period: string;
+    classAOperations: number;
+    classBOperations: number;
+    classALimit: number;
+    classBLimit: number;
+    warningPercent: number;
+    stopPercent: number;
+    writeProtected: boolean;
+    usageSource: "local_estimate";
 };
 
 export async function measureAdminStorageProvider(token: string, payload: { index: number; provider: AdminStorageProvider }) {

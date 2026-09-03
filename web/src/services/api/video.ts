@@ -9,7 +9,8 @@ import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "@/
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
+import { cancelJimengGeneration, isJimengConfig, parseJimengGenerationOutput, parseJimengTaskReference, queryJimengGeneration, startJimengGeneration } from "@/services/api/jimeng-generation";
+import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, modelChannelHeaders, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -79,8 +80,8 @@ function agnesBaseUrl(baseUrl: string) {
 function aiHeaders(config: AiConfig) {
     const token = useUserStore.getState().token;
     if (config.channelMode === "remote" && !token) throw new Error("请先登录后再使用云端渠道");
-    if (config.channelMode === "remote") return { Authorization: `Bearer ${token}`, ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}) };
-    if (token) return { Authorization: `Bearer ${token}`, ...(channelIdForActiveModel(config) ? { "X-User-Model-Channel-ID": channelIdForActiveModel(config) } : {}) };
+    if (config.channelMode === "remote") return { Authorization: `Bearer ${token}`, ...modelChannelHeaders(config) };
+    if (token) return { Authorization: `Bearer ${token}`, ...modelChannelHeaders(config) };
     if (isGeminiConfig(config)) return geminiDirectHeaders(config);
     return { Authorization: `Bearer ${localChannelForActiveModel(config)?.apiKey || config.apiKey}` };
 }
@@ -108,6 +109,14 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
     const model = config.model || config.videoModel;
     const systemPrompt = (config.systemPrompts.video || config.systemPrompt).trim();
+    if (isJimengConfig(config)) {
+        const input = normalizeVideoReferenceInput(references);
+        if (input.references.length || input.firstFrame || input.lastFrame || input.videoReferences.length || input.audioReferences.length) throw new VideoRequestError("即梦 CLI 首版仅支持文生视频，请移除参考素材");
+        const startedAt = Date.now();
+        const { result, id, profile } = await startJimengGeneration(config, "video", systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt);
+        const task = jimengVideoTask(id, result, { model, size: config.videoSize, seconds: String(profile.defaultDuration) });
+        return { task, pollId: id, startedAt, requestBody: { model, prompt: "[redacted]", duration: profile.defaultDuration, resolution: profile.defaultResolution } };
+    }
     const body = await createVideoRequestBody(config, model, systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, normalizeVideoReferenceInput(references));
     const startedAt = Date.now();
     try {
@@ -145,7 +154,9 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const directPoll = directProvider ? (await import("@/services/api/direct-ai")).pollDirectVideoTask : null;
-    const pollOnce = directProvider && directPoll
+    const pollOnce = parseJimengTaskReference(pollId)
+        ? async () => jimengVideoTask(pollId, await queryJimengGeneration(pollId), task)
+        : directProvider && directPoll
         ? () => directPoll(config, directProvider, pollId)
         : async () => unwrapVideoResponseForConfig(config, model, (await axios.get<ApiVideoResponse>(aiVideoPollUrl(config, model, pollId), { headers: aiHeaders(config), params: usesAccountProxy(config) ? { model } : undefined })).data);
     let completed: VideoResponse | null = null;
@@ -179,6 +190,7 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
     const model = config.model || config.videoModel;
     const pollId = videoPollId(model, task);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
+    if (parseJimengTaskReference(pollId)) return jimengVideoTask(pollId, await queryJimengGeneration(pollId), task);
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const result = directProvider
         ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
@@ -194,11 +206,38 @@ export async function listVideoGenerationTasks(config: AiConfig) {
 }
 
 export async function deleteVideoGenerationTask(config: AiConfig, task?: VideoResponse | null) {
+    if (task && parseJimengTaskReference(task.id || task.task_id || task.video_id || "")) return;
     if (!usesAccountProxy(config) || !task) return;
     const id = task.id || task.task_id || task.video_id;
     if (!id) return;
     const payload = (await axios.delete<ApiVideoEnvelope>(`/api/v1/video-tasks/${encodeURIComponent(id)}`, { headers: aiHeaders(config) })).data;
     if (payload.code !== 0) throw new VideoRequestError(payload.msg || payload.message || "删除视频任务失败", payload);
+}
+
+export async function cancelVideoGenerationTask(config: AiConfig, task?: VideoResponse | null) {
+    const jimengId = task?.id || task?.task_id || task?.video_id || "";
+    if (jimengId && parseJimengTaskReference(jimengId)) return jimengVideoTask(jimengId, await cancelJimengGeneration(jimengId), task || undefined);
+    if (!usesAccountProxy(config) || !task) return task || null;
+    const id = task.id || task.task_id || task.video_id;
+    if (!id) return task;
+    const payload = (await axios.post<ApiVideoEnvelope>(`/api/v1/video-tasks/${encodeURIComponent(id)}/cancel`, null, { headers: aiHeaders(config) })).data;
+    if (payload.code !== 0 || !payload.data || Array.isArray(payload.data)) throw new VideoRequestError(payload.msg || payload.message || "取消视频任务失败", payload);
+    return normalizeVideoResponse(payload.data);
+}
+
+function jimengVideoTask(id: string, result: import("@/lib/provider").CLIHelperResult, previous: Partial<VideoResponse> = {}): VideoResponse {
+    const output = parseJimengGenerationOutput(result);
+    const failed = ["failed", "cancelled", "timed_out"].includes(result.taskStatus || "");
+    return {
+        ...previous,
+        id,
+        task_id: id,
+        status: output ? "succeeded" : failed ? result.taskStatus : "running",
+        progress: output ? 100 : 0,
+        video_url: output?.urls[0],
+        url: output?.urls[0],
+        ...(failed ? { error: { message: result.message || "即梦任务失败" } } : {}),
+    };
 }
 
 function isGrok2APIVideoConfig(config: AiConfig, model: string) {
@@ -908,7 +947,7 @@ function isCompletedVideoStatus(status?: string) {
 }
 
 function isFailedVideoStatus(status?: string) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((status || "").toLowerCase());
 }
 
 function videoPayloadErrorMessage(value: unknown): string {

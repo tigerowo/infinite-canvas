@@ -3,9 +3,9 @@ package service
 import (
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
 )
 
 type CanvasImageTaskCreateInput struct {
@@ -84,6 +84,10 @@ func DeleteUserCanvasImageTask(userID string, id string) error {
 	return repository.DeleteUserCanvasImageTask(strings.TrimSpace(userID), strings.TrimSpace(id))
 }
 
+func CancelUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bool, error) {
+	return repository.CancelUserCanvasImageTask(strings.TrimSpace(userID), strings.TrimSpace(id), now())
+}
+
 func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) error {
 	return repository.DeleteUserCanvasTasks(strings.TrimSpace(userID), strings.TrimSpace(sourceID), nodeIDs)
 }
@@ -101,7 +105,7 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		"source_id":      task.SourceID,
 		"node_id":        task.NodeID,
 		"model":          task.Model,
-		"status":         task.Status,
+		"status":         NormalizeVideoTaskStatus(task.Status),
 		"progress":       task.Progress,
 		"prompt":         task.Prompt,
 		"generationType": task.GenerationType,
@@ -156,4 +160,3 @@ func normalizeCanvasImageTaskSources(sources []string) []string {
 	}
 	return result
 }
-

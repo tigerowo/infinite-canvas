@@ -6,7 +6,10 @@ import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
-import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { requestControlledCLICompletion } from "@/services/api/cli-completion";
+import { cancelJimengGeneration, isJimengConfig, parseJimengGenerationOutput, parseJimengTaskReference, queryJimengGeneration, startJimengGeneration } from "@/services/api/jimeng-generation";
+import { cancelSubscriptionImageGeneration, isSubscriptionImageConfig, parseSubscriptionImageTaskReference, querySubscriptionImageGeneration, startSubscriptionImageGeneration } from "@/services/api/subscription-image-generation";
+import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, modelChannelHeaders, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import { nanoid } from "nanoid";
@@ -31,7 +34,7 @@ type ResponsesApiResponse = {
 };
 
 type ChatImagesApiResponse = {
-    choices?: Array<{ message?: { images?: Array<{ image_url?: { url?: string } }> } }>;
+    choices?: Array<{ message?: { content?: unknown; images?: Array<{ image_url?: { url?: string } }> } }>;
     error?: { message?: string };
     code?: number;
     msg?: string;
@@ -74,6 +77,8 @@ type ParsedImageResponse = {
     images: GeneratedImage[];
     responseBody: string;
 };
+
+const embeddedImageDataUrlPattern = /data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\r\n]+/gi;
 
 export class ImageRequestError extends Error {
     detail?: string;
@@ -267,14 +272,20 @@ function parseImagePayload(payload: ImageApiResponse, mime: string): GeneratedIm
     return images;
 }
 
-function parseChatImagesPayload(payload: ChatImagesApiResponse): GeneratedImage[] {
+function collectEmbeddedImageDataUrls(value: unknown, depth = 0): string[] {
+    if (depth > 5 || value == null) return [];
+    if (typeof value === "string") return value.match(embeddedImageDataUrlPattern) || [];
+    if (Array.isArray(value)) return value.flatMap((item) => collectEmbeddedImageDataUrls(item, depth + 1));
+    if (typeof value !== "object") return [];
+    const record = value as Record<string, unknown>;
+    return ["content", "text", "url", "image_url"].flatMap((key) => collectEmbeddedImageDataUrls(record[key], depth + 1));
+}
+
+export function parseChatImagesPayload(payload: ChatImagesApiResponse): GeneratedImage[] {
     if (typeof payload.code === "number" && payload.code !== 0) throw new ImageRequestError(payload.msg || "请求失败", payload);
     if (payload.error?.message) throw new ImageRequestError(payload.error.message, payload);
-    const images = payload.choices
-        ?.flatMap((choice) => choice.message?.images || [])
-        .map((item) => item.image_url?.url || "")
-        .filter(Boolean)
-        .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+    const imageUrls = payload.choices?.flatMap((choice) => [...(choice.message?.images || []).map((item) => item.image_url?.url || ""), ...collectEmbeddedImageDataUrls(choice.message?.content)]).filter(Boolean) || [];
+    const images = Array.from(new Set(imageUrls)).map((dataUrl) => ({ id: nanoid(), dataUrl }));
     if (!images.length) throw new ImageRequestError("Chat Completions 没有返回图片", payload);
     return images;
 }
@@ -461,8 +472,7 @@ async function parseImagesStreamResponse(response: Response, mime: string): Prom
             resultPayload = event as ImageApiResponse;
         }
         if (resolveImageDataUrl(event, mime)) {
-            const imageIndex =
-                typeof event.image_index === "number" || typeof event.image_index === "string" ? String(event.image_index) : `event-${imageItems.size}`;
+            const imageIndex = typeof event.image_index === "number" || typeof event.image_index === "string" ? String(event.image_index) : `event-${imageItems.size}`;
             imageItems.set(imageIndex, event);
         }
     });
@@ -531,15 +541,14 @@ export function aiHeaders(config: AiConfig, contentType?: string) {
     if (config.channelMode === "remote") {
         return {
             Authorization: `Bearer ${token}`,
-            ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
+            ...modelChannelHeaders(config),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }
     if (token) {
-        const userChannelId = channelIdForActiveModel(config);
         return {
             Authorization: `Bearer ${token}`,
-            ...(userChannelId ? { "X-User-Model-Channel-ID": userChannelId } : {}),
+            ...modelChannelHeaders(config),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
     }
@@ -575,7 +584,7 @@ async function writeLocalAICallLog(config: AiConfig, endpoint: string, startedAt
             responseBody,
             error,
         }),
-    }).catch(() => { });
+    }).catch(() => {});
 }
 
 function stringifyLogPayload(value: unknown) {
@@ -598,7 +607,7 @@ function redactLogImages(value: unknown) {
     const record = value as Record<string, unknown>;
     for (const key of Object.keys(record)) {
         const item = record[key];
-        if (typeof item === "string" && (item.startsWith("data:image/") || item.length > 2048 && looksLikeBase64(item))) {
+        if (typeof item === "string" && (item.startsWith("data:image/") || collectEmbeddedImageDataUrls(item).length > 0 || (item.length > 2048 && looksLikeBase64(item)))) {
             record[key] = `[redacted image/string len=${item.length}]`;
             continue;
         }
@@ -852,12 +861,12 @@ function createChatImageBody(config: AiConfig, prompt: string, inputImageDataUrl
     const text = withPromptGuard(config, withSystemPrompt(config, prompt));
     return {
         model: config.model,
-        messages: [{
-            role: "user",
-            content: inputImageDataUrls.length
-                ? [{ type: "text", text }, ...inputImageDataUrls.map((url) => ({ type: "image_url", image_url: { url } }))]
-                : text,
-        }],
+        messages: [
+            {
+                role: "user",
+                content: inputImageDataUrls.length ? [{ type: "text", text }, ...inputImageDataUrls.map((url) => ({ type: "image_url", image_url: { url } }))] : text,
+            },
+        ],
         modalities: ["image", "text"],
         ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
         stream: false,
@@ -908,14 +917,19 @@ async function requestChatImagesSingle(config: AiConfig, prompt: string, inputIm
         "/chat/completions",
         body,
         params.timeoutSeconds,
-        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(aiApiUrl(config, "/chat/completions"), {
-            method: "POST",
-            headers: aiHeaders(config, "application/json"),
-            body: JSON.stringify(body),
-            signal,
-        }))),
+        () =>
+            requestWithTransientRetry(() =>
+                withTimeout(params.timeoutSeconds, (signal) =>
+                    fetch(aiApiUrl(config, "/chat/completions"), {
+                        method: "POST",
+                        headers: aiHeaders(config, "application/json"),
+                        body: JSON.stringify(body),
+                        signal,
+                    }),
+                ),
+            ),
         async (response) => {
-            const payload = await response.json() as ChatImagesApiResponse;
+            const payload = (await response.json()) as ChatImagesApiResponse;
             return { images: parseChatImagesPayload(payload), responseBody: stringifyLogPayload(payload) };
         },
     );
@@ -945,6 +959,19 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 }
 
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+    if (isSubscriptionImageConfig(config)) {
+        if (references.length) throw new ImageRequestError("订阅生图首版仅支持文生图，请移除参考图");
+        const { result, id } = await startSubscriptionImageGeneration(config, withSystemPrompt(config, prompt));
+        let current = result;
+        const deadline = Date.now() + IMAGE_REQUEST_TIMEOUT_SECONDS * 1000;
+        while (current.taskStatus === "running" && Date.now() < deadline) {
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            current = await querySubscriptionImageGeneration(id);
+        }
+        const output = parseJimengGenerationOutput(current);
+        if (!output?.urls[0]) throw new ImageRequestError(current.message || "订阅生图任务失败");
+        return output.urls.map((dataUrl) => ({ id: nanoid(), dataUrl }));
+    }
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
@@ -987,6 +1014,16 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 }
 
 export async function createCanvasImageTask(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: CanvasImageTaskOptions = {}): Promise<CanvasImageTask> {
+    if (isSubscriptionImageConfig(config)) {
+        if (references.length) throw new ImageRequestError("订阅生图首版仅支持文生图，请移除参考图");
+        const { result, id } = await startSubscriptionImageGeneration(config, withSystemPrompt(config, prompt));
+        return cliImageTask(id, result, { model: config.model, prompt, source: options.source || "canvas", source_id: options.sourceId || "", node_id: options.nodeId || "" });
+    }
+    if (isJimengConfig(config)) {
+        if (references.length) throw new ImageRequestError("即梦 CLI 首版仅支持文生图，请移除参考图");
+        const { result, id } = await startJimengGeneration(config, "image", withSystemPrompt(config, prompt));
+        return cliImageTask(id, result, { model: config.model, prompt, source: options.source || "canvas", source_id: options.sourceId || "", node_id: options.nodeId || "" });
+    }
     if (!usesAccountProxy(config)) {
         const images = await requestImages({ ...config, count: "1" }, prompt, references);
         const [image] = images;
@@ -1018,6 +1055,8 @@ export async function createCanvasImageTask(config: AiConfig & { seedIndex?: num
 }
 
 export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasImageTask> {
+    if (parseSubscriptionImageTaskReference(taskId)) return cliImageTask(taskId, await querySubscriptionImageGeneration(taskId));
+    if (parseJimengTaskReference(taskId)) return cliImageTask(taskId, await queryJimengGeneration(taskId));
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录后再使用云端渠道");
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(taskId)}`, {
@@ -1035,9 +1074,8 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
     assertImageReferencesSupported(config.model, references);
     const taskChannelId = channelIdForActiveModel(config);
-    const taskChannelHeader: Record<string, string> = config.channelMode === "remote" && taskChannelId ? { "X-Model-Channel-ID": taskChannelId } : {};
-    const tokenHeaders = { ...aiHeaders(config), ...taskChannelHeader };
-    const jsonHeaders = { ...aiHeaders(config, "application/json"), ...taskChannelHeader };
+    const tokenHeaders = aiHeaders(config);
+    const jsonHeaders = aiHeaders(config, "application/json");
     const meta = { nodeId: options.nodeId || "", source: options.source || "canvas", sourceId: options.sourceId || "", clientTaskId: options.clientTaskId || "", prompt, channelId: taskChannelId };
     if (isGeminiConfig(config)) {
         const body = await createGeminiImageBody(config, prompt, references, params);
@@ -1150,6 +1188,11 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
 }
 
 export async function requestImageQuestion(config: AiConfig, messages: ChatCompletionMessage[], onDelta: (text: string) => void) {
+    if (["codex", "gemini-cli", "gemini-official-cli", "chatgpt-subscription-proxy", "antigravity-subscription-proxy"].includes(channelProtocolForConfig(config))) {
+        const answer = await requestControlledCLICompletion(config, formatCLITextPrompt(withSystemMessage(config, messages)));
+        onDelta(answer);
+        return answer;
+    }
     if (isGeminiConfig(config)) return requestGeminiText(config, messages, onDelta);
     let answer = "";
 
@@ -1196,6 +1239,10 @@ export async function requestImageQuestion(config: AiConfig, messages: ChatCompl
     return answer || "没有返回内容";
 }
 
+function formatCLITextPrompt(messages: ChatCompletionMessage[]) {
+    return messages.map((message) => `${message.role}: ${typeof message.content === "string" ? message.content : message.content.map((part) => (part.type === "text" ? part.text : "[图片引用]")).join("\n")}`).join("\n\n");
+}
+
 export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     const channel = localChannelForActiveModel(config);
@@ -1228,12 +1275,19 @@ async function requestGeminiImageSingle(config: AiConfig, prompt: string, refere
         references.length ? "/images/edits" : "/images/generations",
         body,
         params.timeoutSeconds,
-        () => requestWithTransientRetry(() => withTimeout(params.timeoutSeconds, (signal) => fetch(
-            proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"),
-            { method: "POST", headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config), body: JSON.stringify(nativeBody), signal },
-        ))),
+        () =>
+            requestWithTransientRetry(() =>
+                withTimeout(params.timeoutSeconds, (signal) =>
+                    fetch(proxy ? `/api/v1${references.length ? "/images/edits" : "/images/generations"}` : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, "generateContent"), {
+                        method: "POST",
+                        headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config),
+                        body: JSON.stringify(nativeBody),
+                        signal,
+                    }),
+                ),
+            ),
         async (response) => {
-            const payload = await response.json() as Record<string, unknown>;
+            const payload = (await response.json()) as Record<string, unknown>;
             const images = parseGeminiImages(payload);
             return { images, responseBody: stringifyLogPayload(payload) };
         },
@@ -1258,7 +1312,18 @@ function geminiImageSettings(model: string, quality: string, size: string, resol
     const aspectRatio = normalizeGeminiImageRatio(size);
     const normalizedQuality = quality.trim().toLowerCase();
     const preset = `${size} ${resolvedSize || ""}`.toLowerCase();
-    const imageSize = normalizedQuality === "low" ? "1K" : normalizedQuality === "medium" ? "2K" : normalizedQuality === "high" ? "4K" : preset.includes("6272x2688") || preset.includes("3840x2160") || preset.includes("2160x3840") ? "4K" : preset.includes("2048x") || preset.includes("3136x1344") ? "2K" : "";
+    const imageSize =
+        normalizedQuality === "low"
+            ? "1K"
+            : normalizedQuality === "medium"
+              ? "2K"
+              : normalizedQuality === "high"
+                ? "4K"
+                : preset.includes("6272x2688") || preset.includes("3840x2160") || preset.includes("2160x3840")
+                  ? "4K"
+                  : preset.includes("2048x") || preset.includes("3136x1344")
+                    ? "2K"
+                    : "";
     return {
         ...(aspectRatio ? { aspectRatio } : {}),
         ...(!model.toLowerCase().includes("2.5") && imageSize ? { imageSize } : {}),
@@ -1268,26 +1333,47 @@ function geminiImageSettings(model: string, quality: string, size: string, resol
 function normalizeGeminiImageRatio(value: string) {
     const normalized = value.trim().toLowerCase();
     const exact: Record<string, string> = {
-        "1:1": "1:1", "2048x2048": "1:1", "3:2": "3:2", "2:3": "2:3", "4:3": "4:3", "3:4": "3:4",
-        "16:9": "16:9", "2048x1152": "16:9", "3840x2160": "16:9", "9:16": "9:16", "1152x2048": "9:16", "2160x3840": "9:16",
-        "21:9": "21:9", "3136x1344": "21:9", "6272x2688": "21:9",
+        "1:1": "1:1",
+        "2048x2048": "1:1",
+        "3:2": "3:2",
+        "2:3": "2:3",
+        "4:3": "4:3",
+        "3:4": "3:4",
+        "16:9": "16:9",
+        "2048x1152": "16:9",
+        "3840x2160": "16:9",
+        "9:16": "9:16",
+        "1152x2048": "9:16",
+        "2160x3840": "9:16",
+        "21:9": "21:9",
+        "3136x1344": "21:9",
+        "6272x2688": "21:9",
     };
     if (exact[normalized]) return exact[normalized];
     if (normalized === "auto") return "";
     const dimensions = normalized.match(/^(\d+)x(\d+)$/);
     if (!dimensions) return "1:1";
     const ratio = Number(dimensions[1]) / Number(dimensions[2]);
-    const ratios: Array<[string, number]> = [["1:1", 1], ["3:2", 1.5], ["2:3", 2 / 3], ["4:3", 4 / 3], ["3:4", 3 / 4], ["16:9", 16 / 9], ["9:16", 9 / 16], ["21:9", 21 / 9]];
-    return ratios.reduce((best, current) => Math.abs(current[1] - ratio) < Math.abs(best[1] - ratio) ? current : best)[0];
+    const ratios: Array<[string, number]> = [
+        ["1:1", 1],
+        ["3:2", 1.5],
+        ["2:3", 2 / 3],
+        ["4:3", 4 / 3],
+        ["3:4", 3 / 4],
+        ["16:9", 16 / 9],
+        ["9:16", 9 / 16],
+        ["21:9", 21 / 9],
+    ];
+    return ratios.reduce((best, current) => (Math.abs(current[1] - ratio) < Math.abs(best[1] - ratio) ? current : best))[0];
 }
 
 function parseGeminiImages(payload: Record<string, unknown>) {
-    const candidates = Array.isArray(payload.candidates) ? payload.candidates as Array<Record<string, unknown>> : [];
+    const candidates = Array.isArray(payload.candidates) ? (payload.candidates as Array<Record<string, unknown>>) : [];
     const images = candidates.flatMap((candidate) => {
-        const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
-        const parts = Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
+        const content = candidate.content && typeof candidate.content === "object" ? (candidate.content as Record<string, unknown>) : {};
+        const parts = Array.isArray(content.parts) ? (content.parts as Array<Record<string, unknown>>) : [];
         return parts.flatMap((part) => {
-            const inlineData = part.inlineData && typeof part.inlineData === "object" ? part.inlineData as Record<string, unknown> : {};
+            const inlineData = part.inlineData && typeof part.inlineData === "object" ? (part.inlineData as Record<string, unknown>) : {};
             const data = typeof inlineData.data === "string" ? inlineData.data : "";
             if (!data) return [];
             const mimeType = typeof inlineData.mimeType === "string" ? inlineData.mimeType : IMAGE_MIME;
@@ -1313,11 +1399,14 @@ async function requestGeminiText(config: AiConfig, messages: ChatCompletionMessa
     }
     let answer = "";
     await readJsonServerSentEvents(response, (event) => {
-        const candidates = Array.isArray(event.candidates) ? event.candidates as Array<Record<string, unknown>> : [];
-        const delta = candidates.flatMap((candidate) => {
-            const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
-            return Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
-        }).map((part) => typeof part.text === "string" ? part.text : "").join("");
+        const candidates = Array.isArray(event.candidates) ? (event.candidates as Array<Record<string, unknown>>) : [];
+        const delta = candidates
+            .flatMap((candidate) => {
+                const content = candidate.content && typeof candidate.content === "object" ? (candidate.content as Record<string, unknown>) : {};
+                return Array.isArray(content.parts) ? (content.parts as Array<Record<string, unknown>>) : [];
+            })
+            .map((part) => (typeof part.text === "string" ? part.text : ""))
+            .join("");
         if (delta) {
             answer += delta;
             onDelta(answer);
@@ -1332,7 +1421,13 @@ async function createGeminiTextBody(config: AiConfig, messages: ChatCompletionMe
     const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
     for (const message of messages) {
         if (message.role === "system") {
-            const text = typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.type === "text" ? part.text : "").join("\n");
+            const text =
+                typeof message.content === "string"
+                    ? message.content
+                    : message.content
+                          .filter((part) => part.type === "text")
+                          .map((part) => (part.type === "text" ? part.text : ""))
+                          .join("\n");
             if (text.trim()) systemParts.push({ text });
             continue;
         }
@@ -1354,7 +1449,7 @@ async function fetchGeminiModels(baseUrl: string, apiKey: string) {
         if (pageToken) url.searchParams.set("pageToken", pageToken);
         const response = await fetch(url, { headers: { "x-goog-api-key": apiKey } });
         if (!response.ok) throw new Error(geminiErrorMessage(await response.json().catch(() => ({})), `读取模型失败（${response.status}）`));
-        const payload = await response.json() as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>; nextPageToken?: string };
+        const payload = (await response.json()) as { models?: Array<{ name?: string; supportedGenerationMethods?: string[] }>; nextPageToken?: string };
         for (const item of payload.models || []) {
             const name = item.name?.replace(/^models\//, "") || "";
             const methods = item.supportedGenerationMethods || [];
@@ -1391,21 +1486,20 @@ function normalizeAgnesImage21Ratio(value: string) {
     return "1:1";
 }
 
-function applyAgnesImageSize(
-    body: Record<string, unknown>,
-    config: AiConfig,
-    params: ImageRequestParams,
-) {
+function applyAgnesImageSize(body: Record<string, unknown>, config: AiConfig, params: ImageRequestParams) {
     if (!isAgnesImage21Model(config.model)) {
         if (params.size) body.size = params.size;
         return;
     }
-    body.size = ({
-        auto: "1K",
-        low: "2K",
-        medium: "3K",
-        high: "4K",
-    } as Record<string, string>)[params.quality] || "1K";
+    body.size =
+        (
+            {
+                auto: "1K",
+                low: "2K",
+                medium: "3K",
+                high: "4K",
+            } as Record<string, string>
+        )[params.quality] || "1K";
     body.ratio = normalizeAgnesImage21Ratio(config.size);
 }
 
@@ -1433,7 +1527,7 @@ async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; se
                 if (publicUrl) return publicUrl;
             }
             return imageToDataUrl(ref);
-        })
+        }),
     );
 
     const body: Record<string, unknown> = {
@@ -1491,10 +1585,18 @@ export async function listCanvasImageTasks(config: AiConfig, sources: Array<"ima
 export async function batchCanvasImageTaskStatus(config: AiConfig, ids: string[]) {
     const taskIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if (!usesAccountProxy(config) || !taskIds.length) return [];
+    const subscriptionIds = taskIds.filter((id) => parseSubscriptionImageTaskReference(id));
+    const jimengIds = taskIds.filter((id) => parseJimengTaskReference(id));
+    const regularIds = taskIds.filter((id) => !parseJimengTaskReference(id) && !parseSubscriptionImageTaskReference(id));
+    const cliTasks = await Promise.all([
+        ...subscriptionIds.map(async (id) => cliImageTask(id, await querySubscriptionImageGeneration(id))),
+        ...jimengIds.map(async (id) => cliImageTask(id, await queryJimengGeneration(id))),
+    ]);
+    if (!regularIds.length) return cliTasks;
     const response = await fetch("/api/v1/canvas/image-tasks/status", {
         method: "POST",
         headers: aiHeaders(config, "application/json"),
-        body: JSON.stringify({ ids: taskIds }),
+        body: JSON.stringify({ ids: regularIds }),
     });
     if (!response.ok) {
         const error = await fetchErrorDetail(response, "读取图片任务失败");
@@ -1502,10 +1604,11 @@ export async function batchCanvasImageTaskStatus(config: AiConfig, ids: string[]
     }
     const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask[] };
     if (payload.code !== 0 || !Array.isArray(payload.data)) throw new ImageRequestError(payload.msg || "读取图片任务失败", payload);
-    return payload.data;
+    return [...cliTasks, ...payload.data];
 }
 
 export async function deleteCanvasImageTask(config: AiConfig, task?: CanvasImageTask | null) {
+    if (task?.id && (parseJimengTaskReference(task.id) || parseSubscriptionImageTaskReference(task.id))) return;
     if (!usesAccountProxy(config) || !task?.id) return;
     const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(task.id)}`, {
         method: "DELETE",
@@ -1517,4 +1620,36 @@ export async function deleteCanvasImageTask(config: AiConfig, task?: CanvasImage
     }
     const payload = (await response.json()) as { code?: number; msg?: string };
     if (payload.code !== 0) throw new ImageRequestError(payload.msg || "删除图片任务失败", payload);
+}
+
+export async function cancelCanvasImageTask(config: AiConfig, task?: CanvasImageTask | null) {
+    if (task?.id && parseSubscriptionImageTaskReference(task.id)) return cliImageTask(task.id, await cancelSubscriptionImageGeneration(task.id), task);
+    if (task?.id && parseJimengTaskReference(task.id)) return cliImageTask(task.id, await cancelJimengGeneration(task.id), task);
+    if (!usesAccountProxy(config) || !task?.id) return task || null;
+    const response = await fetch(`/api/v1/canvas/image-tasks/${encodeURIComponent(task.id)}/cancel`, {
+        method: "POST",
+        headers: aiHeaders(config),
+    });
+    if (!response.ok) {
+        const error = await fetchErrorDetail(response, "取消图片任务失败");
+        throw new ImageRequestError(error.message, error.detail);
+    }
+    const payload = (await response.json()) as { code?: number; msg?: string; data?: CanvasImageTask };
+    if (payload.code !== 0 || !payload.data) throw new ImageRequestError(payload.msg || "取消图片任务失败", payload);
+    return payload.data;
+}
+
+function cliImageTask(id: string, result: import("@/lib/provider").CLIHelperResult, previous: Partial<CanvasImageTask> = {}): CanvasImageTask {
+    const output = parseJimengGenerationOutput(result);
+    const imageUrl = output?.urls[0];
+    const failed = ["failed", "cancelled", "timed_out"].includes(result.taskStatus || "");
+    return {
+        ...previous,
+        id,
+        status: output ? "completed" : failed ? "failed" : "processing",
+        progress: output ? 100 : 0,
+        image_url: imageUrl,
+        image_urls: imageUrl ? [imageUrl] : undefined,
+        ...(failed ? { error: { message: result.message || "CLI 生图任务失败" }, error_detail: result.message } : {}),
+    };
 }

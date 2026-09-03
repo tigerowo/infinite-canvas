@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -90,7 +89,7 @@ func copyMiMoTTSResponse(w http.ResponseWriter, response *http.Response, logCont
 	if logContext.Endpoint != "/audio/speech" || !service.IsMiMoTTSModelName(logContext.Model) {
 		return false
 	}
-	payload, err := io.ReadAll(response.Body)
+	payload, err := readLimitedUpstreamResponse(response.Body, "MiMo TTS", mimoTTSResponseLimit)
 	if err != nil {
 		if onFailure != nil {
 			onFailure()

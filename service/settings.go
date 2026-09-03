@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -19,6 +20,12 @@ import (
 )
 
 var adminModelHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+var modelDiscoveryReadLimits = upstreamReadLimits{
+	MaxRequests: 32,
+	MaxBytes:    32 * 1024 * 1024,
+	Deadline:    time.Minute,
+}
 
 func PublicSettings() (model.PublicSetting, error) {
 	settings, err := repository.GetSettings()
@@ -317,6 +324,9 @@ func HTTPClientForChannel(channel model.ModelChannel) *http.Client {
 	if timeout <= 0 {
 		timeout = 600
 	}
+	if channel.Restricted {
+		return SafeProxyHTTPClientForBaseURL(channel.BaseURL, time.Duration(timeout)*time.Second)
+	}
 	return &http.Client{Timeout: time.Duration(timeout) * time.Second}
 }
 
@@ -325,6 +335,9 @@ func BuildModelChannelURL(channel model.ModelChannel, path string) string {
 		return BuildGeminiChannelURL(channel, path)
 	}
 	baseURL := normalizeModelChannelBaseURL(channel.BaseURL)
+	if IsGenericHTTPChannel(channel) {
+		return baseURL + "/" + strings.TrimLeft(path, "/")
+	}
 	if IsMiniMaxChannel(channel) {
 		return baseURL + path
 	}
@@ -491,9 +504,19 @@ func resolveAdminChannel(index *int, channel model.ModelChannel) (model.ModelCha
 	return resolved, nil
 }
 
+func FetchModelChannelModels(channel model.ModelChannel) ([]string, error) {
+	return fetchAdminChannelModels(channel)
+}
+
 func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+	budget := newUpstreamReadBudget(context.Background(), "模型列表读取", modelDiscoveryReadLimits)
+	defer budget.Close()
+	return fetchAdminChannelModelsWithBudget(channel, budget)
+}
+
+func fetchAdminChannelModelsWithBudget(channel model.ModelChannel, budget *upstreamReadBudget) ([]string, error) {
 	if IsGeminiChannel(channel) {
-		return fetchGeminiAdminChannelModels(channel)
+		return fetchGeminiAdminChannelModels(channel, budget)
 	}
 	if IsMiniMaxChannel(channel) {
 		return MiniMaxModels(), nil
@@ -512,33 +535,88 @@ func fetchAdminChannelModels(channel model.ModelChannel) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	request = request.WithContext(budget.Context())
 	SetModelChannelAuthHeader(request, channel)
-	response, err := adminModelHTTPClient.Do(request)
+	client := adminModelHTTPClient
+	if channel.Restricted {
+		client = HTTPClientForChannel(channel)
+	}
+	client = budget.HTTPClient(client)
+	response, err := client.Do(request)
 	if err != nil {
+		err = normalizeUpstreamBudgetError(err)
+		if isUpstreamBudgetError(err) {
+			return nil, err
+		}
 		return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
+	body, err := readLimitedProviderResponse(response.Body)
+	if err != nil {
+		return nil, normalizeUpstreamBudgetError(err)
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		if response.StatusCode == http.StatusNotFound && isArkAgentPlanChannel(channel) {
 			return nil, safeMessageError{message: "火山方舟 Agent Plan 未提供 OpenAI /models 模型列表接口，请手动填写模型名称，例如 doubao-seedance-2.0。"}
 		}
 		return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
 	}
+	result, err := parseProviderModelList(body)
+	if err != nil {
+		return nil, safeMessageError{message: "读取模型失败：上游响应无法解析"}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func parseProviderModelList(body []byte) ([]string, error) {
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
+		Models json.RawMessage `json:"models"`
 	}
-	_ = json.Unmarshal(body, &payload)
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
 	result := make([]string, 0, len(payload.Data))
 	for _, item := range payload.Data {
-		if strings.TrimSpace(item.ID) != "" {
-			result = append(result, item.ID)
+		result = appendUniqueModel(result, item.ID)
+	}
+	if len(payload.Models) == 0 {
+		return result, nil
+	}
+	var objects []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(payload.Models, &objects) == nil {
+		for _, item := range objects {
+			result = appendUniqueModel(result, firstVideoTaskValue(item.ID, item.Name))
+		}
+		return result, nil
+	}
+	var names []string
+	if err := json.Unmarshal(payload.Models, &names); err != nil {
+		return nil, err
+	}
+	for _, name := range names {
+		result = appendUniqueModel(result, name)
+	}
+	return result, nil
+}
+
+func appendUniqueModel(models []string, name string) []string {
+	name = strings.TrimPrefix(strings.TrimSpace(name), "models/")
+	if name == "" {
+		return models
+	}
+	for _, item := range models {
+		if item == name {
+			return models
 		}
 	}
-	sort.Strings(result)
-	return result, nil
+	return append(models, name)
 }
 
 func isKIEAdminChannel(channel model.ModelChannel) bool {
@@ -700,7 +778,10 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -718,10 +799,14 @@ func testAdminChannelModel(channel model.ModelChannel, modelName string) (string
 	return "ok", nil
 }
 
-func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error) {
+func fetchGeminiAdminChannelModels(channel model.ModelChannel, budget *upstreamReadBudget) ([]string, error) {
 	result := []string{}
 	pageToken := ""
+	seenPageTokens := map[string]bool{}
 	for {
+		if err := budget.Check(); err != nil {
+			return nil, err
+		}
 		path := "/v1beta/models"
 		if pageToken != "" {
 			path += "?pageToken=" + url.QueryEscape(pageToken)
@@ -730,13 +815,26 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		if err != nil {
 			return nil, err
 		}
+		request = request.WithContext(budget.Context())
 		SetModelChannelAuthHeader(request, channel)
-		response, err := adminModelHTTPClient.Do(request)
+		client := adminModelHTTPClient
+		if channel.Restricted {
+			client = HTTPClientForChannel(channel)
+		}
+		client = budget.HTTPClient(client)
+		response, err := client.Do(request)
 		if err != nil {
+			err = normalizeUpstreamBudgetError(err)
+			if isUpstreamBudgetError(err) {
+				return nil, err
+			}
 			return nil, safeMessageError{message: "读取模型失败：上游接口无响应或网络不可达"}
 		}
-		body, _ := io.ReadAll(response.Body)
+		body, readErr := readLimitedProviderResponse(response.Body)
 		response.Body.Close()
+		if readErr != nil {
+			return nil, normalizeUpstreamBudgetError(readErr)
+		}
 		if response.StatusCode >= http.StatusBadRequest {
 			return nil, readAdminChannelError(body, response.StatusCode, "读取模型失败")
 		}
@@ -761,6 +859,10 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		if pageToken == "" {
 			break
 		}
+		if seenPageTokens[pageToken] {
+			return nil, safeMessageError{message: "读取模型失败：上游分页标记重复"}
+		}
+		seenPageTokens[pageToken] = true
 	}
 	seen := map[string]bool{}
 	unique := result[:0]
@@ -776,6 +878,30 @@ func fetchGeminiAdminChannelModels(channel model.ModelChannel) ([]string, error)
 		return nil, safeMessageError{message: "Gemini 模型列表为空"}
 	}
 	return result, nil
+}
+
+func readLimitedProviderResponse(reader io.Reader) ([]byte, error) {
+	const limit = 8 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > limit {
+		return nil, safeMessageError{message: "读取模型失败：上游响应超过 8 MiB 限制"}
+	}
+	return body, nil
+}
+
+func readLimitedModelTestResponse(reader io.Reader) ([]byte, error) {
+	const limit = 16 * 1024 * 1024
+	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > limit {
+		return nil, safeMessageError{message: "测试失败：上游响应超过 16 MiB 限制"}
+	}
+	return body, nil
 }
 
 func testGeminiChannelModel(channel model.ModelChannel, modelName string) (string, error) {
@@ -796,7 +922,10 @@ func testGeminiChannelModel(channel model.ModelChannel, modelName string) (strin
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -825,7 +954,10 @@ func testGLMTTSChannelModel(channel model.ModelChannel, modelName string) (strin
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -858,7 +990,10 @@ func testMiMoTTSChannelModel(channel model.ModelChannel, modelName string) (stri
 		return "", safeMessageError{message: "测试失败：上游接口无响应或网络不可达"}
 	}
 	defer response.Body.Close()
-	responseBody, _ := io.ReadAll(response.Body)
+	responseBody, readErr := readLimitedModelTestResponse(response.Body)
+	if readErr != nil {
+		return "", readErr
+	}
 	if response.StatusCode >= http.StatusBadRequest {
 		return "", readAdminChannelError(responseBody, response.StatusCode, "测试失败")
 	}
@@ -894,6 +1029,18 @@ func testArkSeedanceChannelModel(channel model.ModelChannel, modelName string) (
 }
 
 func readAdminChannelError(body []byte, statusCode int, fallback string) error {
+	if statusCode == http.StatusUnauthorized {
+		return safeMessageError{message: "上游接口鉴权失败（401），请检查 API Key"}
+	}
+	if statusCode == http.StatusForbidden {
+		return safeMessageError{message: "上游接口拒绝访问（403），请检查套餐或模型权限"}
+	}
+	if statusCode == http.StatusTooManyRequests {
+		return safeMessageError{message: "上游接口限流或额度不足（429），请稍后重试或检查额度"}
+	}
+	if statusCode >= http.StatusInternalServerError {
+		return safeMessageError{message: fmt.Sprintf("上游接口暂时不可用（%d）", statusCode)}
+	}
 	var payload struct {
 		Error *struct {
 			Message string `json:"message"`
@@ -902,17 +1049,11 @@ func readAdminChannelError(body []byte, statusCode int, fallback string) error {
 	}
 	if len(body) > 0 && json.Unmarshal(body, &payload) == nil {
 		if payload.Error != nil && strings.TrimSpace(payload.Error.Message) != "" {
-			return safeMessageError{message: payload.Error.Message}
+			return safeMessageError{message: RedactSensitiveText(payload.Error.Message)}
 		}
 		if strings.TrimSpace(payload.Msg) != "" {
-			return safeMessageError{message: payload.Msg}
+			return safeMessageError{message: RedactSensitiveText(payload.Msg)}
 		}
-	}
-	if statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden {
-		return safeMessageError{message: fmt.Sprintf("上游接口鉴权失败（%d），请检查 API Key、套餐权限或模型权限", statusCode)}
-	}
-	if statusCode == http.StatusTooManyRequests {
-		return safeMessageError{message: "上游接口限流或额度不足（429），请稍后重试或检查额度"}
 	}
 	if statusCode > 0 {
 		return safeMessageError{message: fmt.Sprintf("%s：%d", fallback, statusCode)}
@@ -992,6 +1133,7 @@ func normalizePrivateStorageSetting(setting model.PrivateStorageSetting) model.P
 	if setting.CapacityLimitBytes <= 0 {
 		setting.CapacityLimitBytes = 9 * 1024 * 1024 * 1024
 	}
+	setting.OperationBudget = normalizeStorageOperationBudget(setting.OperationBudget)
 	setting.CapacityCheck = normalizeStorageCapacityCheckSetting(setting.CapacityCheck)
 	if setting.Providers == nil {
 		setting.Providers = []model.StorageProvider{}
@@ -1000,6 +1142,26 @@ func normalizePrivateStorageSetting(setting model.PrivateStorageSetting) model.P
 		setting.Providers[i] = normalizeStorageProvider(setting.Providers[i])
 	}
 	return setting
+}
+
+func normalizeStorageOperationBudget(budget model.StorageOperationBudget) model.StorageOperationBudget {
+	if budget.Enabled == nil {
+		enabled := true
+		budget.Enabled = &enabled
+	}
+	if budget.ClassALimit <= 0 {
+		budget.ClassALimit = 1_000_000
+	}
+	if budget.ClassBLimit <= 0 {
+		budget.ClassBLimit = 10_000_000
+	}
+	if budget.WarningPercent <= 0 || budget.WarningPercent >= 100 {
+		budget.WarningPercent = 80
+	}
+	if budget.StopPercent <= budget.WarningPercent || budget.StopPercent > 100 {
+		budget.StopPercent = 90
+	}
+	return budget
 }
 
 func normalizeStorageCapacityCheckSetting(setting model.StorageCapacityCheckSetting) model.StorageCapacityCheckSetting {

@@ -16,7 +16,7 @@ import { createCanvasImageTask, requestEdit, requestGeneration, requestImageQues
 import { saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteUserWorkflow, draftUserWorkflow, fetchUserConfig, fetchUserWorkflows, saveUserWorkflow, type CreativeWorkflowRecord } from "@/services/api/user-config";
 import { deleteStoredImages, imageToDataUrl, uploadImage } from "@/services/image-storage";
-import { channelProtocolForConfig, defaultConfig, localChannelForActiveModel, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, defaultConfig, localChannelForActiveModel, modelChannelsForConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -1806,16 +1806,13 @@ function createWorkflowSeriesConfig(config: AiConfig): WorkflowSeriesConfig {
 
 function describeModelSelection(config: AiConfig, modelName: string, channelId: string) {
     const selectedModel = modelName || "未选择模型";
-    if (config.channelMode === "local") {
-        const channel = localChannelForActiveModel({ ...config, model: selectedModel, activeChannelId: channelId });
-        return { channelName: channel?.name || "本地直连", modelName: selectedModel };
-    }
+    const channels = modelChannelsForConfig(config);
     const channel =
-        config.publicChannels.find((item) => item.id === channelId && item.models?.includes(selectedModel)) ||
-        config.publicChannels.find((item) => item.models?.includes(selectedModel)) ||
-        config.publicChannels.find((item) => item.id === channelId) ||
-        config.publicChannels[0];
-    return { channelName: channel?.name || "云端渠道", modelName: selectedModel };
+        channels.find((item) => item.id === channelId && item.models.includes(selectedModel)) ||
+        channels.find((item) => item.models.includes(selectedModel)) ||
+        channels.find((item) => item.id === channelId) ||
+        channels[0];
+    return { channelName: channel?.name || (config.channelMode === "remote" ? "云端渠道" : "本地直连"), modelName: selectedModel };
 }
 
 function createVariable(key = "", label = "", type: WorkflowVariableType = "text"): WorkflowVariable {
@@ -2008,9 +2005,7 @@ function resolveWorkflowRuntime(workflow: CreativeWorkflow, baseConfig: AiConfig
 }
 
 function resolveWorkflowImageChannelId(config: AiConfig, model: string, ...preferredIds: Array<string | undefined>) {
-    const channels = config.channelMode === "remote"
-        ? config.publicChannels.map((channel) => ({ id: channel.id || "", models: channel.models || [] }))
-        : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    const channels = modelChannelsForConfig(config).map((channel) => ({ id: channel.id || "", models: channel.models }));
     for (const id of preferredIds) {
         const channelId = (id || "").trim();
         if (channelId && channels.some((channel) => channel.id === channelId && channel.models.includes(model))) return channelId;
@@ -2125,7 +2120,6 @@ function referenceUsedByWorkflowTask(reference: ReferenceImage, tasks: WorkflowT
 function formatDate(value: number) {
     return new Date(value).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
-
 
 
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -15,6 +16,40 @@ var safeProxyHTTPClient = newSafeProxyHTTPClient()
 func SafeProxyHTTPClient() *http.Client {
 	return safeProxyHTTPClient
 }
+
+func SafeProxyHTTPClientWithTimeout(timeout time.Duration) *http.Client {
+	client := *safeProxyHTTPClient
+	if timeout > 0 {
+		client.Timeout = timeout
+	}
+	return &client
+}
+
+func SafeProxyHTTPClientForBaseURL(baseURL string, timeout time.Duration) *http.Client {
+	client := *safeProxyHTTPClient
+	if timeout > 0 {
+		client.Timeout = timeout
+	}
+	parsed, err := url.Parse(strings.TrimSpace(baseURL))
+	allowedHost := ""
+	if err == nil {
+		allowedHost = strings.ToLower(parsed.Host)
+	}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 5 {
+			return errors.New("重定向次数过多")
+		}
+		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+			return errors.New("重定向地址无效")
+		}
+		if allowedHost == "" || strings.ToLower(req.URL.Host) != allowedHost {
+			return errors.New("禁止将渠道凭据重定向到其他来源")
+		}
+		return nil
+	}
+	return &client
+}
+
 func newSafeProxyHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil

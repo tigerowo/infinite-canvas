@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"net/url"
@@ -57,21 +58,51 @@ func Login(w http.ResponseWriter, r *http.Request) {
 }
 
 func LinuxDoAuthorize(w http.ResponseWriter, r *http.Request) {
-	authURL, err := service.LinuxDoAuthorizeURL(r, r.URL.Query().Get("redirect"))
+	authURL, state, err := service.LinuxDoAuthorizeURL(r, r.URL.Query().Get("redirect"))
 	if err != nil {
 		FailError(w, err)
 		return
 	}
+	setOAuthStateCookie(w, r, state, 600)
 	http.Redirect(w, r, authURL, http.StatusFound)
 }
 
 func LinuxDoCallback(w http.ResponseWriter, r *http.Request) {
-	session, redirect, err := service.LoginWithLinuxDo(r, r.URL.Query().Get("code"), r.URL.Query().Get("state"))
+	state := r.URL.Query().Get("state")
+	cookie, cookieErr := r.Cookie("infinite_canvas_oauth_state")
+	setOAuthStateCookie(w, r, "", -1)
+	if cookieErr != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(state)) != 1 {
+		http.Redirect(w, r, loginRedirect(r, "/", "", "OAuth 登录状态不匹配，请重新登录"), http.StatusFound)
+		return
+	}
+	session, redirect, err := service.LoginWithLinuxDo(r, r.URL.Query().Get("code"), state)
 	if err != nil {
 		http.Redirect(w, r, loginRedirect(r, redirect, "", err.Error()), http.StatusFound)
 		return
 	}
-	http.Redirect(w, r, loginRedirect(r, redirect, session.Token, ""), http.StatusFound)
+	exchangeCode, err := service.CreateLoginExchange(session)
+	if err != nil {
+		http.Redirect(w, r, loginRedirect(r, redirect, "", "登录会话创建失败"), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, loginRedirect(r, redirect, exchangeCode, ""), http.StatusFound)
+}
+
+func ExchangeLogin(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Code string `json:"code"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024)
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		Fail(w, "登录交换码格式错误")
+		return
+	}
+	session, err := service.ConsumeLoginExchange(request.Code)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, session)
 }
 
 func AdminLogin(w http.ResponseWriter, r *http.Request) {
@@ -163,10 +194,10 @@ func AdminDeleteCreditLog(w http.ResponseWriter, r *http.Request, id string) {
 	OK(w, true)
 }
 
-func loginRedirect(r *http.Request, redirect string, token string, message string) string {
+func loginRedirect(r *http.Request, redirect string, exchangeCode string, message string) string {
 	values := url.Values{}
-	if strings.TrimSpace(token) != "" {
-		values.Set("token", token)
+	if strings.TrimSpace(exchangeCode) != "" {
+		values.Set("code", exchangeCode)
 	}
 	if strings.TrimSpace(message) != "" {
 		values.Set("error", message)
@@ -175,6 +206,14 @@ func loginRedirect(r *http.Request, redirect string, token string, message strin
 		values.Set("redirect", redirect)
 	}
 	return service.RequestOrigin(r) + "/login?" + values.Encode()
+}
+
+func setOAuthStateCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
+	secure := r.TLS != nil || strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	http.SetCookie(w, &http.Cookie{
+		Name: "infinite_canvas_oauth_state", Value: value, Path: "/api/auth/linux-do/callback",
+		MaxAge: maxAge, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode,
+	})
 }
 
 func AdminDeleteUser(w http.ResponseWriter, r *http.Request, id string) {

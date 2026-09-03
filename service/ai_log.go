@@ -15,11 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
 )
 
 const (
@@ -58,6 +58,9 @@ type AICallLogInput struct {
 }
 
 func SaveAICallLog(input AICallLogInput) {
+	input.RequestBody = RedactSensitiveText(input.RequestBody)
+	input.ResponseBody = RedactSensitiveText(input.ResponseBody)
+	input.Error = RedactSensitiveText(input.Error)
 	responseBody := normalizeAICallResponseLog(input.ResponseBody, input.Error)
 	errorText := normalizeAICallErrorLog(input.Error, input.ResponseBody)
 	item := model.AICallLog{
@@ -352,6 +355,10 @@ func formatAICallLogPayload(raw string) string {
 	return redactLargePlainLogText(raw)
 }
 
+func SanitizeAIStoredPayload(value string) string {
+	return truncateLogText(formatAICallLogPayload(RedactSensitiveText(value)), aiLogErrorTextLimit)
+}
+
 func formatEventStreamLog(raw string) string {
 	lines := strings.Split(raw, "\n")
 	formatted := make([]string, 0, len(lines))
@@ -520,7 +527,7 @@ func redactLargeLogStrings(value *any) {
 }
 
 func isLargeLogString(value string) bool {
-	if strings.HasPrefix(value, "data:image/") {
+	if strings.HasPrefix(value, "data:image/") || longDataURLPattern.MatchString(value) {
 		return true
 	}
 	return len(value) > 4096 && looksLikeLogBase64(value)

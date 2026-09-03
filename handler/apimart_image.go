@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -212,7 +211,15 @@ func copyAPIMartImageResponse(w http.ResponseWriter, response *http.Response, re
 		return false
 	}
 
-	payload, _ := io.ReadAll(response.Body)
+	payload, err := readLimitedUpstreamResponse(response.Body, "APIMart 图片生成", structuredAdapterResponseLimit)
+	if err != nil {
+		if onFailure != nil {
+			onFailure()
+		}
+		saveAIProxyLog(logContext, response.StatusCode, "", err.Error())
+		Fail(w, "APIMart 响应读取失败")
+		return true
+	}
 	if imageURLs, ok := readAPIMartDirectImageURLs(payload); ok {
 		writeAPIMartImagesResponse(w, response.StatusCode, imageURLs, logContext)
 		return true
@@ -239,17 +246,22 @@ func copyAPIMartImageResponse(w http.ResponseWriter, response *http.Response, re
 }
 
 func pollAPIMartImageTask(request *http.Request, channel model.ModelChannel, taskID string) ([]string, string) {
+	budget := newUpstreamResponseBudget(request.Context(), "APIMart 图片任务轮询", pollRequestLimit, pollResponseTotalLimit, pollDeadline)
+	defer budget.Close()
 	pollURL := buildAPIMartTaskURL(channel, taskID)
 	for attempt := 0; attempt < 300; attempt++ {
 		if attempt > 0 {
 			select {
-			case <-request.Context().Done():
-				return nil, request.Context().Err().Error()
+			case <-budget.Context().Done():
+				return nil, "APIMart 图片任务轮询超过总体 deadline"
 			case <-time.After(2 * time.Second):
 			}
 		}
+		if err := budget.NextRequest(); err != nil {
+			return nil, err.Error()
+		}
 
-		pollRequest, err := http.NewRequestWithContext(request.Context(), http.MethodGet, pollURL, nil)
+		pollRequest, err := http.NewRequestWithContext(budget.Context(), http.MethodGet, pollURL, nil)
 		if err != nil {
 			return nil, err.Error()
 		}
@@ -258,8 +270,11 @@ func pollAPIMartImageTask(request *http.Request, channel model.ModelChannel, tas
 		if err != nil {
 			return nil, err.Error()
 		}
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 512*1024))
+		body, readErr := budget.ReadAll(response.Body, pollResponseLimit)
 		_ = response.Body.Close()
+		if readErr != nil {
+			return nil, readErr.Error()
+		}
 		if response.StatusCode >= http.StatusBadRequest {
 			return nil, readUpstreamAIErrorMessage(body, response.StatusCode)
 		}

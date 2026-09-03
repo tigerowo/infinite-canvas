@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/google/uuid"
+	"github.com/tigerowo/infinite-canvas/config"
 )
 
 const (
@@ -67,7 +67,8 @@ func UploadReferenceMedia(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "参考素材保存失败")
 		return
 	}
-	bytes, copyErr := io.Copy(target, file)
+	typeLimit := referenceMediaTypeMaxBytes(mimeType)
+	bytes, copyErr := io.Copy(target, io.LimitReader(file, typeLimit+1))
 	closeErr := target.Close()
 	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(targetPath)
@@ -79,7 +80,7 @@ func UploadReferenceMedia(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "参考素材为空")
 		return
 	}
-	if limit := referenceMediaTypeMaxBytes(mimeType); limit > 0 && bytes > limit {
+	if typeLimit > 0 && bytes > typeLimit {
 		_ = os.Remove(targetPath)
 		Fail(w, referenceMediaSizeMessage(mimeType))
 		return

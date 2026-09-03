@@ -2,7 +2,8 @@ import { mimoTextModels } from "@/lib/mimo-tts";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
 import { imageToDataUrl } from "@/services/image-storage";
-import { localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { requestControlledCLICompletion } from "@/services/api/cli-completion";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
 import { calibrateCanvasAgentTokenEstimate } from "@/app/(user)/canvas/agent/canvas-agent-memory";
@@ -95,6 +96,10 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         textChannelId: input.config.textChannelId,
     };
     const systemPrompt = canvasAgentSystemPrompt(requestConfig, input.systemPrompt);
+    if (["codex", "gemini-cli", "gemini-official-cli", "chatgpt-subscription-proxy", "antigravity-subscription-proxy"].includes(channelProtocolForConfig(requestConfig))) {
+        const content = await requestControlledCLICompletion(requestConfig, buildControlledCLIPrompt(systemPrompt, input.messages, input.allowTools ? input.tools : []), input.signal);
+        return { content, toolCalls: [], usedJsonFallback: true };
+    }
     let messages = input.messages;
     let tools = input.allowTools ? input.tools : [];
     let usedJsonFallback = !input.allowTools;
@@ -120,6 +125,17 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         }
     }
     throw requestError;
+}
+
+function buildControlledCLIPrompt(systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[]) {
+    const toolGuide = tools.length
+        ? `可用画布工具（只能通过 JSON actions 调用）：\n${JSON.stringify(tools.map((tool) => tool.function))}\n返回格式：{"reply":"给用户的回复","actions":[{"name":"工具名","arguments":{}}]}`
+        : "直接返回给用户的文本，不要调用工具。";
+    const transcript = messages
+        .map((message) => `${message.role}: ${typeof message.content === "string" ? message.content : Array.isArray(message.content) ? message.content.map((part) => (part.type === "text" ? part.text : "[图片引用]")).join("\n") : ""}`)
+        .join("\n\n");
+    const prefix = `${systemPrompt}\n\n${toolGuide}`.slice(0, 3000);
+    return `${prefix}\n\n对话记录：\n${transcript.slice(-3000)}`;
 }
 
 export function canvasAgentSystemPrompt(config: AiConfig, prompt: string) {
@@ -234,26 +250,31 @@ async function requestResponsesCompletion(config: AiConfig, systemPrompt: string
 }
 
 async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, messages: CanvasAgentProtocolMessage[], tools: CanvasAgentToolDefinition[], signal?: AbortSignal) {
-    const contents = await Promise.all(messages.filter((message) => message.role !== "system").map(async (message) => {
-        if (message.role === "assistant") {
-            return {
-                role: "model",
-                parts: [
-                    ...(message.content ? [{ text: message.content }] : []),
-                    ...(message.toolCalls || []).map((call) => ({ functionCall: { name: call.name, args: call.arguments } })),
-                ],
-            };
-        }
-        if (message.role === "tool") {
-            return { role: "user", parts: [{ functionResponse: { name: message.name, response: parseGeminiToolResponse(message.content) } }] };
-        }
-        const parts = await Promise.all((typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content).map(async (part) => {
-            if (part.type === "text") return { text: part.text };
-            return dataUrlToGeminiInlineData(await imageToDataUrl({ dataUrl: part.image_url.url, url: part.image_url.url }));
-        }));
-        return { role: "user", parts };
-    }));
-    const extraSystemParts = messages.flatMap((message) => message.role !== "system" ? [] : typeof message.content === "string" ? [{ text: message.content }] : message.content.flatMap((part) => part.type === "text" ? [{ text: part.text }] : []));
+    const contents = await Promise.all(
+        messages
+            .filter((message) => message.role !== "system")
+            .map(async (message) => {
+                if (message.role === "assistant") {
+                    return {
+                        role: "model",
+                        parts: [...(message.content ? [{ text: message.content }] : []), ...(message.toolCalls || []).map((call) => ({ functionCall: { name: call.name, args: call.arguments } }))],
+                    };
+                }
+                if (message.role === "tool") {
+                    return { role: "user", parts: [{ functionResponse: { name: message.name, response: parseGeminiToolResponse(message.content) } }] };
+                }
+                const parts = await Promise.all(
+                    (typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content).map(async (part) => {
+                        if (part.type === "text") return { text: part.text };
+                        return dataUrlToGeminiInlineData(await imageToDataUrl({ dataUrl: part.image_url.url, url: part.image_url.url }));
+                    }),
+                );
+                return { role: "user", parts };
+            }),
+    );
+    const extraSystemParts = messages
+        .filter((message) => message.role === "system")
+        .flatMap((message) => (typeof message.content === "string" ? [{ text: message.content }] : Array.isArray(message.content) ? message.content.flatMap((part) => (part.type === "text" ? [{ text: part.text }] : [])) : []));
     const body = {
         model: config.model,
         stream: false,
@@ -274,8 +295,8 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
     if (!response.ok) throw new CanvasAgentRequestError(geminiErrorMessage(payload, rawText || "文本模型请求失败"), response.status, geminiErrorCode(payload));
     const candidates = Array.isArray(payload.candidates) ? payload.candidates as Array<Record<string, unknown>> : [];
     const parts = candidates.flatMap((candidate) => {
-        const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
-        return Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
+        const content = candidate.content && typeof candidate.content === "object" ? (candidate.content as Record<string, unknown>) : {};
+        return Array.isArray(content.parts) ? (content.parts as Array<Record<string, unknown>>) : [];
     });
     if (!parts.length) throw new CanvasAgentRequestError(geminiErrorMessage(payload, "文本模型没有返回内容"), response.status);
     const usageMetadata = payload.usageMetadata && typeof payload.usageMetadata === "object" ? payload.usageMetadata as Record<string, unknown> : {};
@@ -283,11 +304,11 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
     calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
     refreshRemoteUser(config);
     return {
-        content: parts.map((part) => typeof part.text === "string" ? part.text : "").join(""),
+        content: parts.map((part) => (typeof part.text === "string" ? part.text : "")).join(""),
         toolCalls: parts.flatMap((part, index) => {
-            const call = part.functionCall && typeof part.functionCall === "object" ? part.functionCall as Record<string, unknown> : null;
+            const call = part.functionCall && typeof part.functionCall === "object" ? (part.functionCall as Record<string, unknown>) : null;
             const name = typeof call?.name === "string" ? call.name.trim() : "";
-            return name ? [{ id: `gemini-tool-${index}`, name, arguments: call?.args && typeof call.args === "object" ? call.args as Record<string, unknown> : {} }] : [];
+            return name ? [{ id: `gemini-tool-${index}`, name, arguments: call?.args && typeof call.args === "object" ? (call.args as Record<string, unknown>) : {} }] : [];
         }),
     };
 }

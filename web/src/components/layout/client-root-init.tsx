@@ -9,6 +9,7 @@ import { fetchUserConfig } from "@/services/api/user-config";
 import { defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider } from "@/services/image-storage";
 import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
+import { syncProviderCatalog, useProviderStore } from "@/stores/use-provider-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
     const { message } = App.useApp();
@@ -30,7 +31,23 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [loadPublicSettings]);
 
     useEffect(() => {
-        if (!isLoginPage) void hydrateUser();
+        if (isLoginPage) return;
+
+        if (useUserStore.persist.hasHydrated()) {
+            void hydrateUser();
+            return;
+        }
+
+        let unsubscribe = () => {};
+        unsubscribe = useUserStore.persist.onFinishHydration(() => {
+            unsubscribe();
+            void hydrateUser();
+        });
+        if (useUserStore.persist.hasHydrated()) {
+            unsubscribe();
+            void hydrateUser();
+        }
+        return unsubscribe;
     }, [hydrateUser, isLoginPage]);
 
     useEffect(() => {
@@ -40,15 +57,19 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     }, [channelMode, token, updateConfig, user?.role]);
 
     useEffect(() => {
-        if (!token || !user?.id) return;
-        void fetchUserConfig(token)
-            .then((payload) => {
+        if (!token || !user?.id) {
+            useProviderStore.getState().clear();
+            return;
+        }
+        void Promise.all([fetchUserConfig(token), useProviderStore.getState().load(token).catch(() => [])])
+            .then(([payload, providers]) => {
                 const syncS3 = payload.modelConfig?.syncStorageConfig === true;
                 const syncWebDAV = payload.modelConfig?.syncWebDAVStorageConfig === true;
                 if (payload.modelConfig) {
                     Object.entries(payload.modelConfig)
                         .forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
                 }
+                syncProviderCatalog(providers);
                 updateConfig("syncStorageConfig", syncS3);
                 updateConfig("syncWebDAVStorageConfig", syncWebDAV);
                 if (syncS3 && payload.storageProvider?.s3) {
@@ -68,6 +89,13 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             })
             .catch(() => {});
     }, [token, updateConfig, user?.id]);
+
+    useEffect(() => {
+        if (!token) return;
+        const refreshProviders = () => void useProviderStore.getState().load(token, true).catch(() => []);
+        window.addEventListener("provider-catalog-invalidated", refreshProviders);
+        return () => window.removeEventListener("provider-catalog-invalidated", refreshProviders);
+    }, [token]);
 
     useEffect(() => {
         if (handledConfigParams.current) return;

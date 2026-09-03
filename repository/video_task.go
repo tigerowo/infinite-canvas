@@ -2,12 +2,41 @@ package repository
 
 import "github.com/tigerowo/infinite-canvas/model"
 
+var activeVideoTaskStatuses = []string{"queued", "in_progress", "processing", "running"}
+
 func SaveVideoTask(task model.VideoTask) (model.VideoTask, error) {
 	db, err := DB()
 	if err != nil {
 		return task, err
 	}
 	return task, db.Save(&task).Error
+}
+
+func UpdateActiveVideoTask(task model.VideoTask) error {
+	db, err := DB()
+	if err != nil {
+		return err
+	}
+	return db.Model(&model.VideoTask{}).
+		Where("id = ? AND status IN ?", task.ID, activeVideoTaskStatuses).
+		Select("*").
+		Updates(&task).Error
+}
+
+func CancelUserVideoTask(userID string, id string, completedAt string) (model.VideoTask, bool, error) {
+	db, err := DB()
+	if err != nil {
+		return model.VideoTask{}, false, err
+	}
+	result := db.Model(&model.VideoTask{}).
+		Where("user_id = ? AND (id = ? OR upstream_task_id = ? OR upstream_video_id = ?)", userID, id, id, id).
+		Where("status IN ?", activeVideoTaskStatuses).
+		Updates(map[string]any{"status": "cancelled", "error": "任务已取消", "completed_at": completedAt, "updated_at": completedAt})
+	if result.Error != nil || result.RowsAffected == 0 {
+		return model.VideoTask{}, false, result.Error
+	}
+	task, found, err := GetUserVideoTask(userID, id)
+	return task, found, err
 }
 
 func GetVideoTask(id string) (model.VideoTask, bool, error) {
@@ -54,7 +83,7 @@ func ListUserVideoTasks(userID string, source string, limit int) ([]model.VideoT
 		}
 	}
 	err = query.
-		Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).
+		Where("status IN ?", activeVideoTaskStatuses).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&tasks).Error
@@ -78,7 +107,7 @@ func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
 		limit = 100
 	}
 	var tasks []model.VideoTask
-	err = db.Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).
+	err = db.Where("status IN ?", activeVideoTaskStatuses).
 		Order("created_at ASC").
 		Limit(limit).
 		Find(&tasks).Error
@@ -92,6 +121,6 @@ func DeleteFinishedVideoTasksBefore(before string) error {
 	}
 	return db.
 		Where("completed_at <> ? AND completed_at < ?", "", before).
-		Where("status IN ?", []string{"completed", "failed", "cancelled", "canceled"}).
+		Where("status IN ?", []string{"succeeded", "completed", "failed", "cancelled", "canceled", "timed_out"}).
 		Delete(&model.VideoTask{}).Error
 }

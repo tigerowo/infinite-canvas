@@ -76,12 +76,14 @@ func DB() (*gorm.DB, error) {
 			&model.UserConfig{},
 			&model.AICallLog{},
 			&model.StorageObject{},
+			&model.StorageUsage{},
 			&model.VideoTask{},
 			&model.VideoGenerationLog{},
 			&model.ImageGenerationLog{},
 			&model.CanvasImageTask{},
 			&model.CanvasAudioTask{},
 			&model.CanvasProject{},
+			&model.Provider{},
 		)
 	})
 	return db, dbErr

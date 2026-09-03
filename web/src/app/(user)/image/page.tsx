@@ -3,9 +3,11 @@
 import {
     AlertCircle,
     BookOpen,
+    CheckCircle2,
     CheckSquare,
     ChevronDown,
     ChevronUp,
+    CircleStop,
     ClipboardPaste,
     CloudUpload,
     Copy,
@@ -41,16 +43,18 @@ import {
     type WorkflowExternalTaskStart,
     type WorkflowExternalTaskSuccess,
 } from "@/components/workflows/creative-workflow-workspace";
-import { normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
+import { modelChannelsForConfig, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
-import { ImageRequestError, batchCanvasImageTaskStatus, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
+import { ImageRequestError, batchCanvasImageTaskStatus, cancelCanvasImageTask, createCanvasImageTask, deleteCanvasImageTask, listCanvasImageTasks, requestEdit, requestGeneration, type CanvasImageTask } from "@/services/api/image";
 import { deleteImageGenerationLogs, fetchImageGenerationLogs, saveImageGenerationLogs } from "@/services/api/generation-logs";
 import { deleteStoredImages, imageToDataUrl, resolveImageUrl, uploadImage, uploadRemoteImageToServer } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
+import { useGenerationConfirm } from "@/hooks/use-generation-confirm";
+import { persistInlineLogImages } from "./image-log-persistence";
 
 type GeneratedImage = {
     id: string;
@@ -114,7 +118,11 @@ type GenerationLog = {
     lastPolledAt?: number;
 };
 
-type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli">;
+type GenerationLogConfig = Pick<AiConfig, "channelMode" | "model" | "imageModel" | "activeChannelId" | "imageChannelId" | "quality" | "size" | "count" | "apiMode" | "streamImages" | "streamPartialImages" | "responseFormatB64Json" | "codexCli"> & {
+    channelId?: string;
+    channelName?: string;
+    channelProtocol?: string;
+};
 type RequestSnapshot = { text: string; requestConfig: AiConfig; displayConfig: GenerationLogConfig; references: ReferenceImage[] };
 type GenerationCategory = { id: string; name: string; createdAt: number };
 type ResultViewMode = "all" | "category";
@@ -126,6 +134,8 @@ const CATEGORY_STORE_KEY = "infinite-canvas:image_generation_categories";
 const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
+const SUBSCRIPTION_IMAGE_PREFLIGHT_MS = 15 * 1000;
+const SUBSCRIPTION_IMAGE_TIMEOUT_MS = 3 * 60 * 1000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
 const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
 const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
@@ -137,6 +147,7 @@ export default function ImagePage() {
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
+    const confirmGeneration = useGenerationConfirm();
     const addAsset = useAssetStore((state) => state.addAsset);
     const token = useUserStore((state) => state.token);
     const isUserReady = useUserStore((state) => state.isReady);
@@ -146,6 +157,7 @@ export default function ImagePage() {
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
     const [syncingImageIds, setSyncingImageIds] = useState<string[]>([]);
+    const [cancellingResultIds, setCancellingResultIds] = useState<string[]>([]);
     const [categories, setCategories] = useState<GenerationCategory[]>([]);
     const [resultViewMode, setResultViewModeState] = useState<ResultViewMode>("all");
     const [activeResultCategoryId, setActiveResultCategoryId] = useState<string | null>(null);
@@ -157,7 +169,8 @@ export default function ImagePage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [now, setNow] = useState(Date.now());
-    const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 0, y: 0 });
+    const [workflowButtonPosition, setWorkflowButtonPosition] = useState({ x: 24, y: 320 });
+    const [workflowButtonReady, setWorkflowButtonReady] = useState(false);
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
     const accountHistorySyncEnabledRef = useRef(false);
@@ -181,7 +194,8 @@ export default function ImagePage() {
     };
 
     const pollPendingLogsOnce = (sourceLogs: GenerationLog[]) => {
-        const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.images.length && !pollingLogIdsRef.current.has(log.id));
+        const checkedAt = Date.now();
+        const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.images.length && (isExpiredSubscriptionImageLog(log, checkedAt) || !pollingLogIdsRef.current.has(log.id)));
         if (!pendingLogs.length) return;
         void pollImageTaskLogsOnce(pendingLogs);
     };
@@ -200,6 +214,7 @@ export default function ImagePage() {
             // Local storage can be unavailable in restricted browser contexts.
             setWorkflowButtonPosition(defaultWorkflowButtonPosition());
         }
+        setWorkflowButtonReady(true);
 
         // 监听窗口大小变化，拉窄窗口时自动将工作流按钮实时 clamp 限制在可视区域内，杜绝越界
         const handleResize = () => {
@@ -395,6 +410,7 @@ export default function ImagePage() {
     const generate = async () => {
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.requestConfig, snapshot.displayConfig.imageModel || snapshot.displayConfig.model, "图片生成"))) return;
         setPrompt("");
         await submitGenerationBatch(snapshot);
     };
@@ -403,6 +419,7 @@ export default function ImagePage() {
         const retryChannelId = imageTaskChannelId(log.task);
         const snapshot = buildRequestSnapshot({ promptText: log.prompt, referenceItems: log.references, taskCount: Number(log.config.count) || 1, configOverride: { ...log.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.requestConfig, snapshot.displayConfig.imageModel || snapshot.displayConfig.model, "图片生成"))) return;
         await submitGenerationBatch(snapshot);
     };
 
@@ -676,6 +693,28 @@ export default function ImagePage() {
         setPreviewLog(null);
     };
 
+    const cancelImageResult = async (result: GenerationResult) => {
+        if (!result.task?.id || isClientImageTaskId(result.task.id)) {
+            message.warning("任务正在创建，请稍后再取消");
+            return;
+        }
+        setCancellingResultIds((value) => [...value, result.id]);
+        try {
+            const task = await cancelCanvasImageTask(imageTaskConfig(), result.task);
+            if (!task) throw new Error("取消图片任务失败");
+            const error = task.error?.message || "图片任务已取消";
+            const durationMs = Math.max(0, Date.now() - result.createdAt);
+            const log = logsRef.current.find((item) => item.id === result.taskLogId || item.id === result.id);
+            if (log) await saveLog({ ...imageLogFromTask(log, task), errors: [error], errorDetails: [error] });
+            setResults((value) => value.map((item) => (item.id === result.id ? { ...item, status: "failed", task, error, errorDetail: error, durationMs, lastPolledAt: Date.now() } : item)));
+            message.success("图片任务已取消");
+        } catch (error) {
+            message.error(errorMessage(error));
+        } finally {
+            setCancellingResultIds((value) => value.filter((id) => id !== result.id));
+        }
+    };
+
     const deleteBackendImageTasks = async (items: GenerationLog[]) => {
         if (!token) return;
         const tasks = Array.from(
@@ -737,25 +776,16 @@ export default function ImagePage() {
         });
     };
 
-    const persistLoggedOutLogImages = async (log: GenerationLog): Promise<GenerationLog> => {
-        const images = log.images || [];
-        if (!images.some((image) => !image.storageKey && image.dataUrl?.startsWith("data:image/"))) return log;
-        const persistedImages = await Promise.all(
-            images.map(async (image) => {
-                if (image.storageKey || !image.dataUrl?.startsWith("data:image/")) return image;
-                try {
-                    const stored = await uploadImage(image.dataUrl, { localOnly: true });
-                    return { ...image, dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width || image.width, height: stored.height || image.height, bytes: stored.bytes || image.bytes, mimeType: stored.mimeType || image.mimeType };
-                } catch {
-                    return image;
-                }
-            }),
-        );
-        return { ...log, images: persistedImages };
+    const persistLogImages = async (log: GenerationLog): Promise<GenerationLog> => {
+        try {
+            return { ...log, images: await persistInlineLogImages(log.images || []) };
+        } catch {
+            return log;
+        }
     };
 
     const saveLog = async (log: GenerationLog) => {
-        const persistedLog = token ? log : await persistLoggedOutLogImages(log);
+        const persistedLog = await persistLogImages(log);
         const prevChain = saveLogChainRef.current;
         const nextChain = (async () => {
             try {
@@ -829,14 +859,27 @@ export default function ImagePage() {
     };
 
     const pollImageTaskLogsOnce = async (pendingLogs: GenerationLog[]) => {
-        const ids = pendingLogs.map(imageLogTaskId).filter(Boolean);
+        const polledAt = Date.now();
+        const expiredLogs = pendingLogs.filter((log) => isExpiredSubscriptionImageLog(log, polledAt));
+        expiredLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
+        await Promise.all(
+            expiredLogs.map(async (log) => {
+                const message = "订阅生图调用超时（3分钟）";
+                const task: CanvasImageTask = { ...log.task!, status: "timed_out", error: { message }, error_detail: message };
+                const nextLog = imageLogFromTask(log, task);
+                await saveLog(nextLog);
+                setResults((value) => updateResultByLogId(value, log.id, { status: "failed", task, error: message, errorDetail: message, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
+            }),
+        );
+        const activeLogs = pendingLogs.filter((log) => !expiredLogs.includes(log));
+        const ids = activeLogs.map(imageLogTaskId).filter(Boolean);
         if (!ids.length) return;
-        pendingLogs.forEach((log) => pollingLogIdsRef.current.add(log.id));
+        activeLogs.forEach((log) => pollingLogIdsRef.current.add(log.id));
         try {
             const tasks = await batchCanvasImageTaskStatus(imageTaskConfig(), ids);
             const taskById = new Map(tasks.map((task) => [task.id, task]));
             await Promise.all(
-                pendingLogs.map(async (log) => {
+                activeLogs.map(async (log) => {
                     const task = taskById.get(imageLogTaskId(log));
                     if (!task) {
                         const nextLog = { ...log, status: "失败" as const, durationMs: Date.now() - log.createdAt, failCount: 1, errors: ["图片任务不存在或未创建成功"], errorDetails: ["后端没有找到对应的图片任务"], lastPolledAt: Date.now() };
@@ -861,7 +904,7 @@ export default function ImagePage() {
                 }),
             );
         } finally {
-            pendingLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
+            activeLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
         }
     };
 
@@ -994,12 +1037,13 @@ export default function ImagePage() {
         }
     };
 
-    const retryResult = (result: GenerationResult) => {
+    const retryResult = async (result: GenerationResult) => {
         const retryChannelId = imageTaskChannelId(result.task);
         const snapshot = buildRequestSnapshot({ promptText: result.prompt, referenceItems: result.references, taskCount: 1, configOverride: { ...result.config, ...(retryChannelId ? { imageChannelId: retryChannelId, activeChannelId: retryChannelId } : {}) } });
         if (!snapshot) return;
+        if (!(await confirmGeneration(snapshot.requestConfig, snapshot.displayConfig.imageModel || snapshot.displayConfig.model, "图片生成"))) return;
         setResults((value) => value.filter((item) => item.id !== result.id));
-        void submitGenerationBatch(snapshot);
+        await submitGenerationBatch(snapshot);
     };
 
     const handleWorkflowTaskStarted = (task: WorkflowExternalTaskStart) => {
@@ -1153,6 +1197,8 @@ export default function ImagePage() {
                             onSyncResult={syncResultImage}
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
+                            onCancelResult={(result) => void cancelImageResult(result)}
+                            cancellingResultIds={cancellingResultIds}
                         />
                     </>
                 ) : (
@@ -1189,6 +1235,8 @@ export default function ImagePage() {
                             onSyncResult={syncResultImage}
                             onSyncLog={syncLogImage}
                             onRetry={retryResult}
+                            onCancelResult={(result) => void cancelImageResult(result)}
+                            cancellingResultIds={cancellingResultIds}
                         />
                         <WorkbenchPanel
                             layout="bottom"
@@ -1221,8 +1269,9 @@ export default function ImagePage() {
                 type="button"
                 className="fixed z-50 inline-flex touch-none select-none items-center gap-2 rounded-full border border-sky-300/70 bg-white/90 px-4 py-3 text-sm font-semibold text-stone-950 shadow-[0_18px_50px_rgba(14,165,233,0.28),0_8px_18px_rgba(0,0,0,0.14)] ring-1 ring-white/70 backdrop-blur-xl transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-white hover:shadow-[0_22px_64px_rgba(14,165,233,0.36),0_10px_22px_rgba(0,0,0,0.18)] dark:border-sky-400/40 dark:bg-stone-900/88 dark:text-stone-100 dark:ring-white/10 dark:hover:bg-stone-900"
                 style={{
-                    left: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).x,
-                    top: (typeof window === "undefined" ? defaultWorkflowButtonPosition() : clampWorkflowButtonPosition(workflowButtonPosition.x || workflowButtonPosition.y ? workflowButtonPosition : defaultWorkflowButtonPosition())).y
+                    left: workflowButtonPosition.x,
+                    top: workflowButtonPosition.y,
+                    visibility: workflowButtonReady ? "visible" : "hidden",
                 }}
                 onPointerDown={handleWorkflowButtonPointerDown}
                 onPointerMove={handleWorkflowButtonPointerMove}
@@ -1415,7 +1464,7 @@ function WorkbenchPanel({
     return (
         <div className="flex min-h-[420px] flex-col overflow-hidden rounded-lg border border-stone-200 bg-card shadow-sm dark:border-stone-800 lg:min-h-0">
             <div className="shrink-0 p-4 pb-3">
-                <WorkbenchHeader currentLayout={currentLayout} onLayoutChange={onLayoutChange} />
+                <WorkbenchHeader currentLayout={currentLayout} summary={settingsSummary(config, model)} onLayoutChange={onLayoutChange} />
             </div>
             <div className="thin-scrollbar min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
                 <section className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
@@ -1461,11 +1510,12 @@ function WorkbenchPanel({
     );
 }
 
-function WorkbenchHeader({ currentLayout, onLayoutChange, compact = false }: { currentLayout: WorkbenchLayout; onLayoutChange: (layout: WorkbenchLayout) => void; compact?: boolean }) {
+function WorkbenchHeader({ currentLayout, summary, onLayoutChange, compact = false }: { currentLayout: WorkbenchLayout; summary?: string; onLayoutChange: (layout: WorkbenchLayout) => void; compact?: boolean }) {
     return (
         <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
                 <h1 className={`${compact ? "text-base" : "text-2xl"} font-semibold text-stone-950 dark:text-stone-100`}>生图工作台</h1>
+                {summary ? <p className="mt-1 truncate text-xs text-stone-500 dark:text-stone-400">{summary}</p> : null}
             </div>
             <div className="flex shrink-0 rounded-lg border border-stone-200 bg-stone-50 p-1 dark:border-stone-800 dark:bg-stone-900">
                 <Button size="small" type={currentLayout === "side" ? "primary" : "text"} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>
@@ -1560,10 +1610,10 @@ function QuickNumber({ label, value, min, max, disabled, onChange }: { label: st
 function settingsSummary(config: AiConfig, model: string) {
     return [
         model,
+        config.apiMode === "chat" ? "Chat" : config.apiMode === "responses" ? "Responses" : "Images",
         imageSizeLabel(config.size || "auto"),
         imageQualityLabel(config.quality || "auto"),
         `${config.count || "1"} 张`,
-        config.apiMode !== "chat" && config.streamImages ? `流式 ${config.streamPartialImages || "1"}` : "非流式",
     ].join(" · ");
 }
 
@@ -1599,6 +1649,8 @@ function ResultsPanel({
     onSyncResult,
     onSyncLog,
     onRetry,
+    onCancelResult,
+    cancellingResultIds,
 }: {
     className?: string;
     results: GenerationResult[];
@@ -1631,6 +1683,8 @@ function ResultsPanel({
     onSyncResult: (resultId: string, image: GeneratedImage, index: number) => void;
     onSyncLog: (log: GenerationLog, image: GeneratedImage, index: number) => void;
     onRetry: (result: GenerationResult) => void;
+    onCancelResult: (result: GenerationResult) => void;
+    cancellingResultIds: string[];
 }) {
     const { message } = App.useApp();
     const [creatingCategory, setCreatingCategory] = useState(false);
@@ -1643,6 +1697,8 @@ function ResultsPanel({
     const visibleLogs = resultViewMode === "category" ? (activeCategoryId ? baseVisibleLogs.filter((log) => log.categoryIds.includes(activeCategoryId)) : baseVisibleLogs.filter((log) => !log.categoryIds.length)) : baseVisibleLogs;
     const totalCount = results.length + (resultViewMode === "category" ? (activeCategoryId ? visibleLogs.length : categories.length + visibleLogs.length) : visibleLogs.length);
     const shouldShowGrid = totalCount > 0;
+    const completedCount = results.filter((result) => result.status === "success").length + visibleLogs.filter((log) => log.status === "成功").length;
+    const failedCount = results.filter((result) => result.status === "failed").length + visibleLogs.filter((log) => log.status === "失败").length;
     const allVisibleLogsSelected = Boolean(visibleLogs.length) && visibleLogs.every((log) => selectedLogIds.includes(log.id));
     const toggleVisibleLogs = () => onSelectedLogIdsChange(allVisibleLogsSelected ? selectedLogIds.filter((id) => !visibleLogs.some((log) => log.id === id)) : Array.from(new Set([...selectedLogIds, ...visibleLogs.map((log) => log.id)])));
     const createCategory = async () => {
@@ -1663,14 +1719,16 @@ function ResultsPanel({
 
     return (
         <div className={`thin-scrollbar rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto lg:p-5 ${className}`}>
-            <div className="mb-4 flex items-center justify-between gap-3">
-                <div className="flex min-w-0 items-center gap-2">
+            <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                     <History className="size-4 text-stone-400" />
                     <h2 className="truncate text-xl font-semibold">{activeCategory ? activeCategory.name : "全部结果"}</h2>
                     <Tag className="m-0">{totalCount}</Tag>
-                    {pendingCount ? <Tag className="m-0 px-2 py-1">{pendingCount} 个生成中</Tag> : null}
+                    {completedCount ? <Tag className="m-0" color="success">{completedCount} 个成功</Tag> : null}
+                    {pendingCount ? <Tag className="m-0" color="processing">{pendingCount} 个生成中</Tag> : null}
+                    {failedCount ? <Tag className="m-0" color="error">{failedCount} 个失败</Tag> : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2 xl:justify-end">
                     {activeCategory ? (
                         <Button size="small" onClick={() => onActiveCategoryChange(null)}>
                             返回分类
@@ -1703,14 +1761,14 @@ function ResultsPanel({
                 </div>
             </div>
             {shouldShowGrid ? (
-                <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                     {results.map((result, index) =>
                         result.status === "success" && result.image ? (
                             <ResultImageCard key={result.id} result={result} image={result.image} index={index} onCopyPrompt={onCopyPrompt} onEdit={onEdit} onDownload={onDownload} onSaveAsset={onSaveAsset} syncing={syncingImageIds.includes(result.image.id)} onSync={(image) => onSyncResult(result.id, image, index)} />
                         ) : result.status === "failed" ? (
                             <FailedImageCard key={result.id} result={result} error={result.error || "生成失败"} onCopyPrompt={onCopyPrompt} onRetry={() => onRetry(result)} />
                         ) : (
-                            <PendingImageCard key={result.id} result={result} now={now} onCopyPrompt={onCopyPrompt} />
+                            <PendingImageCard key={result.id} result={result} now={now} cancelling={cancellingResultIds.includes(result.id)} cancelDisabled={!result.task?.id || isClientImageTaskId(result.task.id)} onCancel={() => onCancelResult(result)} onCopyPrompt={onCopyPrompt} />
                         ),
                     )}
                     {resultViewMode === "category" ? (
@@ -1881,14 +1939,14 @@ function ResultImageCard({
     onSync: (image: GeneratedImage) => void;
 }) {
     return (
-        <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
+        <div className="group overflow-hidden rounded-xl border border-stone-200 bg-background transition duration-200 hover:-translate-y-0.5 hover:border-stone-300 hover:shadow-lg dark:border-stone-800 dark:hover:border-stone-700">
+            <div className="relative aspect-[4/3] bg-[radial-gradient(circle_at_center,rgba(120,113,108,0.12),transparent_65%)] dark:bg-[radial-gradient(circle_at_center,rgba(168,162,158,0.10),transparent_65%)]">
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
-                    {!image.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color="blue">新生成</Tag>
+                    {!image.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时结果</Tag> : null}
+                    <Tag className="m-0 text-[10px]" color="success" icon={<CheckCircle2 className="size-3" />}>已完成</Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                <Image src={image.dataUrl} alt={`生成结果 ${index + 1}`} className="aspect-[4/3] object-contain" />
             </div>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
@@ -1910,9 +1968,17 @@ function ResultImageCard({
     );
 }
 
-function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
+function PendingImageCard({ result, now, cancelling, cancelDisabled, onCancel, onCopyPrompt }: { result: GenerationResult; now: number; cancelling: boolean; cancelDisabled: boolean; onCancel: () => void; onCopyPrompt: (text: string) => void | Promise<void> }) {
+    const elapsedMs = Math.max(0, now - result.createdAt);
+    const subscriptionTask = result.config.channelProtocol === "gpt-image-2" || result.config.channelProtocol === "codex-image-emergency" || result.config.channelProtocol === "gemini-cli" || result.config.channelProtocol === "chatgpt-subscription-proxy" || result.config.channelProtocol === "antigravity-subscription-proxy";
+    const checkingSubscriptionEndpoint = subscriptionTask && result.config.channelProtocol !== "gemini-cli" && elapsedMs < SUBSCRIPTION_IMAGE_PREFLIGHT_MS;
+    const stageIndex = checkingSubscriptionEndpoint || !result.task || result.task.status === "queued" ? 0 : result.task.status === "completed" ? 2 : 1;
+    const stageLabels = ["准备", "生成", "保存", "完成"];
+    const timeoutBudgetPercent = Math.min(100, (elapsedMs / SUBSCRIPTION_IMAGE_TIMEOUT_MS) * 100);
+    const exceededTimeoutBudget = subscriptionTask && elapsedMs >= SUBSCRIPTION_IMAGE_TIMEOUT_MS;
+
     return (
-        <div className="overflow-hidden rounded-lg border border-dashed border-stone-300 bg-stone-50 dark:border-stone-700 dark:bg-stone-900">
+        <div className="overflow-hidden rounded-xl border border-dashed border-sky-300 bg-sky-50/40 dark:border-sky-900 dark:bg-sky-950/10">
             <div className="relative aspect-[4/3]">
                 <div
                     className="absolute inset-0 opacity-60"
@@ -1921,13 +1987,42 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
                         backgroundSize: "16px 16px",
                     }}
                 />
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
-                    <LoaderCircle className="size-6 animate-spin" />
-                    <span>生成中</span>
-                    <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(Math.max(0, now - result.createdAt))}</span>
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-5 text-sm text-stone-500 dark:text-stone-400">
+                    {exceededTimeoutBudget ? <AlertCircle className="size-6 text-red-500" /> : <LoaderCircle className="size-6 animate-spin text-sky-500" />}
+                    <span className={exceededTimeoutBudget ? "font-medium text-red-600 dark:text-red-400" : "font-medium text-stone-700 dark:text-stone-200"}>
+                        {exceededTimeoutBudget ? "已超过3分钟超时上限" : checkingSubscriptionEndpoint ? "正在检查订阅端点" : subscriptionTask ? stageIndex === 0 ? "正在准备订阅请求" : stageIndex === 2 ? "正在保存生成结果" : "等待订阅服务生成" : "请求处理中"}
+                    </span>
+                    {subscriptionTask ? (
+                        <div className={`mt-1 w-full max-w-64 rounded-xl border bg-white/85 p-3 shadow-sm backdrop-blur dark:bg-stone-950/80 ${exceededTimeoutBudget ? "border-red-200 dark:border-red-950" : "border-sky-200/80 dark:border-sky-900"}`}>
+                            <div className="flex items-center justify-between text-[11px] text-stone-500 dark:text-stone-400">
+                                <span>超时预算</span>
+                                <span className="font-medium tabular-nums text-stone-700 dark:text-stone-200">{formatDuration(elapsedMs)} / 3分</span>
+                            </div>
+                            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-stone-200 dark:bg-stone-800" role="progressbar" aria-label="订阅生图超时预算已使用" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(timeoutBudgetPercent)}>
+                                <div className={`h-full rounded-full transition-[width] duration-1000 ${exceededTimeoutBudget ? "bg-red-500" : "bg-sky-500"}`} style={{ width: `${timeoutBudgetPercent}%` }} />
+                            </div>
+                            <div className="mt-2 grid grid-cols-4 gap-1 text-center text-[10px]">
+                                {stageLabels.map((label, index) => (
+                                    <span key={label} className={index === stageIndex ? "font-medium text-sky-600 dark:text-sky-400" : index < stageIndex ? "text-stone-600 dark:text-stone-300" : "text-stone-400 dark:text-stone-600"}>
+                                        {label}
+                                    </span>
+                                ))}
+                            </div>
+                            <div className={`mt-2 text-center text-[10px] ${exceededTimeoutBudget ? "text-red-500 dark:text-red-400" : "text-stone-400 dark:text-stone-500"}`}>
+                                {exceededTimeoutBudget ? "请取消任务后再重试" : checkingSubscriptionEndpoint ? "预检通过后才会发起生图" : "上游未返回实时百分比"}
+                            </div>
+                        </div>
+                    ) : (
+                        <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(elapsedMs)}</span>
+                    )}
                 </div>
             </div>
-            <TaskInfo result={{ ...result, durationMs: Math.max(0, now - result.createdAt) }} onCopyPrompt={onCopyPrompt} />
+            <TaskInfo result={{ ...result, durationMs: elapsedMs }} onCopyPrompt={onCopyPrompt} />
+            <div className="flex justify-end border-t border-sky-200 px-3 py-2 dark:border-sky-950">
+                <Button size="small" type="text" danger icon={<CircleStop className="size-3.5" />} loading={cancelling} disabled={cancelDisabled} onClick={onCancel}>
+                    {cancelDisabled ? "等待任务创建" : "取消任务"}
+                </Button>
+            </div>
         </div>
     );
 }
@@ -1935,12 +2030,13 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
 function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: GenerationResult; error: string; onCopyPrompt: (text: string) => void | Promise<void>; onRetry: () => void }) {
     const [detailOpen, setDetailOpen] = useState(false);
     const detail = result.errorDetail || error;
+    const cancelled = isCancelledImageTask(result.task);
     return (
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
             <div className="relative flex aspect-[4/3] flex-col items-center justify-center gap-3 p-5 text-center">
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <AlertCircle className="size-7 text-red-500" />
-                <div className="text-sm font-medium text-red-600 dark:text-red-300">生成失败</div>
+                {cancelled ? <CircleStop className="size-7 text-amber-500" /> : <AlertCircle className="size-7 text-red-500" />}
+                <div className="text-sm font-medium text-red-600 dark:text-red-300">{cancelled ? "已取消" : "生成失败"}</div>
                 <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
@@ -1963,6 +2059,7 @@ function FailedImageCard({ result, error, onCopyPrompt, onRetry }: { result: Gen
 
 function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; error?: string; onCopyPrompt: (text: string) => void | Promise<void> }) {
     const [expanded, setExpanded] = useState(false);
+    const channel = useGenerationChannelMeta(result.config, result.task);
 
     return (
         <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 text-xs text-stone-500 dark:border-stone-800 dark:text-stone-400">
@@ -1978,6 +2075,8 @@ function TaskInfo({ result, error, onCopyPrompt }: { result: GenerationResult; e
                 </div>
             </div>
             <div className="flex flex-wrap gap-1.5">
+                <Tag className="m-0" color="cyan">渠道 · {channel.name}</Tag>
+                {channel.routeLabel ? <Tag className="m-0">路径 · {channel.routeLabel}</Tag> : null}
                 {result.workflowName ? (
                     <Tag className="m-0" color="cyan">
                         工作流 {result.workflowName}
@@ -2043,6 +2142,8 @@ function HistoryLogCard({
     const [detailOpen, setDetailOpen] = useState(false);
     const categoryMenuRef = useRef<HTMLDivElement>(null);
     const logCategories = categories.filter((category) => log.categoryIds.includes(category.id));
+    const channel = useGenerationChannelMeta(log.config, log.task);
+    const missingTemporaryImage = log.status === "成功" && log.imageCount > 0 && !firstImage && !log.errors.length;
     const createCategory = async () => {
         const category = await onCreateCategory(categoryName);
         if (!category) return;
@@ -2065,25 +2166,27 @@ function HistoryLogCard({
     }, [categoryOpen]);
 
     return (
-        <div className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
+        <div className={`overflow-hidden rounded-xl border bg-background transition duration-200 hover:shadow-md dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 hover:border-stone-300 dark:border-stone-800 dark:hover:border-stone-700"}`}>
             <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
                 <div className="absolute left-1.5 top-1.5 z-10 flex items-center gap-1 rounded-md bg-white/85 px-1.5 py-1 shadow-sm dark:bg-stone-950/80">
                     <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
                     {selected ? <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={onDelete} /> : null}
                 </div>
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
-                    {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时URL</Tag> : null}
-                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : log.failCount ? "red" : "blue"}>
-                        {log.status === "生成中" ? "生成中" : log.failCount ? `失败 ${log.failCount}` : "成功"}
+                    {firstImage && !firstImage.storageKey?.startsWith("server:") ? <Tag className="m-0 text-[10px]" color="gold">临时结果</Tag> : null}
+                    {missingTemporaryImage ? <Tag className="m-0 text-[10px]" color="warning">结果未保留</Tag> : null}
+                    <Tag className="m-0 text-[10px]" color={log.status === "生成中" ? "processing" : isCancelledImageTask(log.task) ? "warning" : log.failCount ? "red" : "success"}>
+                        {log.status === "生成中" ? "生成中" : isCancelledImageTask(log.task) ? "已取消" : log.failCount ? `失败 ${log.failCount}` : "成功"}
                     </Tag>
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
                 {firstImage ? (
-                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-cover" />
+                    <Image src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} className="aspect-[4/3] object-contain" />
                 ) : (
-                    <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
-                        <AlertCircle className="size-7" />
-                        <span>{log.errors[0] || "没有可显示的图片"}</span>
+                    <div className={`flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm ${missingTemporaryImage ? "text-amber-600 dark:text-amber-300" : "text-red-500"}`}>
+                        {missingTemporaryImage ? <CloudUpload className="size-7" /> : <AlertCircle className="size-7" />}
+                        <span>{missingTemporaryImage ? "生成成功，临时结果未同步" : log.errors[0] || "没有可显示的图片"}</span>
+                        {missingTemporaryImage ? <span className="max-w-52 text-xs leading-5 text-stone-500 dark:text-stone-400">下次生成后请在刷新前同步到云端或保存到素材库</span> : null}
                     </div>
                 )}
                 {displayImages.length > 1 ? (
@@ -2120,6 +2223,8 @@ function HistoryLogCard({
                             工作流 {log.workflowName}
                         </Tag>
                     ) : null}
+                    <Tag className="m-0 text-[10px]" color="cyan">渠道 · {channel.name}</Tag>
+                    {channel.routeLabel ? <Tag className="m-0 text-[10px]">路径 · {channel.routeLabel}</Tag> : null}
                     <Tag className="m-0 text-[10px]">{formatLogTime(log.createdAt)}</Tag>
                     <Tag className="m-0 text-[10px]">{log.model}</Tag>
                     <Tag className="m-0 text-[10px]">{log.config.apiMode === "chat" ? "Chat" : log.config.apiMode === "responses" ? "Responses" : "Images"}</Tag>
@@ -2398,6 +2503,12 @@ function imageLogTaskId(log: GenerationLog) {
     return log.task?.id || "";
 }
 
+function isExpiredSubscriptionImageLog(log: GenerationLog, now: number) {
+    const protocol = log.config.channelProtocol || "";
+    const subscriptionTask = protocol === "gpt-image-2" || protocol === "codex-image-emergency" || protocol === "gemini-cli" || protocol === "chatgpt-subscription-proxy" || protocol === "antigravity-subscription-proxy" || log.task?.id.startsWith("subscription-image:");
+    return Boolean(subscriptionTask && log.status === "生成中" && now - log.createdAt >= SUBSCRIPTION_IMAGE_TIMEOUT_MS);
+}
+
 function isRecoverableImageTask(task: CanvasImageTask) {
     return !isCompletedImageTask(task) && !isFailedImageTask(task);
 }
@@ -2407,7 +2518,11 @@ function isCompletedImageTask(task: CanvasImageTask) {
 }
 
 function isFailedImageTask(task: CanvasImageTask) {
-    return ["failed", "fail", "error", "cancelled", "canceled"].includes((task.status || "").toLowerCase());
+    return ["failed", "fail", "error", "cancelled", "canceled", "timed_out"].includes((task.status || "").toLowerCase());
+}
+
+function isCancelledImageTask(task?: CanvasImageTask | null) {
+    return ["cancelled", "canceled"].includes((task?.status || "").toLowerCase());
 }
 
 function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[], config: AiConfig) {
@@ -2712,6 +2827,9 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
         imageModel: log.config?.imageModel || log.model || "",
         activeChannelId: taskChannelId || log.config?.activeChannelId || log.config?.imageChannelId || "",
         imageChannelId: taskChannelId || log.config?.imageChannelId || log.config?.activeChannelId || "",
+        channelId: taskChannelId || log.config?.channelId || log.config?.imageChannelId || log.config?.activeChannelId || "",
+        channelName: log.task?.channelName || log.config?.channelName || "",
+        channelProtocol: log.config?.channelProtocol || "",
         quality: log.config?.quality || log.quality || "",
         size: log.config?.size || log.size || "",
         count: log.config?.count || String(log.imageCount || log.successCount || 1),
@@ -2728,9 +2846,7 @@ function imageTaskChannelId(task?: CanvasImageTask | null) {
 }
 
 function resolveImageChannelId(config: AiConfig, model: string, ...preferredIds: Array<string | undefined>) {
-    const channels = config.channelMode === "remote"
-        ? config.publicChannels.map((channel) => ({ id: channel.id || "", models: channel.models || [] }))
-        : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, models: channel.models }));
+    const channels = modelChannelsForConfig(config).map((channel) => ({ id: channel.id || "", models: channel.models }));
     for (const id of preferredIds) {
         const channelId = (id || "").trim();
         if (channelId && channels.some((channel) => channel.id === channelId && channel.models.includes(model))) return channelId;
@@ -2739,12 +2855,19 @@ function resolveImageChannelId(config: AiConfig, model: string, ...preferredIds:
 }
 
 function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
+    const model = config.imageModel || config.model;
+    const channelId = config.imageChannelId || config.activeChannelId;
+    const channels = modelChannelsForConfig(config);
+    const channel = channels.find((item) => item.id === channelId && item.models.includes(model)) || channels.find((item) => item.id === channelId) || channels.find((item) => item.models.includes(model));
     return {
         channelMode: config.channelMode,
         model: config.model,
         imageModel: config.imageModel,
         activeChannelId: config.imageChannelId || config.activeChannelId,
         imageChannelId: config.imageChannelId,
+        channelId: channel?.id || channelId,
+        channelName: channel?.name || "",
+        channelProtocol: channel?.protocol || "",
         quality: config.quality,
         size: config.size,
         count: config.count,
@@ -2753,6 +2876,17 @@ function buildGenerationLogConfig(config: AiConfig): GenerationLogConfig {
         streamPartialImages: config.streamPartialImages,
         responseFormatB64Json: config.responseFormatB64Json,
         codexCli: config.codexCli,
+    };
+}
+
+function useGenerationChannelMeta(config: GenerationLogConfig, task?: CanvasImageTask) {
+    const effectiveConfig = useEffectiveConfig();
+    const channelId = imageTaskChannelId(task) || config.channelId?.trim() || config.imageChannelId?.trim() || config.activeChannelId?.trim() || "";
+    const channel = modelChannelsForConfig(effectiveConfig).find((item) => item.id === channelId);
+    const protocol = config.channelProtocol || channel?.protocol || "";
+    return {
+        name: task?.channelName?.trim() || config.channelName?.trim() || channel?.name?.trim() || channelId || "未记录",
+        routeLabel: protocol === "gpt-image-2" ? "订阅登录态 · 无 API 回退" : protocol === "codex-image-emergency" ? "Codex 应急额度" : protocol === "gemini-cli" ? "Google 登录态 · generate_image · 无 API 回退" : protocol === "chatgpt-subscription-proxy" ? "ChatGPT 订阅代理 · 无付费 API 回退" : protocol === "antigravity-subscription-proxy" ? "Antigravity 订阅代理 · 无付费 API 回退" : "",
     };
 }
 
@@ -2853,20 +2987,3 @@ function buildLog({
 function formatLogTime(value: number) {
     return new Date(value).toLocaleString("zh-CN", { hour12: false });
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

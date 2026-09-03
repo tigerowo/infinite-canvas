@@ -2,14 +2,14 @@
 
 import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutlined, PlusOutlined, ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { json } from "@codemirror/lang-json";
-import { App, Button, Card, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Progress, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
 import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
-import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider, type StorageCapacityResult } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
@@ -44,7 +44,7 @@ const emptySettings: AdminSettings = {
         auth: { allowRegister: true, linuxDo: { enabled: false } },
         storage: { mode: "local_indexeddb", allowUserProvider: false },
     },
-    private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
+    private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024, operationBudget: { enabled: true, classALimit: 1_000_000, classBLimit: 10_000_000, warningPercent: 80, stopPercent: 90 } } },
 };
 const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
@@ -73,6 +73,7 @@ export default function AdminSettingsPage() {
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
+    const [storageBudgetResults, setStorageBudgetResults] = useState<Record<number, StorageCapacityResult>>({});
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
@@ -303,10 +304,11 @@ export default function AdminSettingsPage() {
         setMeasuringProviderIndex(index);
         try {
             const result = await measureAdminStorageProvider(token, { index, provider });
+            setStorageBudgetResults((current) => ({ ...current, [index]: result }));
             const next = normalizeSettings(await fetchAdminSettings(token));
             form.setFieldsValue(next);
             setJsonText({ public: JSON.stringify(next.public, null, 2), private: JSON.stringify(next.private, null, 2) });
-            message.success(`容量统计完成：${formatStorageBytes(result.bytes)}${result.overLimit ? "，已达到上限并禁用" : ""}`);
+            message.success(`预算明细已刷新：${formatStorageBytes(result.bytes)}${result.writeProtected ? "，新写入保护已开启" : ""}`);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "容量统计失败");
         } finally {
@@ -587,11 +589,37 @@ export default function AdminSettingsPage() {
                                             </Form.Item>
                                         </Col>
                                         <Col xs={24} md={8}>
-                                            <Form.Item name={["private", "storage", "capacityLimitBytes"]} label="容量上限(字节)" extra="默认 9GB，达到上限后会自动禁用该配置。">
+                                            <Form.Item name={["private", "storage", "capacityLimitBytes"]} label="容量写入保护线(字节)" extra="默认 9GB；达到后停止新写入，已有素材仍可读取和删除。">
                                                 <InputNumber min={1} className="!w-full" />
                                             </Form.Item>
                                         </Col>
+                                        <Col xs={24} md={6}>
+                                            <Form.Item name={["private", "storage", "operationBudget", "enabled"]} label="月度操作预算保护" valuePropName="checked">
+                                                <Switch />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={6}>
+                                            <Form.Item name={["private", "storage", "operationBudget", "classALimit"]} label="A 类月额度">
+                                                <InputNumber min={1} precision={0} className="!w-full" />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={6}>
+                                            <Form.Item name={["private", "storage", "operationBudget", "classBLimit"]} label="B 类月额度">
+                                                <InputNumber min={1} precision={0} className="!w-full" />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={12} md={3}>
+                                            <Form.Item name={["private", "storage", "operationBudget", "warningPercent"]} label="预警比例(%)">
+                                                <InputNumber min={1} max={99} precision={0} className="!w-full" />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={12} md={3}>
+                                            <Form.Item name={["private", "storage", "operationBudget", "stopPercent"]} label="保护比例(%)">
+                                                <InputNumber min={1} max={100} precision={0} className="!w-full" />
+                                            </Form.Item>
+                                        </Col>
                                     </Row>
+                                    <Alert showIcon type="info" title="操作次数为 Infinite Canvas 本机估算，不等同于 Cloudflare 账单；达到容量或 A 类保护线时仅停止新云端写入并回退本机，B 类接近额度时预警但不切断历史素材。" />
                                     <Form.List name={["private", "storage", "providers"]}>
                                         {(fields, { add, remove }) => (
                                             <Flex vertical gap={12}>
@@ -619,7 +647,7 @@ export default function AdminSettingsPage() {
                                                             extra={
                                                                 <Flex gap={8}>
                                                                     <Button size="small" loading={measuringProviderIndex === field.name} onClick={() => void measureStorageProviderAt(field.name)}>
-                                                                        统计容量
+                                                                        刷新预算明细
                                                                     </Button>
                                                                     <Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
                                                                 </Flex>
@@ -730,6 +758,9 @@ export default function AdminSettingsPage() {
                                                                     </Form.Item>
                                                                 </Col>
                                                             </Row>
+                                                            {!isWebDAV && (
+                                                                <StorageBudgetDetails result={storageBudgetResults[field.name]} />
+                                                            )}
                                                         </Card>
                                                     );
                                                 })}
@@ -1058,6 +1089,13 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
                 cron: setting.storage?.capacityCheck?.cron || "0 */6 * * *",
             },
             capacityLimitBytes: Number(setting.storage?.capacityLimitBytes) || 9 * 1024 * 1024 * 1024,
+            operationBudget: {
+                enabled: setting.storage?.operationBudget?.enabled !== false,
+                classALimit: Number(setting.storage?.operationBudget?.classALimit) || 1_000_000,
+                classBLimit: Number(setting.storage?.operationBudget?.classBLimit) || 10_000_000,
+                warningPercent: Number(setting.storage?.operationBudget?.warningPercent) || 80,
+                stopPercent: Number(setting.storage?.operationBudget?.stopPercent) || 90,
+            },
         },
     };
 }
@@ -1157,6 +1195,37 @@ function formatStorageBytes(bytes: number) {
         index += 1;
     }
     return `${value.toFixed(index === 0 ? 0 : 2)} ${units[index]}`;
+}
+
+function StorageBudgetDetails({ result }: { result?: StorageCapacityResult }) {
+    if (!result) {
+        return <Typography.Text type="secondary">点击“刷新预算明细”查看本月容量和操作次数。</Typography.Text>;
+    }
+    const metrics = [
+        { label: "标准存储", used: result.bytes, limit: result.limitBytes, value: `${formatStorageBytes(result.bytes)} / ${formatStorageBytes(result.limitBytes)}` },
+        { label: "A 类操作", used: result.classAOperations, limit: result.classALimit, value: `${result.classAOperations.toLocaleString()} / ${result.classALimit.toLocaleString()}` },
+        { label: "B 类操作", used: result.classBOperations, limit: result.classBLimit, value: `${result.classBOperations.toLocaleString()} / ${result.classBLimit.toLocaleString()}` },
+    ];
+    return (
+        <Card size="small" title={<Space><span>{result.period} 预算明细</span><Tag>本机估算</Tag>{result.writeProtected && <Tag color="warning">写入保护中</Tag>}</Space>}>
+            <Row gutter={[16, 12]}>
+                {metrics.map((metric) => {
+                    const percent = metric.limit > 0 ? Math.min(100, Math.round(metric.used / metric.limit * 100)) : 0;
+                    const status = percent >= result.stopPercent ? "exception" : "normal";
+                    return (
+                        <Col xs={24} md={8} key={metric.label}>
+                            <Flex justify="space-between" gap={8}>
+                                <Typography.Text>{metric.label}</Typography.Text>
+                                <Typography.Text type="secondary">{metric.value}</Typography.Text>
+                            </Flex>
+                            <Progress percent={percent} status={status} size="small" />
+                            {percent >= result.warningPercent && percent < result.stopPercent && <Typography.Text type="warning">已达到预警线 {result.warningPercent}%</Typography.Text>}
+                        </Col>
+                    );
+                })}
+            </Row>
+        </Card>
+    );
 }
 
 function parseTabJson(tab: "public", value: string): AdminSettings["public"] | null;

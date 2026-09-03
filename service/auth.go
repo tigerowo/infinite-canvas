@@ -2,6 +2,9 @@ package service
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,13 +14,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -31,6 +35,19 @@ type TokenClaims struct {
 type userExtra struct {
 	LinuxDo any `json:"linuxDo,omitempty"`
 }
+
+type oauthStatePayload struct {
+	Redirect  string `json:"redirect"`
+	Nonce     string `json:"nonce"`
+	ExpiresAt int64  `json:"expiresAt"`
+}
+
+type loginExchange struct {
+	Session   model.AuthSession
+	ExpiresAt time.Time
+}
+
+var loginExchanges sync.Map
 
 func EnsureDefaultAdmin() error {
 	if strings.TrimSpace(config.Cfg.AdminUsername) == "" || strings.TrimSpace(config.Cfg.AdminPassword) == "" {
@@ -121,30 +138,37 @@ func Login(username string, password string) (model.AuthSession, error) {
 	return newSession(user)
 }
 
-func LinuxDoAuthorizeURL(r *http.Request, redirect string) (string, error) {
+func LinuxDoAuthorizeURL(r *http.Request, redirect string) (string, string, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	settings = normalizeSettings(settings)
 	linuxDo := settings.Private.Auth.LinuxDo
 	if !settings.Public.Auth.LinuxDo.Enabled {
-		return "", safeMessageError{message: "Linux.do 登录未开启"}
+		return "", "", safeMessageError{message: "Linux.do 登录未开启"}
 	}
 	if strings.TrimSpace(linuxDo.ClientID) == "" || strings.TrimSpace(linuxDo.ClientSecret) == "" {
-		return "", safeMessageError{message: "Linux.do 登录未配置"}
+		return "", "", safeMessageError{message: "Linux.do 登录未配置"}
+	}
+	state, err := newOAuthState(redirect)
+	if err != nil {
+		return "", "", err
 	}
 	values := url.Values{}
 	values.Set("client_id", linuxDo.ClientID)
 	values.Set("redirect_uri", linuxDoRedirectURI(r))
 	values.Set("response_type", "code")
 	values.Set("scope", "read")
-	values.Set("state", base64.RawURLEncoding.EncodeToString([]byte(redirect)))
-	return config.Cfg.LinuxDoAuthorizeURL + "?" + values.Encode(), nil
+	values.Set("state", state)
+	return config.Cfg.LinuxDoAuthorizeURL + "?" + values.Encode(), state, nil
 }
 
 func LoginWithLinuxDo(r *http.Request, code string, state string) (model.AuthSession, string, error) {
-	redirect := decodeState(state)
+	redirect, err := decodeState(state)
+	if err != nil {
+		return model.AuthSession{}, "/", safeMessageError{message: "OAuth 登录状态已失效，请重新登录"}
+	}
 	settings, err := repository.GetSettings()
 	if err != nil {
 		return model.AuthSession{}, redirect, err
@@ -200,6 +224,31 @@ func LoginWithLinuxDo(r *http.Request, code string, state string) (model.AuthSes
 	}
 	session, err := newSession(user)
 	return session, redirect, err
+}
+
+func CreateLoginExchange(session model.AuthSession) (string, error) {
+	code, err := randomURLToken(32)
+	if err != nil {
+		return "", err
+	}
+	loginExchanges.Store(code, loginExchange{Session: session, ExpiresAt: time.Now().Add(2 * time.Minute)})
+	return code, nil
+}
+
+func ConsumeLoginExchange(code string) (model.AuthSession, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return model.AuthSession{}, safeMessageError{message: "登录交换码无效"}
+	}
+	value, ok := loginExchanges.LoadAndDelete(code)
+	if !ok {
+		return model.AuthSession{}, safeMessageError{message: "登录交换码无效或已使用"}
+	}
+	exchange, ok := value.(loginExchange)
+	if !ok || time.Now().After(exchange.ExpiresAt) {
+		return model.AuthSession{}, safeMessageError{message: "登录交换码已过期"}
+	}
+	return exchange.Session, nil
 }
 
 func ParseToken(tokenText string) (TokenClaims, error) {
@@ -502,12 +551,16 @@ func linuxDoProfile(token string) (linuxDoUserResponse, error) {
 }
 
 func doLinuxDoJSON(req *http.Request, payload any) error {
-	resp, err := http.DefaultClient.Do(req)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024+1))
+	if err != nil || len(body) > 1024*1024 {
+		return safeMessageError{message: "Linux.do 登录响应异常"}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return safeMessageError{message: "Linux.do 登录失败"}
 	}
@@ -538,12 +591,48 @@ func linuxDoAvatar(template string) string {
 	return strings.ReplaceAll(template, "{size}", "120")
 }
 
-func decodeState(state string) string {
-	data, err := base64.RawURLEncoding.DecodeString(state)
+func newOAuthState(redirect string) (string, error) {
+	nonce, err := randomURLToken(24)
 	if err != nil {
-		return "/"
+		return "", err
 	}
-	return safeRedirectPath(string(data))
+	payload, err := json.Marshal(oauthStatePayload{Redirect: safeRedirectPath(redirect), Nonce: nonce, ExpiresAt: time.Now().Add(10 * time.Minute).Unix()})
+	if err != nil {
+		return "", err
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(payload)
+	signature := signOAuthState(encoded)
+	return encoded + "." + signature, nil
+}
+
+func decodeState(state string) (string, error) {
+	parts := strings.Split(state, ".")
+	if len(parts) != 2 || !hmac.Equal([]byte(parts[1]), []byte(signOAuthState(parts[0]))) {
+		return "/", errors.New("OAuth state 签名无效")
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "/", err
+	}
+	var payload oauthStatePayload
+	if err := json.Unmarshal(data, &payload); err != nil || payload.Nonce == "" || time.Now().Unix() > payload.ExpiresAt {
+		return "/", errors.New("OAuth state 已过期")
+	}
+	return safeRedirectPath(payload.Redirect), nil
+}
+
+func signOAuthState(payload string) string {
+	mac := hmac.New(sha256.New, []byte(config.Cfg.JWTSecret))
+	_, _ = mac.Write([]byte("infinite-canvas/oauth-state/v1:" + payload))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+func randomURLToken(size int) (string, error) {
+	data := make([]byte, size)
+	if _, err := rand.Read(data); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
 // safeRedirectPath 仅放行站内相对路径，拦截开放重定向。浏览器会忽略 URL 中的

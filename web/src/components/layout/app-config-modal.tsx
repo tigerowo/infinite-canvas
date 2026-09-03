@@ -9,13 +9,23 @@ import { ModelPicker } from "@/components/model-picker";
 import { fetchImageModels } from "@/services/api/image";
 import { fetchUserConfig, measureUserStorageProvider, syncUserModelConfig, syncUserStorageProvider } from "@/services/api/user-config";
 import { clearStorageConfigCache as clearFileStorageCache } from "@/services/file-storage";
-import { clearStorageConfigCache as clearImageStorageCache, defaultUserStorageProvider, defaultUserWebDAVStorageProvider, loadStorageConfig, loadUserS3StorageProvider, loadUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider, type UserStorageProvider } from "@/services/image-storage";
+import {
+    clearStorageConfigCache as clearImageStorageCache,
+    defaultUserStorageProvider,
+    defaultUserWebDAVStorageProvider,
+    loadStorageConfig,
+    loadUserS3StorageProvider,
+    loadUserWebDAVStorageProvider,
+    saveUserStorageProvider,
+    saveUserWebDAVStorageProvider,
+    type UserStorageProvider,
+} from "@/services/image-storage";
 import { audioFormatOptions, audioVoiceOptions, glmTtsFormatOptions, glmTtsVoiceOptions, isGlmTtsModel, normalizeAudioSpeedValue, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice } from "@/lib/audio-generation";
 import { grokTtsFormatOptions, grokTtsLanguageOptions, isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, normalizeGrokTtsSpeed } from "@/lib/grok-tts";
 import { isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { geminiTtsVoiceOptions, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, mimoTtsFormatOptions, mimoTtsVoiceOptions } from "@/lib/mimo-tts";
-import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls } from "@/lib/model-channel";
+import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, type ModelChannelProtocol } from "@/lib/model-channel";
 import { filterChannelModelsByCapability, normalizeLocalChannels, useConfigStore, useEffectiveConfig, type AiConfig, type LocalModelChannel, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -85,8 +95,7 @@ export function AppConfigModal() {
                 setRemoteStorageSyncEnabled(syncS3);
                 setRemoteWebDAVStorageSyncEnabled(syncWebDAV);
                 if (remoteConfig) {
-                    Object.entries(remoteConfig)
-                        .forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
+                    Object.entries(remoteConfig).forEach(([key, value]) => updateConfig(key as keyof AiConfig, value as never));
                 }
                 updateConfig("syncStorageConfig", syncS3);
                 updateConfig("syncWebDAVStorageConfig", syncWebDAV);
@@ -101,7 +110,7 @@ export function AppConfigModal() {
                     saveUserWebDAVStorageProvider(next);
                 }
             })
-            .catch(() => { });
+            .catch(() => {});
         return () => {
             canceled = true;
         };
@@ -123,7 +132,7 @@ export function AppConfigModal() {
     }, [isConfigOpen]);
 
     const finishConfig = async () => {
-        const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim());
+        const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || (!channel.apiKey.trim() && !channel.hasApiKey));
         const modelIncomplete = !modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim();
         if (userStorage.enabled && userWebDAVStorage.enabled) {
             message.error("S3/R2 与 WebDAV 不能同时启用");
@@ -167,7 +176,7 @@ export function AppConfigModal() {
     const refreshModels = async () => {
         if (effectiveMode === "remote") return;
         const channels = normalizeLocalChannels(config);
-        if (channels.some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim())) {
+        if (channels.some((channel) => !channel.baseUrl.trim() || (!channel.apiKey.trim() && !channel.hasApiKey))) {
             message.error("请先填写所有本地渠道的 Base URL 和 API Key");
             return;
         }
@@ -245,7 +254,6 @@ export function AppConfigModal() {
         }
         return uniqueModels(await fetchImageModels(configForLocalChannel(config, modelSelectChannel)));
     };
-
 
     const measureStorage = async (provider: UserStorageProvider) => {
         if (!token) {
@@ -330,32 +338,39 @@ export function AppConfigModal() {
                                 {normalizeLocalChannels(config).map((channel, index) => (
                                     <div key={channel.id} className="space-y-2 rounded-md bg-stone-50 p-2 dark:bg-stone-900">
                                         <div className="grid gap-2 md:grid-cols-[130px_150px_minmax(0,1fr)_minmax(0,1fr)_auto]">
-                                            <Input value={channel.name} placeholder="渠道名称" onChange={(event) => patchLocalChannel(channel.id, { name: event.target.value })} />
+                                            <Input value={channel.name} disabled={channel.managed} placeholder="渠道名称" onChange={(event) => patchLocalChannel(channel.id, { name: event.target.value })} />
                                             <Select
-                                                value={channel.protocol}
+                                                value={channel.protocol as ModelChannelProtocol}
                                                 options={[
                                                     { label: "OpenAI", value: "openai" },
                                                     { label: "Gemini", value: "gemini" },
+                                                    { label: "通用 HTTP", value: "http" },
                                                     { label: "Grok2API", value: "grok2api" },
                                                     { label: "MiniMax & METASO", value: "metaso" },
                                                     { label: "APIMart", value: "apimart" },
                                                     { label: "KIE", value: "kie" },
                                                     { label: "MiMo", value: "mimo" },
                                                 ]}
-                                                onChange={(protocol: LocalModelChannel["protocol"]) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
+                                                disabled={channel.managed}
+                                                onChange={(protocol: ModelChannelProtocol) => patchLocalChannel(channel.id, { protocol, baseUrl: modelChannelDefaultBaseUrls[protocol] })}
                                             />
-                                            <Input value={channel.baseUrl} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
-                                            <Input.Password value={channel.apiKey} placeholder="API Key" onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })} />
+                                            <Input value={channel.baseUrl} disabled={channel.managed} placeholder="Base URL" onChange={(event) => patchLocalChannel(channel.id, { baseUrl: event.target.value })} />
+                                            <Input.Password
+                                                value={channel.apiKey}
+                                                disabled={channel.managed}
+                                                placeholder={channel.hasApiKey ? "密钥已由连接中心安全保存" : "API Key"}
+                                                onChange={(event) => patchLocalChannel(channel.id, { apiKey: event.target.value })}
+                                            />
                                             <div className="relative flex flex-wrap gap-2 md:flex-nowrap">
-                                                <Button size="small" onClick={() => openLocalModelSelector(channel)}>
+                                                <Button size="small" disabled={channel.managed} onClick={() => openLocalModelSelector(channel)}>
                                                     选择
                                                 </Button>
-                                                <Button size="small" danger disabled={index === 0 && normalizeLocalChannels(config).length === 1} onClick={() => removeLocalChannel(channel.id)}>
+                                                <Button size="small" danger disabled={channel.managed || (index === 0 && normalizeLocalChannels(config).length === 1)} onClick={() => removeLocalChannel(channel.id)}>
                                                     删除
                                                 </Button>
-                                                {modelChannelApiKeyUrls[channel.protocol] ? (
+                                                {modelChannelApiKeyUrls[channel.protocol as ModelChannelProtocol] ? (
                                                     <div className="w-full md:absolute md:left-0 md:top-8">
-                                                        <Button block type="primary" size="small" href={modelChannelApiKeyUrls[channel.protocol]} target="_blank">
+                                                        <Button block type="primary" size="small" href={modelChannelApiKeyUrls[channel.protocol as ModelChannelProtocol]} target="_blank">
                                                             获取 API Key
                                                         </Button>
                                                     </div>
@@ -381,13 +396,23 @@ export function AppConfigModal() {
                     ) : (
                         <div className="mb-5 rounded-lg border border-stone-200 p-3 text-sm text-stone-500 dark:border-stone-800">
                             <div className="font-medium text-stone-900 dark:text-stone-100">云端渠道</div>
-                            <div className="mt-1">由系统后台渠道转发请求，当前可用 {modelChannel?.availableModels.length || 0} 个模型。</div>
+                            <div className="mt-1">由系统后台或连接中心渠道转发请求，当前可用 {modelConfig.models.length} 个模型。</div>
                         </div>
                     )}
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                         {modelGroups.map((group) => (
                             <Form.Item key={group.modelKey} label={group.defaultLabel} className="mb-4">
-                                <ModelPicker config={modelConfig} value={modelConfig[group.modelKey]} channelId={modelConfig[group.channelKey]} onChange={(model, channelId) => { updateConfig(group.modelKey, model); if (channelId) updateConfig(group.channelKey, channelId); }} capability={group.capability} fullWidth />
+                                <ModelPicker
+                                    config={modelConfig}
+                                    value={modelConfig[group.modelKey]}
+                                    channelId={modelConfig[group.channelKey]}
+                                    onChange={(model, channelId) => {
+                                        updateConfig(group.modelKey, model);
+                                        if (channelId) updateConfig(group.channelKey, channelId);
+                                    }}
+                                    capability={group.capability}
+                                    fullWidth
+                                />
                             </Form.Item>
                         ))}
                     </div>
@@ -416,7 +441,15 @@ export function AppConfigModal() {
                             </Form.Item>
                         ) : isMimoTtsModel(config.audioModel) ? null : (
                             <Form.Item label="默认音频声音" className="mb-4">
-                                {grokTts ? <GrokTtsVoiceSelect config={modelConfig} model={config.audioModel} value={config.grokTtsVoice} enabled={isConfigOpen} onChange={(value) => updateConfig("grokTtsVoice", value)} /> : <Select value={glmTts ? normalizeGlmTtsVoice(config.glmTtsVoice) : config.audioVoice} options={glmTts ? glmTtsVoiceOptions : audioVoiceOptions} onChange={(value) => updateConfig(glmTts ? "glmTtsVoice" : "audioVoice", value)} />}
+                                {grokTts ? (
+                                    <GrokTtsVoiceSelect config={modelConfig} model={config.audioModel} value={config.grokTtsVoice} enabled={isConfigOpen} onChange={(value) => updateConfig("grokTtsVoice", value)} />
+                                ) : (
+                                    <Select
+                                        value={glmTts ? normalizeGlmTtsVoice(config.glmTtsVoice) : config.audioVoice}
+                                        options={glmTts ? glmTtsVoiceOptions : audioVoiceOptions}
+                                        onChange={(value) => updateConfig(glmTts ? "glmTtsVoice" : "audioVoice", value)}
+                                    />
+                                )}
                             </Form.Item>
                         )}
                         {grokTts ? (
@@ -426,7 +459,11 @@ export function AppConfigModal() {
                         ) : null}
                         {!geminiTts ? (
                             <Form.Item label="默认音频格式" className="mb-4">
-                                <Select value={isMimoTtsModel(config.audioModel) ? config.mimoTtsFormat : glmTts ? normalizeGlmTtsFormat(config.glmTtsFormat) : grokTts ? normalizeGrokTtsFormat(config.grokTtsFormat) : config.audioFormat} options={isMimoTtsModel(config.audioModel) ? [...mimoTtsFormatOptions] : glmTts ? glmTtsFormatOptions : grokTts ? grokTtsFormatOptions : audioFormatOptions} onChange={(value) => isMimoTtsModel(config.audioModel) ? updateConfig("mimoTtsFormat", value) : updateConfig(glmTts ? "glmTtsFormat" : grokTts ? "grokTtsFormat" : "audioFormat", value)} />
+                                <Select
+                                    value={isMimoTtsModel(config.audioModel) ? config.mimoTtsFormat : glmTts ? normalizeGlmTtsFormat(config.glmTtsFormat) : grokTts ? normalizeGrokTtsFormat(config.grokTtsFormat) : config.audioFormat}
+                                    options={isMimoTtsModel(config.audioModel) ? [...mimoTtsFormatOptions] : glmTts ? glmTtsFormatOptions : grokTts ? grokTtsFormatOptions : audioFormatOptions}
+                                    onChange={(value) => (isMimoTtsModel(config.audioModel) ? updateConfig("mimoTtsFormat", value) : updateConfig(glmTts ? "glmTtsFormat" : grokTts ? "grokTtsFormat" : "audioFormat", value))}
+                                />
                             </Form.Item>
                         ) : null}
                         {!geminiTts && !isMimoTtsModel(config.audioModel) ? (
@@ -438,14 +475,24 @@ export function AppConfigModal() {
                                     step={0.05}
                                     value={glmTts ? config.glmTtsSpeed : grokTts ? config.grokTtsSpeed : config.audioSpeed}
                                     onChange={(event) => updateConfig(glmTts ? "glmTtsSpeed" : grokTts ? "grokTtsSpeed" : "audioSpeed", event.target.value)}
-                                    onBlur={(event) => updateConfig(glmTts ? "glmTtsSpeed" : grokTts ? "grokTtsSpeed" : "audioSpeed", glmTts ? normalizeGlmTtsSpeed(event.target.value) : grokTts ? normalizeGrokTtsSpeed(event.target.value) : normalizeAudioSpeedValue(event.target.value))}
+                                    onBlur={(event) =>
+                                        updateConfig(
+                                            glmTts ? "glmTtsSpeed" : grokTts ? "grokTtsSpeed" : "audioSpeed",
+                                            glmTts ? normalizeGlmTtsSpeed(event.target.value) : grokTts ? normalizeGrokTtsSpeed(event.target.value) : normalizeAudioSpeedValue(event.target.value),
+                                        )
+                                    }
                                 />
                             </Form.Item>
                         ) : null}
                     </div>
                     <div className="mb-4 grid gap-3 md:grid-cols-3">
                         <FeatureSwitch title="流式传输" description="开启后请求中追加 stream，支持读取中间图片事件并避免长时间无数据。" checked={Boolean(config.streamImages)} onChange={(checked) => updateConfig("streamImages", checked ? "1" : "")} />
-                        <FeatureSwitch title="返回 Base64 图片数据" description="开启后 Image API 请求会追加 response_format: b64_json。" checked={Boolean(config.responseFormatB64Json)} onChange={(checked) => updateConfig("responseFormatB64Json", checked ? "1" : "")} />
+                        <FeatureSwitch
+                            title="返回 Base64 图片数据"
+                            description="开启后 Image API 请求会追加 response_format: b64_json。"
+                            checked={Boolean(config.responseFormatB64Json)}
+                            onChange={(checked) => updateConfig("responseFormatB64Json", checked ? "1" : "")}
+                        />
                         <FeatureSwitch title="Codex CLI 兼容模式" description="开启后减少不兼容参数，并追加防提示词改写前缀。" checked={Boolean(config.codexCli)} onChange={(checked) => updateConfig("codexCli", checked ? "1" : "")} />
                     </div>
                     {canUseUserStorageProvider ? (
@@ -572,7 +619,6 @@ function channelIdForLocalModel(channels: LocalModelChannel[], model: string, cu
 function normalizeImageCount(value: string) {
     return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 3))));
 }
-
 
 function uniqueModels(models: string[]) {
     return Array.from(new Set(models.map((model) => model.trim()).filter(Boolean)));
