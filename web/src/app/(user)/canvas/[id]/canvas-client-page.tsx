@@ -13,7 +13,7 @@ import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask 
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { channelProtocolForConfig, defaultConfig, resolveModelForCapability, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
-import { resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -27,7 +27,7 @@ import { captureVideoFrame, type VideoFramePosition } from "../utils/canvas-vide
 import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasImageNodeType, isPanoramaNodeType } from "../utils/canvas-panorama";
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
-import { App, Button, Dropdown, Modal } from "antd";
+import { App, Button, Dropdown, Modal, Slider } from "antd";
 import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
 import { isGlmTtsModel } from "@/lib/audio-generation";
@@ -389,6 +389,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [openDirectorNodeId, setOpenDirectorNodeId] = useState<string | null>(null);
     const [infoNodeId, setInfoNodeId] = useState<string | null>(null);
     const [cropNodeId, setCropNodeId] = useState<string | null>(null);
+    const [audioTrimNodeId, setAudioTrimNodeId] = useState<string | null>(null);
+    const [audioTrimStart, setAudioTrimStart] = useState(0);
+    const [audioTrimEnd, setAudioTrimEnd] = useState(0);
+    const [audioTrimDuration, setAudioTrimDuration] = useState(0);
+    const [audioTrimPlaying, setAudioTrimPlaying] = useState(false);
+    const [trimmingAudio, setTrimmingAudio] = useState(false);
+    const audioTrimRef = useRef<HTMLAudioElement | null>(null);
     const [maskEditNodeId, setMaskEditNodeId] = useState<string | null>(null);
     const [maskEditModel, setMaskEditModel] = useState("");
     const [maskEditChannelId, setMaskEditChannelId] = useState("");
@@ -833,6 +840,60 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const toolbarNode = toolbarNodeId ? nodeById.get(toolbarNodeId) || null : null;
     const infoNode = infoNodeId ? nodeById.get(infoNodeId) || null : null;
     const cropNode = cropNodeId ? nodeById.get(cropNodeId) || null : null;
+    const audioTrimNode = audioTrimNodeId ? nodeById.get(audioTrimNodeId) || null : null;
+    const audioTrimTooShort = Math.round((audioTrimEnd - audioTrimStart) * 100) < 50;
+
+    useEffect(() => {
+        setAudioTrimPlaying(false);
+        const src = audioTrimNode?.metadata?.content;
+        if (!src) return;
+
+        const audio = new Audio(src);
+        audioTrimRef.current = audio;
+        audio.preload = "metadata";
+        setAudioTrimStart(0);
+        setAudioTrimEnd(0);
+        setAudioTrimDuration(0);
+
+        audio.onloadedmetadata = () => {
+            const duration = Number.isFinite(audio.duration)
+                ? Math.floor(audio.duration * 100) / 100
+                : 0;
+            setAudioTrimDuration(duration);
+            setAudioTrimEnd(duration);
+        };
+        audio.onplay = () => setAudioTrimPlaying(true);
+        audio.onpause = () => setAudioTrimPlaying(false);
+        audio.onended = () => setAudioTrimPlaying(false);
+        audio.onerror = () => message.error("音频加载失败");
+
+        return () => {
+            audio.pause();
+            audio.removeAttribute("src");
+            audio.load();
+            audioTrimRef.current = null;
+        };
+    }, [audioTrimNode?.id, audioTrimNode?.metadata?.content, message]);
+
+    useEffect(() => {
+        if (!audioTrimPlaying) return;
+
+        let frame = 0;
+        const checkEnd = () => {
+            const audio = audioTrimRef.current;
+            if (!audio || audio.paused) return;
+
+            if (audio.currentTime >= audioTrimEnd) {
+                audio.pause();
+            } else {
+                frame = requestAnimationFrame(checkEnd);
+            }
+        };
+
+        frame = requestAnimationFrame(checkEnd);
+        return () => cancelAnimationFrame(frame);
+    }, [audioTrimPlaying, audioTrimEnd]);
+
     const maskEditNode = maskEditNodeId ? nodeById.get(maskEditNodeId) || null : null;
     const maskEditConfig = maskEditNode ? buildGenerationConfig(effectiveConfig, maskEditNode, "image") : null;
     const currentMaskEditModel = maskEditModel || maskEditConfig?.model || "";
@@ -1653,6 +1714,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             ]);
             setSelectedNodeIds(new Set([id]));
             setSelectedConnectionId(null);
+            return id;
         } catch (error) {
             console.error("Upload audio node failed:", error);
             message.error("音频上传失败");
@@ -1660,6 +1722,63 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             hideLoading();
         }
     }, [message]);
+
+    const extractingAudioRef = useRef(new Set<string>());
+
+    const extractAudio = useCallback(async (node: CanvasNodeData, trim?: { start: number; end: number }) => {
+        if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || extractingAudioRef.current.has(node.id)) return;
+        extractingAudioRef.current.add(node.id);
+        if (trim) setTrimmingAudio(true);
+        const hideLoading = message.loading(trim ? "正在截取音频..." : "正在分离音频...", 0);
+        let input: import("mediabunny").Input | undefined;
+        let conversion: import("mediabunny").Conversion | undefined;
+
+        try {
+            if (trim && (!Number.isFinite(trim.start) || !Number.isFinite(trim.end) || trim.start < 0 || Math.round((trim.end - trim.start) * 100) < 50)) {
+                throw new Error("请填写有效的起止时间，至少保留 0.5 秒");
+            }
+            const [{ Input, ALL_FORMATS, BlobSource, Output, WavOutputFormat, BufferTarget, Conversion }, blob] = await Promise.all([
+                import("mediabunny"),
+                resolveMediaUrl(node.metadata.storageKey, node.metadata.content).then(downloadRemoteMedia),
+            ]);
+            input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+            const audioTrack = await input.getPrimaryAudioTrack();
+            if (!audioTrack) throw new Error("该文件没有音轨");
+            if (trim && trim.end > await audioTrack.computeDuration()) throw new Error("结束时间不能超过音频时长");
+
+            const target = new BufferTarget();
+            const output = new Output({ format: new WavOutputFormat(), target });
+            conversion = await Conversion.init({ input, output, tracks: "primary", trim });
+            if (!conversion.isValid) throw new Error("当前浏览器无法解码该文件的音频");
+            await conversion.execute();
+
+            const file = new File([target.buffer!], `${node.title || (trim ? "音频" : "视频")} ${trim ? "截取" : "音频"}.wav`, {
+                type: "audio/wav",
+            });
+            const width = NODE_DEFAULT_SIZE[CanvasNodeType.Audio].width;
+            hideLoading();
+            const audioNodeId = await createAudioFileNode(file, {
+                x: node.position.x + node.width + 96 + width / 2,
+                y: node.position.y + node.height / 2,
+            });
+
+            if (audioNodeId) {
+                setConnections((prev) => [
+                    ...prev,
+                    { id: nanoid(), fromNodeId: node.id, toNodeId: audioNodeId },
+                ]);
+            }
+            return audioNodeId;
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "音频处理失败");
+        } finally {
+            await conversion?.cancel().catch(console.error);
+            input?.dispose();
+            extractingAudioRef.current.delete(node.id);
+            hideLoading();
+            if (trim) setTrimmingAudio(false);
+        }
+    }, [createAudioFileNode, message]);
 
     const createTextNodeFromClipboard = useCallback(
         (text: string) => {
@@ -4084,6 +4203,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     onToggleDialog={(node) => setDialogNodeId((current) => (current === node.id ? null : node.id))}
                     onGenerateImage={generateImageFromTextNode}
                     onUpload={(node) => handleUploadRequest(node.id)}
+                    onExtractAudio={(node) => void extractAudio(node)}
+                    onTrimAudio={(node) => setAudioTrimNodeId(node.id)}
                     onDownload={downloadNodeImage}
                     onSaveAsset={(node) => void saveNodeAsset(node)}
                     onUploadMediaToCloud={(node) => void uploadNodeMediaToCloud(node)}
@@ -4200,6 +4321,86 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 <input ref={imageInputRef} type="file" accept="image/*,video/*,audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav" className="hidden" onChange={handleImageInputChange} />
 
                 <CanvasNodeInfoModal node={infoNode} open={Boolean(infoNode)} onClose={() => setInfoNodeId(null)} />
+
+                <Modal
+                    title="截取音频"
+                    open={Boolean(audioTrimNode)}
+                    centered
+                    width={360}
+                    confirmLoading={trimmingAudio}
+                    closable={!trimmingAudio}
+                    okText="确认截取"
+                    cancelText="取消"
+                    okButtonProps={{ disabled: audioTrimTooShort }}
+                    cancelButtonProps={{ disabled: trimmingAudio }}
+                    onCancel={() => {
+                        if (!trimmingAudio) setAudioTrimNodeId(null);
+                    }}
+                    onOk={async () => {
+                        if (!audioTrimNode || audioTrimTooShort) return;
+
+                        audioTrimRef.current?.pause();
+                        const id = await extractAudio(audioTrimNode, {
+                            start: audioTrimStart,
+                            end: audioTrimEnd,
+                        });
+                        if (id) setAudioTrimNodeId(null);
+                    }}
+                    modalRender={(content) => <div className="select-none" data-canvas-no-zoom>{content}</div>}
+                >
+                    <div className="space-y-4 py-2">
+                        <Slider
+                            {...{ allowCross: false, pushable: 0.5 }}
+                            range={{ draggableTrack: true }}
+                            min={0}
+                            max={audioTrimDuration || 1}
+                            step={0.01}
+                            value={[audioTrimStart, audioTrimEnd]}
+                            disabled={trimmingAudio || audioTrimDuration < 0.5}
+                            ariaLabelForHandle={["截取开始时间", "截取结束时间"]}
+                            tooltip={{ formatter: (value) => `${(value ?? 0).toFixed(2)} 秒` }}
+                            onChange={([start, end]) => {
+                                if (Math.round((end - start) * 100) < 50) return;
+                                audioTrimRef.current?.pause();
+                                setAudioTrimStart(start);
+                                setAudioTrimEnd(end);
+                            }}
+                        />
+
+                        <div className="flex justify-between text-xs tabular-nums opacity-60">
+                            <span>{audioTrimStart.toFixed(2)} 秒</span>
+                            <span>选中 {(audioTrimEnd - audioTrimStart).toFixed(2)} 秒</span>
+                            <span>{audioTrimEnd.toFixed(2)} 秒</span>
+                        </div>
+
+                        <div className="flex justify-center">
+                            <Button
+                                type="text"
+                                shape="circle"
+                                aria-label={audioTrimPlaying ? "暂停" : "播放"}
+                                disabled={trimmingAudio || audioTrimTooShort}
+                                icon={audioTrimPlaying ? <Pause className="size-4" /> : <Play className="size-4" />}
+                                onClick={() => {
+                                    const audio = audioTrimRef.current;
+                                    if (!audio) return;
+
+                                    if (!audio.paused) {
+                                        audio.pause();
+                                        return;
+                                    }
+
+                                    if (audio.currentTime < audioTrimStart || audio.currentTime >= audioTrimEnd) {
+                                        audio.currentTime = audioTrimStart;
+                                    }
+
+                                    void audio.play().catch((error) => {
+                                        if (error.name !== "AbortError") message.error("音频试听失败");
+                                    });
+                                }}
+                            />
+                        </div>
+                    </div>
+                </Modal>
 
                 {cropNode?.metadata?.content ? <CanvasNodeCropDialog dataUrl={cropNode.metadata.content} open={Boolean(cropNode)} onClose={() => setCropNodeId(null)} onConfirm={(crop) => cropImageNode(cropNode!, crop)} /> : null}
 

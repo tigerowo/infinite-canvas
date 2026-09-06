@@ -1,8 +1,26 @@
 "use client";
 
+import { downloadRemoteMedia } from "@/services/file-storage";
+import { getProxyUrl } from "@/services/image-storage";
+
 export type VideoFramePosition = "first" | "last" | "current";
 
 export async function captureVideoFrame(source: string, position: VideoFramePosition, currentTime: number) {
+    try {
+        return await captureFrameDirect(source, position, currentTime);
+    } catch (error) {
+        if (getProxyUrl(source) === source) throw error;
+
+        const localUrl = URL.createObjectURL(await downloadRemoteMedia(source));
+        try {
+            return await captureFrameDirect(localUrl, position, currentTime);
+        } finally {
+            URL.revokeObjectURL(localUrl);
+        }
+    }
+}
+
+async function captureFrameDirect(source: string, position: VideoFramePosition, currentTime: number) {
     const video = document.createElement("video");
     video.crossOrigin = "anonymous";
     video.muted = true;
