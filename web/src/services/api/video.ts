@@ -1,5 +1,6 @@
 import axios from "axios";
 
+import { createLecSeedRequest, usesLecSeedJSON } from "@/extensions/lec-video/request";
 import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
@@ -299,6 +300,7 @@ async function create88APIVideoRequestBody(config: AiConfig, model: string, prom
 }
 
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    if (usesLecSeedJSON(model, videoChannelProtocol(config, model))) return createLecSeedRequest(model, prompt, config.size, input);
     if (videoChannelProtocol(config, model) === "88api") return create88APIVideoRequestBody(config, model, prompt, input);
     const size = normalizeVideoSize(config.size);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return createGeminiVeoRequestBody(config, model, prompt, input);

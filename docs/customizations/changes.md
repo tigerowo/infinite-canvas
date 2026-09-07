@@ -11,5 +11,6 @@
 | EXT-0005 | [修复算力点日志 Space 弃用警告](changes/0005-admin-space.md) | 组件渲染验证通过 | `web/src/app/(admin)/admin/credit-logs/page.tsx` |
 | EXT-0006 | [修复 TOS 上传失败](changes/0006-s3-tos.md) | 本地测试及真实 TOS 上传读取通过 | `service/storage.go`、回归测试、`Dockerfile` |
 | EXT-0007 | [修复视频模型别名分类](changes/0007-model-capabilities.md) | 前后端分类回归通过；生成验证限制见记录 | `web/src/stores/use-config-store.ts`、`service/settings.go`、回归测试 |
+| EXT-0008 | [LEC Seedance 请求格式适配](changes/0008-lec-video.md) | 请求构造回归通过；计费生成待验证 | `web/src/services/api/video.ts` |
 
 后续按 [单项修改模板](change-template.md) 新建记录，不把多个功能堆入同一份日志。
