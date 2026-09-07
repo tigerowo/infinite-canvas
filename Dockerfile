@@ -15,6 +15,7 @@ FROM golang:1.25-alpine AS api-build
 WORKDIR /app
 COPY go.mod go.sum ./
 COPY config ./config
+COPY extensions ./extensions
 COPY handler ./handler
 COPY middleware ./middleware
 COPY model ./model

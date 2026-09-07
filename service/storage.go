@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"github.com/tigerowo/infinite-canvas/extensions/s3compat"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 	"gorm.io/gorm"
@@ -755,12 +756,10 @@ func newS3Request(method string, provider model.StorageProvider, objectKey strin
 }
 
 func newS3RequestWithQuery(method string, provider model.StorageProvider, objectKey string, query url.Values, body io.Reader, contentLength int64) (*http.Request, error) {
-	endpoint, err := url.Parse(strings.TrimRight(provider.Endpoint, "/"))
+	endpoint, err := s3compat.ObjectURL(provider.Endpoint, provider.Bucket, objectKey)
 	if err != nil {
 		return nil, err
 	}
-	escapedKey := strings.TrimLeft(objectKey, "/")
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + provider.Bucket + "/" + escapedKey
 	if query != nil {
 		endpoint.RawQuery = query.Encode()
 	}
@@ -771,11 +770,11 @@ func newS3RequestWithQuery(method string, provider model.StorageProvider, object
 	if contentLength > 0 {
 		request.ContentLength = contentLength
 	}
-	signS3Request(request, provider, escapedKey)
+	signS3Request(request, provider)
 	return request, nil
 }
 
-func signS3Request(request *http.Request, provider model.StorageProvider, objectKey string) {
+func signS3Request(request *http.Request, provider model.StorageProvider) {
 	nowTime := time.Now().UTC()
 	amzDate := nowTime.Format("20060102T150405Z")
 	dateStamp := nowTime.Format("20060102")
@@ -787,7 +786,7 @@ func signS3Request(request *http.Request, provider model.StorageProvider, object
 	request.Header.Set("Host", request.URL.Host)
 	request.Header.Set("X-Amz-Date", amzDate)
 	request.Header.Set("X-Amz-Content-Sha256", payloadHash)
-	canonicalURI := "/" + provider.Bucket + "/" + strings.ReplaceAll(url.PathEscape(objectKey), "%2F", "/")
+	canonicalURI := request.URL.EscapedPath()
 	canonicalHeaders := "host:" + request.URL.Host + "\n" + "x-amz-content-sha256:" + payloadHash + "\n" + "x-amz-date:" + amzDate + "\n"
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 	canonicalRequest := request.Method + "\n" + canonicalURI + "\n" + request.URL.RawQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash
