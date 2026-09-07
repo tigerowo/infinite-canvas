@@ -1,7 +1,7 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
-import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
+import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
-import { imageToDataUrl } from "@/services/image-storage";
+import { publicImageURL, geminiPublicPart } from "@/extensions/public-media/references";
 import { channelProtocolForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import type { CanvasAgentProtocolMessage, CanvasAgentToolCall, CanvasAgentToolMode } from "@/app/(user)/canvas/types";
 import type { CanvasAgentToolDefinition } from "@/app/(user)/canvas/agent/canvas-agent-tools";
@@ -112,7 +112,7 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         activeChannelId: input.config.textChannelId || input.config.activeChannelId,
         textChannelId: input.config.textChannelId,
     };
-    let messages = input.messages;
+    let messages = await normalizeAgentImages(input.messages);
     let toolMode = input.toolMode;
     let requestError: unknown;
 
@@ -143,6 +143,13 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         }
     }
     throw requestError;
+}
+
+async function normalizeAgentImages(messages: CanvasAgentProtocolMessage[]) {
+    return Promise.all(messages.map(async (message) => {
+        if ((message.role !== "user" && message.role !== "system") || !Array.isArray(message.content)) return message;
+        return { ...message, content: await Promise.all(message.content.map(async (part) => part.type === "image_url" ? { ...part, image_url: { url: await publicImageURL({ url: part.image_url.url, dataUrl: part.image_url.url }) } } : part)) };
+    })) as Promise<CanvasAgentProtocolMessage[]>;
 }
 
 export function canvasAgentSystemPrompt(config: AiConfig, prompt: string, jsonTools: CanvasAgentToolDefinition[] = [], nativeTools = false) {
@@ -308,7 +315,7 @@ async function requestGeminiCompletion(config: AiConfig, systemPrompt: string, m
         }
         const parts = await Promise.all((typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content).map(async (part) => {
             if (part.type === "text") return { text: part.text };
-            return dataUrlToGeminiInlineData(await imageToDataUrl({ dataUrl: part.image_url.url, url: part.image_url.url }));
+            return geminiPublicPart(await publicImageURL({ dataUrl: part.image_url.url, url: part.image_url.url }));
         }));
         return { role: "user", parts };
     }));

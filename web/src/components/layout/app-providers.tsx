@@ -8,6 +8,7 @@ import { App, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 
 import { ClientRootInit } from "@/components/layout/client-root-init";
+import { usePolicySync } from "@/extensions/model-capabilities/use-policy-sync";
 import { getAntThemeConfig } from "@/lib/app-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 
@@ -22,6 +23,7 @@ const queryClient = new QueryClient({
 });
 
 export function AppProviders({ children }: { children: ReactNode }) {
+    usePolicySync();
     const theme = useThemeStore((state) => state.theme);
     const dark = theme === "dark";
 

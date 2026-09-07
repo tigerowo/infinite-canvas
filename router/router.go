@@ -1,6 +1,8 @@
 package router
 
 import (
+	"github.com/tigerowo/infinite-canvas/extensions/modelcapabilities"
+	"github.com/tigerowo/infinite-canvas/extensions/publicmedia"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -13,6 +15,7 @@ func New() *gin.Engine {
 	router.RedirectTrailingSlash = false
 	_ = router.SetTrustedProxies(nil)
 	api := router.Group("/api")
+	if err := modelcapabilities.RegisterPolicy(api.Group("/extensions"), api.Group("/extensions", middleware.AdminAuth)); err != nil { panic(err) }
 	api.GET("/health", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
@@ -43,6 +46,7 @@ func New() *gin.Engine {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
 	})
 	v1 := api.Group("/v1", middleware.UserAuth)
+	publicmedia.Register(api.Group("/extensions/public-media", middleware.UserAuth))
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))
 	v1.POST("/responses", gin.WrapF(handler.AIResponses))

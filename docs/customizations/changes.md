@@ -12,5 +12,6 @@
 | EXT-0006 | [修复 TOS 上传失败](changes/0006-s3-tos.md) | 本地测试及真实 TOS 上传读取通过 | `service/storage.go`、回归测试、`Dockerfile` |
 | EXT-0007 | [修复视频模型别名分类](changes/0007-model-capabilities.md) | 前后端分类回归通过；生成验证限制见记录 | `web/src/stores/use-config-store.ts`、`service/settings.go`、回归测试 |
 | EXT-0008 | [LEC Seedance 请求格式适配](changes/0008-lec-video.md) | 请求构造回归通过；计费生成待验证 | `web/src/services/api/video.ts` |
+| EXT-0009 | [素材公网 URL 与模型能力策略](changes/0009-public-media.md) | 后端包测试通过；前端需登录后验证真实 S3 链接和后台设置 | `extensions/publicmedia/`、`extensions/modelcapabilities/`、素材请求接入点 |
 
 后续按 [单项修改模板](change-template.md) 新建记录，不把多个功能堆入同一份日志。

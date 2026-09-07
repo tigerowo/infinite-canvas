@@ -1,4 +1,5 @@
 import axios from "axios";
+import { publicMediaURL } from "@/extensions/public-media/references";
 import { nanoid } from "nanoid";
 
 import { audioMimeType, isGlmTtsModel, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue, normalizeGlmTtsFormat, normalizeGlmTtsSpeed, normalizeGlmTtsVoice } from "@/lib/audio-generation";
@@ -6,7 +7,7 @@ import { isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, 
 import { isMimoPresetTtsModel, isMimoTtsModel, isMimoVoiceCloneModel, isMimoVoiceDesignModel, normalizeMimoTtsFormat, normalizeMimoTtsVoice } from "@/lib/mimo-tts";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, isGeminiTtsModel } from "@/lib/gemini";
 import { geminiPcmBase64ToWav, normalizeGeminiTtsVoice } from "@/lib/gemini-tts";
-import { resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { buildApiUrl, channelIdForActiveModel, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceAudio } from "@/types/media";
@@ -281,16 +282,10 @@ async function buildMiMoNativeRequest(config: AiConfig, model: string, prompt: s
 
 async function referenceAudioDataUrl(referenceAudio?: ReferenceAudio) {
     if (!referenceAudio) throw new Error("请连接并选择参考音频节点");
-    const url = await resolveMediaUrl(referenceAudio.storageKey, referenceAudio.url);
-    if (!url) throw new Error("参考音频不可用");
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`读取参考音频失败（${response.status}）`);
-    const blob = await response.blob();
-    const mimeType = normalizeCloneMimeType(blob.type) || normalizeCloneMimeType(referenceAudio.type);
+    const url = await publicMediaURL({ storageKey: referenceAudio.storageKey, url: referenceAudio.url, type: referenceAudio.type });
+    const mimeType = normalizeCloneMimeType(referenceAudio.type) || "audio/mpeg";
     if (!mimeType) throw new Error("参考音频仅支持 MP3 或 WAV");
-    const base64 = await blobToBase64(blob);
-    if (base64.length > 10 * 1024 * 1024) throw new Error("参考音频 Base64 编码后不能超过 10MB");
-    return `data:${mimeType};base64,${base64}`;
+    return url;
 }
 
 function normalizeCloneMimeType(value: string) {
@@ -300,18 +295,6 @@ function normalizeCloneMimeType(value: string) {
     return "";
 }
 
-function blobToBase64(blob: Blob) {
-    return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onerror = () => reject(new Error("读取参考音频失败"));
-        reader.onload = () => {
-            const value = typeof reader.result === "string" ? reader.result : "";
-            const separator = value.indexOf(",");
-            resolve(separator >= 0 ? value.slice(separator + 1) : value);
-        };
-        reader.readAsDataURL(blob);
-    });
-}
 
 function decodeMiMoAudio(payload: MiMoAudioResponse, format: string) {
     const data = payload.choices?.[0]?.message?.audio?.data?.trim() || "";

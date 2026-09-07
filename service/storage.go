@@ -479,16 +479,7 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 		return DownloadedStorageObject{}, err
 	}
 
-	providers := []model.StorageProvider{}
-	if object.CreatedBy != "" && object.CreatedBy != "anonymous" {
-		if config, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr == nil && found {
-			providers = append(providers, userStorageProvidersForOwner(config.StorageProvider, object.CreatedBy)...)
-		}
-	}
-	if settings, loadErr := repository.GetSettings(); loadErr == nil {
-		providers = append(providers, normalizePrivateStorageSetting(settings.Private.Storage).Providers...)
-	}
-	if provider, ok := findStorageProviderForObject(object, providers); ok && storageProviderConfigured(provider) {
+	if provider, ok := StorageProviderForObject(object); ok && storageProviderConfigured(provider) {
 		var stream storageObjectStream
 		var readErr error
 		switch provider.Type {
@@ -502,6 +493,24 @@ func DownloadStorageObject(id string, rangeHeader string) (DownloadedStorageObje
 		}
 	}
 
+	return downloadPublicStorageObject(object, rangeHeader)
+}
+
+// StorageProviderForObject resolves the existing object's owner and global storage configuration.
+func StorageProviderForObject(object model.StorageObject) (model.StorageProvider, bool) {
+	providers := []model.StorageProvider{}
+	if object.CreatedBy != "" && object.CreatedBy != "anonymous" {
+		if config, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr == nil && found {
+			providers = append(providers, userStorageProvidersForOwner(config.StorageProvider, object.CreatedBy)...)
+		}
+	}
+	if settings, loadErr := repository.GetSettings(); loadErr == nil {
+		providers = append(providers, normalizePrivateStorageSetting(settings.Private.Storage).Providers...)
+	}
+	return findStorageProviderForObject(object, providers)
+}
+
+func downloadPublicStorageObject(object model.StorageObject, rangeHeader string) (DownloadedStorageObject, error) {
 	if object.PublicURL != "" {
 		request, err := http.NewRequest(http.MethodGet, object.PublicURL, nil)
 		if err != nil {

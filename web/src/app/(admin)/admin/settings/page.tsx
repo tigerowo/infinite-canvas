@@ -11,6 +11,7 @@ import { ChannelModelSelectorModal } from "@/components/channel-model-selector-m
 import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
+import { ModelPolicyPanel } from "@/extensions/model-capabilities/policy-panel";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const jsonEditorTheme = EditorView.theme({
@@ -317,6 +318,7 @@ export default function AdminSettingsPage() {
     return (
         <main className="p-3 md:p-6">
             <Flex vertical gap={16}>
+                <ModelPolicyPanel />
                 <Card variant="borderless">
                     <Flex justify="space-between" align="center" gap={16} wrap>
                         <Tabs

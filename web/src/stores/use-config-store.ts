@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { isCustomVideoModel } from "@/extensions/model-capabilities/config";
+import { modelTypeOverride } from "@/extensions/model-capabilities/policy";
 import { directAIProviderForProtocol, type DirectAIProvider, type ModelChannelProtocol } from "@/lib/model-channel";
 import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
@@ -229,6 +230,8 @@ function preferredModel(models: string[], predicate: (model: string) => boolean)
 }
 
 function isVideoModelName(model: string) {
+    const override = modelTypeOverride(model);
+    if (override) return override === "video";
     if (isCustomVideoModel(model)) return true;
     const value = model.toLowerCase();
     return (
@@ -274,6 +277,8 @@ function isVideoModelName(model: string) {
 }
 
 function isImageModelName(model: string) {
+    const override = modelTypeOverride(model);
+    if (override) return override === "image";
     const value = model.toLowerCase();
     return !isVideoModelName(model) && !isAudioModelName(model) && (
         value.includes("image") ||
@@ -312,16 +317,22 @@ function isImageModelName(model: string) {
 }
 
 function isAudioModelName(model: string) {
+    const override = modelTypeOverride(model);
+    if (override) return override === "audio";
     const value = model.toLowerCase();
     return value.includes("audio") || value.includes("tts") || value.includes("speech") || value.includes("voice") || value.includes("music") || value.includes("sound") || value.includes("elevenlabs") || value.includes("suno") || value.includes("lyrics") || value.includes("vocal") || value.includes("midi") || value.includes("wav");
 }
 
 function isTextModelName(model: string) {
+    const override = modelTypeOverride(model);
+    if (override) return override === "text";
     return !isImageModelName(model) && !isVideoModelName(model) && !isAudioModelName(model);
 }
 
 export function modelMatchesCapability(model: string, capability?: ModelCapability, protocol = "") {
     if (!capability) return true;
+    const override = modelTypeOverride(model);
+    if (override) return override === capability;
     if (protocol === "gemini") {
         const value = model.toLowerCase();
         const video = /^models\/veo-|^veo-/.test(value);

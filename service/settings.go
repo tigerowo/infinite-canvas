@@ -421,6 +421,7 @@ func repairDefaultModel(current string, models []string, preferred func(string) 
 }
 
 func isVideoModelName(modelName string) bool {
+	if kind := modelcapabilities.Override(modelName); kind != "" { return kind == "video" }
 	if modelcapabilities.IsVideo(modelName) {
 		return true
 	}
@@ -429,11 +430,13 @@ func isVideoModelName(modelName string) bool {
 }
 
 func isImageModelName(modelName string) bool {
+	if kind := modelcapabilities.Override(modelName); kind != "" { return kind == "image" }
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") || strings.Contains(name, "image")
 }
 
 func isTextModelName(modelName string) bool {
+	if kind := modelcapabilities.Override(modelName); kind != "" { return kind == "text" }
 	return !isImageModelName(modelName) && !isVideoModelName(modelName)
 }
 

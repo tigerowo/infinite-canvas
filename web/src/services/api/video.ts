@@ -1,15 +1,14 @@
 import axios from "axios";
 
 import { createLecSeedRequest, usesLecSeedJSON } from "@/extensions/lec-video/request";
-import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
+import { publicImageURL, publicMediaURL } from "@/extensions/public-media/references";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
-import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
+import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "./protocols/kling-models";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
-import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -229,7 +228,7 @@ async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, p
     const aspectRatio = normalizeSeedanceRatio(config.size);
     if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
 
-    const urls = await Promise.all(input.references.map((reference) => imageToDataUrl(reference)));
+    const urls = await Promise.all(input.references.map(publicImageURL));
     if (urls.length === 1) body.image = { url: urls[0] };
     else if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
 
@@ -426,16 +425,15 @@ async function createMiniMaxH3VideoRequestBody(config: AiConfig, model: string, 
     };
 }
 
-async function miniMaxReferenceValue(value: Promise<string | File>) {
-    const reference = await value;
-    return typeof reference === "string" ? reference : readFileAsDataUrl(reference);
+async function miniMaxReferenceValue(value: Promise<string>) {
+    return value;
 }
 
 async function createCogVideoX3RequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     if (input.videoReferences.length || input.audioReferences.length) throw new VideoRequestError("CogVideoX-3 不支持参考视频或参考音频");
     const frames = [input.firstFrame, input.lastFrame].filter((frame): frame is ReferenceImage => Boolean(frame));
     const references = (frames.length ? frames : input.references).slice(0, 2);
-    const imageUrls = await Promise.all(references.map(imageToDataUrl));
+    const imageUrls = await Promise.all(references.map(publicImageURL));
     return {
         model,
         prompt,
@@ -562,17 +560,7 @@ async function normalizeKIEKlingElementList(value: AiConfig["videoElementList"] 
 }
 
 async function elementReferenceToInputUrl(reference: VideoElementReference) {
-    if (reference.kind === "image") {
-        const resolvedUrl = await resolveImageUrl(reference.storageKey, "");
-        for (const url of [reference.url, resolvedUrl]) {
-            const publicUrl = publicHttpUrl(url);
-            if (publicUrl) return publicUrl;
-        }
-        if (reference.dataUrl) return reference.dataUrl;
-        return imageToDataUrl({ dataUrl: reference.dataUrl || reference.url || resolvedUrl, storageKey: reference.storageKey });
-    }
-    const resolvedUrl = await resolveMediaUrl(reference.storageKey, reference.url || "");
-    return publicHttpUrl(resolvedUrl) || publicHttpUrl(reference.url) || resolvedUrl || reference.url || "";
+    return reference.kind === "image" ? publicImageURL(reference) : publicMediaURL(reference);
 }
 
 function normalizeKlingV26AspectRatio(value: string) {
@@ -587,61 +575,24 @@ function normalizeVideoReferenceInput(input: ReferenceImage[] | VideoReferenceIn
     return { references: input.references || [], videoReferences: input.videoReferences || [], audioReferences: input.audioReferences || [], firstFrame: input.firstFrame || null, lastFrame: input.lastFrame || null };
 }
 
-async function imageReferenceToFile(image: ReferenceImage) {
-    return dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) });
-}
-
 async function imageReferenceToFormValue(image: ReferenceImage) {
-    const resolvedUrl = await resolveImageUrl(image.storageKey, "");
-    for (const url of [image.url, resolvedUrl, image.dataUrl]) {
-        const publicUrl = publicHttpUrl(url);
-        if (publicUrl) return publicUrl;
-    }
-    return imageReferenceToFile(image);
-}
-
-async function mediaReferenceToFile(media: ReferenceVideo | ReferenceAudio) {
-    const url = await resolveMediaUrl(media.storageKey, media.url);
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`参考素材读取失败：${response.status}`);
-    const blob = await response.blob();
-    return new File([blob], media.name || "reference", { type: media.type || blob.type || "application/octet-stream" });
+    return publicImageURL(image);
 }
 
 async function mediaReferenceToFormValue(media: ReferenceVideo | ReferenceAudio) {
-    const resolvedUrl = await resolveMediaUrl(media.storageKey, media.url);
-    const publicUrl = publicHttpUrl(resolvedUrl) || publicHttpUrl(media.url);
-    if (publicUrl) return publicUrl;
-    return mediaReferenceToFile(media);
+    return publicMediaURL(media);
 }
 
 async function referenceTo88APIUrl(reference: ReferenceImage | ReferenceVideo | ReferenceAudio) {
-    const resolvedUrl = "dataUrl" in reference
-        ? await resolveImageUrl(reference.storageKey, reference.url || reference.dataUrl)
-        : await resolveMediaUrl(reference.storageKey, reference.url);
-    for (const value of [reference.url, resolvedUrl, "dataUrl" in reference ? reference.dataUrl : ""]) {
-        const url = publicHttpUrl(value);
-        if (url) return url;
-    }
-    throw new VideoRequestError("88API 参考素材必须具有可公开访问的网络地址，请先配置对象存储或上传素材");
+    return "dataUrl" in reference ? publicImageURL(reference) : publicMediaURL(reference);
 }
 
 async function imageToAgnesReference(image: ReferenceImage) {
-    const resolvedUrl = await resolveImageUrl(image.storageKey, "");
-    for (const url of [image.dataUrl, image.url, resolvedUrl]) {
-        const publicUrl = publicHttpUrl(url);
-        if (publicUrl) return publicUrl;
-    }
-    return imageToDataUrl(image);
+    return publicImageURL(image);
 }
 
 async function agnesVideoV25ReferenceUrl(reference: ReferenceImage | ReferenceVideo | ReferenceAudio) {
-    const resolvedUrl = "dataUrl" in reference
-        ? await resolveImageUrl(reference.storageKey, reference.url || "")
-        : await resolveMediaUrl(reference.storageKey, reference.url);
-    const url = publicHttpUrl(reference.url) || ("dataUrl" in reference ? publicHttpUrl(reference.dataUrl) : "") || publicHttpUrl(resolvedUrl);
-    if (!url) throw new VideoRequestError("Agnes Video 2.5 的参考素材必须具有公网访问地址");
-    return url;
+    return referenceTo88APIUrl(reference);
 }
 
 function publicHttpUrl(value?: string) {
@@ -753,6 +704,7 @@ function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: 
 }
 
 async function createGeminiVeoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    if (input.firstFrame || input.lastFrame || input.references.length) throw new VideoRequestError("原生 Gemini Veo 暂不支持 S3 公网参考图，请使用支持公网 URL 的视频渠道");
     if (input.videoReferences.length) throw new VideoRequestError("Gemini Veo 不支持普通参考视频，请移除后重试");
     if (input.audioReferences.length) throw new VideoRequestError("Gemini Veo 不支持参考音频，请移除后重试");
     if (input.lastFrame && !input.firstFrame) throw new VideoRequestError("请先添加首帧图片");
@@ -762,12 +714,6 @@ async function createGeminiVeoRequestBody(config: AiConfig, model: string, promp
     if (input.references.length > 3) throw new VideoRequestError("Veo 3.1 参考图最多 3 张");
 
     const instance: Record<string, unknown> = { prompt };
-    if (input.firstFrame) instance.image = dataUrlToGeminiInlineData(await imageToDataUrl(input.firstFrame));
-    if (input.lastFrame) instance.lastFrame = dataUrlToGeminiInlineData(await imageToDataUrl(input.lastFrame));
-    if (input.references.length) {
-        const images = await Promise.all(input.references.map(imageToDataUrl));
-        instance.referenceImages = images.map((image) => ({ image: dataUrlToGeminiInlineData(image), referenceType: "asset" }));
-    }
     const resolution = normalizeGeminiVideoResolution(config.vquality);
     const forceEightSeconds = resolution !== "720p" || hasFrames || input.references.length > 0;
     const aspectRatio = normalizeGeminiVideoRatio(config.size);

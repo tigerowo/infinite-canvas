@@ -1,11 +1,10 @@
 import axios from "axios";
+import { publicImageURL, geminiPublicPart } from "@/extensions/public-media/references";
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
-import { dataUrlToFile } from "@/lib/image-utils";
 import { isKIESeedreamLayerDecompositionModel } from "@/lib/kie-models";
 import { isMimoChannel, mimoModels } from "@/lib/mimo-tts";
-import { dataUrlToGeminiInlineData, geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
-import { imageToDataUrl, resolveImageUrl } from "@/services/image-storage";
+import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig, normalizeGeminiBaseUrl } from "@/lib/gemini";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -721,7 +720,7 @@ async function createGrokImageEditBody(config: AiConfig, prompt: string, referen
     const body: Record<string, unknown> = {
         model: config.model,
         prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
-        images: await Promise.all(references.map(async (image) => ({ url: await imageToDataUrl(image) }))),
+        images: await Promise.all(references.map(async (image) => ({ url: await publicImageURL(image) }))),
     };
     if (params.n > 1) body.n = params.n;
     applyImageGenerationParams(body, config, params, "edit");
@@ -779,8 +778,8 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
         formData.set("stream", "true");
         formData.set("partial_images", String(params.streamPartialImages));
     }
-    const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => formData.append("image", file));
+    const urls = await Promise.all(references.map((image) => publicImageURL(image)));
+    urls.forEach((url) => formData.append("image", url));
 
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
@@ -947,7 +946,7 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
-    const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+    const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => publicImageURL(image))) : [];
     const useConcurrentSingleRequests = isGeminiConfig(config) || config.apiMode === "responses" || config.apiMode === "chat" || config.codexCli || config.streamImages || isZhipuImageModel(config.model);
     if (params.n > 1 && useConcurrentSingleRequests) {
         const results = await Promise.allSettled(Array.from({ length: params.n }, () => requestImages({ ...config, count: "1" }, prompt, references)));
@@ -1048,16 +1047,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         };
     }
     if (references.length && isAgnesImageModel(config.model)) {
-        const imageUrls = await Promise.all(
-            references.map(async (ref) => {
-                const resolvedUrl = await resolveImageUrl(ref.storageKey, "");
-                for (const url of [ref.dataUrl, ref.url, resolvedUrl]) {
-                    const publicUrl = publicHttpUrl(url);
-                    if (publicUrl) return publicUrl;
-                }
-                return imageToDataUrl(ref);
-            }),
-        );
+        const imageUrls = await Promise.all(references.map((ref) => publicImageURL(ref)));
         const body: Record<string, unknown> = {
             model: config.model,
             prompt: withPromptGuard(config, withSystemPrompt(config, prompt)),
@@ -1071,7 +1061,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         };
     }
     if (config.apiMode === "chat" && !isZhipuImageModel(config.model)) {
-        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => publicImageURL(image))) : [];
         return {
             method: "POST",
             headers: jsonHeaders,
@@ -1079,7 +1069,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         };
     }
     if (config.apiMode === "responses" && !isZhipuImageModel(config.model)) {
-        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => imageToDataUrl(image))) : [];
+        const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => publicImageURL(image))) : [];
         const body: Record<string, unknown> = {
             model: config.model,
             input: createResponsesInput(config, withSystemPrompt(config, prompt), inputImageDataUrls),
@@ -1120,8 +1110,8 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
             formData.set("partial_images", String(params.streamPartialImages));
         }
         if (params.size) formData.set("size", params.size);
-        const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-        files.forEach((file) => formData.append("image", file));
+        const urls = await Promise.all(references.map((image) => publicImageURL(image)));
+        urls.forEach((url) => formData.append("image", url));
         return { method: "POST", headers: tokenHeaders, body: formData };
     }
     if (isAgnesImageModel(config.model)) {
@@ -1243,8 +1233,8 @@ async function requestGeminiImageSingle(config: AiConfig, prompt: string, refere
 async function createGeminiImageBody(config: AiConfig, prompt: string, references: ReferenceImage[], params: ImageRequestParams) {
     const image = geminiImageSettings(config.model, config.quality, config.size, params.size);
     const parts: Array<Record<string, unknown>> = [{ text: withPromptGuard(config, prompt) }];
-    const dataUrls = await Promise.all(references.map(imageToDataUrl));
-    parts.push(...dataUrls.map(dataUrlToGeminiInlineData));
+    const dataUrls = await Promise.all(references.map(publicImageURL));
+    parts.push(...dataUrls.map(geminiPublicPart));
     const systemPrompt = (config.systemPrompts.image || config.systemPrompt).trim();
     return {
         model: config.model,
@@ -1339,7 +1329,7 @@ async function createGeminiTextBody(config: AiConfig, messages: ChatCompletionMe
         const parts: Array<Record<string, unknown>> = [];
         for (const part of typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content) {
             if (part.type === "text") parts.push({ text: part.text });
-            else parts.push(dataUrlToGeminiInlineData(await imageToDataUrl({ dataUrl: part.image_url.url, url: part.image_url.url })));
+            else parts.push(geminiPublicPart(await publicImageURL({ dataUrl: part.image_url.url, url: part.image_url.url })));
         }
         contents.push({ role: message.role === "assistant" ? "model" : "user", parts });
     }
@@ -1409,32 +1399,12 @@ function applyAgnesImageSize(
     body.ratio = normalizeAgnesImage21Ratio(config.size);
 }
 
-function publicHttpUrl(value?: string) {
-    if (!value || value.startsWith("blob:") || value.startsWith("data:")) return "";
-    try {
-        const url = new URL(value, typeof window === "undefined" ? undefined : window.location.origin);
-        if (!["http:", "https:"].includes(url.protocol)) return "";
-        if (["localhost", "127.0.0.1", "::1"].includes(url.hostname)) return "";
-        return url.href;
-    } catch {
-        return "";
-    }
-}
 
 async function requestAgnesImageEdit(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams): Promise<GeneratedImage[]> {
     const mime = IMAGE_MIME;
 
     // 获取所有参考图的公共 HTTP 链接或降级为 base64 数组，完美对齐 extra_body.image
-    const imageUrls = await Promise.all(
-        references.map(async (ref) => {
-            const resolvedUrl = await resolveImageUrl(ref.storageKey, "");
-            for (const url of [ref.dataUrl, ref.url, resolvedUrl]) {
-                const publicUrl = publicHttpUrl(url);
-                if (publicUrl) return publicUrl;
-            }
-            return imageToDataUrl(ref);
-        })
-    );
+    const imageUrls = await Promise.all(references.map((ref) => publicImageURL(ref)));
 
     const body: Record<string, unknown> = {
         model: config.model,

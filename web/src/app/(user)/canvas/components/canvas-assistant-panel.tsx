@@ -25,7 +25,7 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
 import { fetchSystemAgentSkillFile } from "@/services/api/agent-skills";
-import { imageToDataUrl } from "@/services/image-storage";
+import { publicImageURL } from "@/extensions/public-media/references";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -325,7 +325,7 @@ export function CanvasAssistantPanel({
                 references.map(async (reference) => {
                     if (!reference.dataUrl) return reference;
                     try {
-                        return { ...reference, dataUrl: await imageToDataUrl(reference) };
+                        return { ...reference, dataUrl: await publicImageURL(reference) };
                     } catch {
                         return reference;
                     }
