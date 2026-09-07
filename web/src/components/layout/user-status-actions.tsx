@@ -60,7 +60,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 </button>
             ) : null}
             <AnimatedThemeToggler theme={theme} onThemeChange={setTheme} className={naturalIconClass} style={iconStyle} aria-label={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} title={theme === "dark" ? "切换到浅色主题" : "切换到深色主题"} />
-            <VersionReleaseModal style={versionStyle} />
+            {navigationConfig.showVersionEntry ? <VersionReleaseModal style={versionStyle} /> : null}
             {navigationConfig.showGitHubLink ? <GitHubLink className={cn("bg-transparent hover:bg-transparent dark:hover:bg-transparent", gitHubClassName)} style={gitHubStyle} /> : null}
             {variant === "canvas" && user ? (
                 <Tooltip title="当前算力点余额" placement="bottom">
