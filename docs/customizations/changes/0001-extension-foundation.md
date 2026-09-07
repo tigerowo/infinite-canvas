@@ -42,6 +42,8 @@
 
 可通过 `git log -- docs/customizations/changes/0001-extension-foundation.md` 查找关联提交。回退本项仅撤销新增文档及两处上游文档接入，不涉及业务数据；后续已有功能依赖这些目录时需先检查关联影响。
 
-## 工作区限制
+## 工作区清理结果
 
-原路径已重新克隆，保留并放回原 `web/node_modules`；没有把旧数据库或 `.next` 复制进新项目。工作区清理不是代码回退：自动审批拒绝删除操作，旧项目暂位于仓库外的 `../infinite-canvas-delete-pending/`，另有 `../backups/`、`../.runtime/banner-review/` 和 `../.runtime/go1.27.1.windows-amd64.zip` 待清理。不能将本次描述为旧文件已全部删除。
+原路径已重新克隆，保留并放回原 `web/node_modules`；没有把旧数据库或 `.next` 复制进新项目。用户随后批准清理，已删除旧项目 `../infinite-canvas-delete-pending/`（含旧数据库和构建产物）、`../backups/`、`../.runtime/banner-review/` 和 `../.runtime/go1.27.1.windows-amd64.zip`，并逐项确认这四个目标不再存在。
+
+工作区顶层现在仅有新项目 `infinite-canvas/` 和 `.runtime/`。已确认新项目 Git 目录、前端 `node_modules`、Bun、Go、Go 构建缓存及 gopath 均保留。清理结果作为独立文档提交记录；撤销文档提交不会恢复已删除的旧文件。
