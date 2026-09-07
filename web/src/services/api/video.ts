@@ -8,7 +8,7 @@ import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoR
 import { boolConfig, isSeedanceVideoConfig, normalizeSeedanceDuration, normalizeSeedanceRatio } from "@/lib/seedance-video";
 import { isKIEGrokVideoModel, isKIEKlingV3Config, kieKlingOmniVariant } from "./protocols/kling-models";
 import { isAgnesVideoV25Model, isCogVideoX3Model, modelKey, normalizeCogVideoX3Duration, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
-import { resolveMediaUrl, uploadMediaFile } from "@/services/file-storage";
+import { resolveMediaUrl, uploadMediaBlob, uploadMediaFile } from "@/services/file-storage";
 import { buildApiUrl, channelIdForActiveModel, channelProtocolForConfig, directAIProviderForConfig, localChannelForActiveModel, type AiConfig, type VideoElementReference } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
@@ -210,11 +210,19 @@ async function cacheProtectedVideo(config: AiConfig, model: string, task: VideoR
     const url = task.video_url || task.url || "";
     const needs88APIContent = videoChannelProtocol(config, model) === "88api" && !url;
     const needsGrokContent = isGrok2APIVideoConfig(config, model) && /\/v1\/videos\/[^/]+\/content(?:[?#]|$)/.test(url);
-    if (!isCompletedVideoStatus(task.status) || task.storageKey || (!needs88APIContent && !needsGrokContent)) return task;
+    // New API / some OpenAI-compatible video channels report only `status=completed`
+    // and expose the actual MP4 from `/videos/{id}/content`.
+    const needsProxyContent = usesAccountProxy(config) && isCompletedVideoStatus(task.status) && !url;
+    if (!isCompletedVideoStatus(task.status) || task.storageKey || (!needsProxyContent && !needs88APIContent && !needsGrokContent)) return task;
     const taskId = task.task_id || task.id || task.video_id || "";
     const response = await fetch(`${aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`)}?model=${encodeURIComponent(model)}`, { headers: aiHeaders(config) });
     if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
-    const media = await uploadMediaFile(await response.blob(), "generated-video");
+    const blob = await response.blob();
+    if (blob.type.includes("json") || blob.type.startsWith("text/")) {
+        const text = await blob.text().catch(() => "");
+        throw new VideoRequestError(text || "视频内容接口没有返回视频文件", task);
+    }
+    const media = await uploadMediaBlob(blob, `generated-${taskId}.mp4`);
     return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
 }
 
