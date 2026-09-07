@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tigerowo/infinite-canvas/extensions/modelcapabilities"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 )
@@ -420,6 +421,9 @@ func repairDefaultModel(current string, models []string, preferred func(string) 
 }
 
 func isVideoModelName(modelName string) bool {
+	if modelcapabilities.IsVideo(modelName) {
+		return true
+	}
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	return name == "minimax-h3" || strings.Contains(name, "seedance") || strings.Contains(name, "video") || strings.Contains(name, "sd2.0 720p") || strings.Contains(name, "sd2.5 720p")
 }

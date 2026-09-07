@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { isCustomVideoModel } from "@/extensions/model-capabilities/config";
 import { directAIProviderForProtocol, type DirectAIProvider, type ModelChannelProtocol } from "@/lib/model-channel";
 import { apiGet } from "@/services/api/request";
 import type { AdminPublicSettings } from "@/services/api/admin";
@@ -228,6 +229,7 @@ function preferredModel(models: string[], predicate: (model: string) => boolean)
 }
 
 function isVideoModelName(model: string) {
+    if (isCustomVideoModel(model)) return true;
     const value = model.toLowerCase();
     return (
         value.includes("video") ||

@@ -10,5 +10,6 @@
 | EXT-0004 | [隐藏顶部版本号入口](changes/0004-version-entry.md) | 页面验证通过 | `web/src/components/layout/user-status-actions.tsx` |
 | EXT-0005 | [修复算力点日志 Space 弃用警告](changes/0005-admin-space.md) | 组件渲染验证通过 | `web/src/app/(admin)/admin/credit-logs/page.tsx` |
 | EXT-0006 | [修复 TOS 上传失败](changes/0006-s3-tos.md) | 本地测试及真实 TOS 上传读取通过 | `service/storage.go`、回归测试、`Dockerfile` |
+| EXT-0007 | [修复视频模型别名分类](changes/0007-model-capabilities.md) | 前后端分类回归通过；生成验证限制见记录 | `web/src/stores/use-config-store.ts`、`service/settings.go`、回归测试 |
 
 后续按 [单项修改模板](change-template.md) 新建记录，不把多个功能堆入同一份日志。
