@@ -8,5 +8,6 @@
 | EXT-0002 | [隐藏顶部 GitHub 入口](changes/0002-navigation.md) | 页面验证通过；类型检查限制见记录 | `web/src/components/layout/user-status-actions.tsx` |
 | EXT-0003 | [移除首页商业广告轮播](changes/0003-home-banners.md) | 页面验证通过；类型检查限制见记录 | `web/src/app/(user)/page.tsx` |
 | EXT-0004 | [隐藏顶部版本号入口](changes/0004-version-entry.md) | 页面验证通过 | `web/src/components/layout/user-status-actions.tsx` |
+| EXT-0005 | [修复算力点日志 Space 弃用警告](changes/0005-admin-space.md) | 组件渲染验证通过 | `web/src/app/(admin)/admin/credit-logs/page.tsx` |
 
 后续按 [单项修改模板](change-template.md) 新建记录，不把多个功能堆入同一份日志。
