@@ -1,4 +1,5 @@
 import axios from "axios";
+import { isNewAPIConfig } from "@/extensions/newapi/request";
 import { publicMediaURL } from "@/extensions/public-media/references";
 import { nanoid } from "nanoid";
 
@@ -104,7 +105,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, r
             refreshRemoteUser(config);
             return decodeGeminiAudio(response.data);
         }
-        if (isMimoTtsModel(model) && !usesAccountProxy(config)) {
+        if (!isNewAPIConfig(config) && isMimoTtsModel(model) && !usesAccountProxy(config)) {
             const format = normalizeMimoTtsFormat(config.mimoTtsFormat);
             const body = await buildMiMoNativeRequest(config, model, prompt, referenceAudio);
             const response = await axios.post<MiMoAudioResponse>(aiApiUrl(config, "/chat/completions"), body, { headers: aiHeaders(config) });
@@ -115,6 +116,7 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, r
         const body = await buildAudioSpeechRequest(config, model, prompt, referenceAudio);
         const response = await axios.post<Blob>(aiApiUrl(config, "/audio/speech"), body, { headers: aiHeaders(config), responseType: "blob" });
         await assertAudioBlob(response.data);
+        if (isNewAPIConfig(config) && (!response.data.size || response.data.type.includes("json") || response.data.type.startsWith("text/"))) throw new Error("NewAPI 没有返回音频文件");
         refreshRemoteUser(config);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });
     } catch (error) {
@@ -185,6 +187,10 @@ export async function pollCanvasAudioTaskStatus(taskId: string): Promise<CanvasA
 }
 
 async function buildAudioSpeechRequest(config: AiConfig, model: string, prompt: string, referenceAudio?: ReferenceAudio) {
+    if (isNewAPIConfig(config)) {
+        if (referenceAudio) throw new Error("NewAPI 标准语音接口不支持参考音频");
+        return { model, input: prompt, voice: normalizeAudioVoiceValue(config.audioVoice), response_format: normalizeAudioFormatValue(config.audioFormat), speed: Number(normalizeAudioSpeedValue(config.audioSpeed)), ...(config.audioInstructions.trim() ? { instructions: config.audioInstructions.trim() } : {}) };
+    }
     if (isGeminiTtsModel(model) && isGeminiConfig(config, model)) {
         if (referenceAudio) throw new Error("Gemini TTS 不支持参考音频");
         return { model, ...buildGeminiTtsRequest(config, prompt) };
@@ -234,6 +240,7 @@ async function buildAudioSpeechRequest(config: AiConfig, model: string, prompt: 
 }
 
 function audioResponseFormat(config: AiConfig, model: string) {
+    if (isNewAPIConfig(config)) return normalizeAudioFormatValue(config.audioFormat);
     if (isGeminiTtsModel(model) && isGeminiConfig(config, model)) return "wav";
     if (isGlmTtsModel(model)) return normalizeGlmTtsFormat(config.glmTtsFormat);
     if (isMimoTtsModel(model)) return normalizeMimoTtsFormat(config.mimoTtsFormat);
@@ -308,7 +315,7 @@ function decodeMiMoAudio(payload: MiMoAudioResponse, format: string) {
 function assertAudioConfig(config: AiConfig, model: string) {
     if (!model) throw new Error("请先配置音频模型");
     if (config.channelMode !== "local") return;
-    if (!isMimoTtsModel(model) && !isGeminiConfig(config, model)) {
+    if (!isNewAPIConfig(config) && !isMimoTtsModel(model) && !isGeminiConfig(config, model)) {
         if (!config.baseUrl.trim()) throw new Error("请先配置 Base URL");
         if (!config.apiKey.trim()) throw new Error("请先配置 API Key");
         return;

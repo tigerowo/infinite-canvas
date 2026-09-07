@@ -1,4 +1,5 @@
 "use client";
+import { isNewAPIConfig } from "@/extensions/newapi/config";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent as ReactChangeEvent, DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
@@ -2770,6 +2771,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const editingTextNode = mode === "text" && Boolean(sourceTextContent);
             const generationContext = await hydrateNodeGenerationContext(
                 buildNodeGenerationContext(nodeId, nodesRef.current, connectionsRef.current, editingTextNode ? `请根据要求修改以下文本。\n\n原文：\n${sourceTextContent}\n\n修改要求：\n${prompt}` : prompt),
+                channelProtocolForConfig(generationConfig),
             );
             const effectivePrompt = generationContext.prompt.trim();
             const requestPrompt =
@@ -3093,7 +3095,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 if (mode === "video") {
                     const videoGenerationConfig = withCanvasVideoAdvancedConfig(generationConfig, generationContext);
-                    const frameReferencesEnabled = supportsVideoFrameReferences(videoGenerationConfig.model, channelProtocolForConfig(videoGenerationConfig));
+                    const frameReferencesEnabled = isNewAPIConfig(videoGenerationConfig) || supportsVideoFrameReferences(videoGenerationConfig.model, channelProtocolForConfig(videoGenerationConfig));
                     const firstFrame = frameReferencesEnabled ? generationContext.firstFrame : null;
                     const lastFrame = frameReferencesEnabled ? generationContext.lastFrame : null;
                     const videoReferenceImages = frameReferencesEnabled ? generationContext.referenceImages : [...generationContext.referenceImages, ...[generationContext.firstFrame, generationContext.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
@@ -3366,7 +3368,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         videoSeconds: agentEffectiveConfig.videoSeconds,
                         videoGenerateAudio: agentEffectiveConfig.videoGenerateAudio,
                         videoSupportsAudio: supportsVideoAudioGeneration(videoModel, channelProtocolForConfig({ ...agentEffectiveConfig, model: videoModel, videoModel })),
-                        videoDuration: canvasAgentVideoDurationHint(videoModel),
+                        videoDuration: canvasAgentVideoDurationHint(videoModel, { ...agentEffectiveConfig, model: videoModel }),
                         audioVoice: isGeminiTtsModel(audioModel) && isGeminiConfig({ ...agentEffectiveConfig, model: audioModel }, audioModel) ? agentEffectiveConfig.geminiTtsVoice : isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsVoice : grokTts ? agentEffectiveConfig.grokTtsVoice : agentEffectiveConfig.audioVoice,
                         audioLanguage: grokTts ? agentEffectiveConfig.grokTtsLanguage : "",
                         audioFormat: isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsFormat : grokTts ? agentEffectiveConfig.grokTtsFormat : agentEffectiveConfig.audioFormat,
@@ -3584,8 +3586,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     if (mode === "video") {
                         metadata.vquality = generationConfig.vquality;
                         const seconds = typeof args.seconds === "number" ? args.seconds : Number(generationConfig.videoSeconds);
-                        const durationError = validateCanvasAgentVideoSeconds(generationConfig.model, seconds);
-                        if (durationError) return { ok: false, code: "unsupported_duration", message: durationError, supported: canvasAgentVideoDurationHint(generationConfig.model) };
+                        const durationError = validateCanvasAgentVideoSeconds(generationConfig.model, seconds, generationConfig);
+                        if (durationError) return { ok: false, code: "unsupported_duration", message: durationError, supported: canvasAgentVideoDurationHint(generationConfig.model, generationConfig) };
                         const generateAudio = typeof args.generateAudio === "boolean" ? args.generateAudio : generationConfig.videoGenerateAudio === "true";
                         if (generateAudio && !supportsVideoAudioGeneration(generationConfig.model, channelProtocolForConfig(generationConfig))) {
                             return { ok: false, code: "video_audio_not_supported", message: "当前全局视频模型不支持视频原生声音" };
@@ -3596,7 +3598,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     if (mode === "audio") {
                         if (isGeminiTtsModel(generationConfig.model) && isGeminiConfig(generationConfig, generationConfig.model)) {
                             metadata.geminiTtsVoice = stringValue("voice") || generationConfig.geminiTtsVoice;
-                        } else if (isGlmTtsModel(generationConfig.model)) {
+                        } else if (!isNewAPIConfig(generationConfig) && isGlmTtsModel(generationConfig.model)) {
                             metadata.glmTtsVoice = stringValue("voice") || generationConfig.glmTtsVoice;
                             metadata.glmTtsFormat = generationConfig.glmTtsFormat;
                             metadata.glmTtsSpeed = generationConfig.glmTtsSpeed;
@@ -3693,7 +3695,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 return;
             }
 
-            const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
+            const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""), channelProtocolForConfig(generationConfig));
             const prompt = (isPanorama ? savedImageMetadata?.panoramaFinalPrompt || "" : savedImageMetadata?.prompt || context?.prompt || "").trim();
             const requestPrompt = isPanorama ? prompt : applyCameraPrompt(prompt, savedImageMetadata?.cameraControl || node.metadata?.cameraControl);
             if (!prompt) {
@@ -4992,6 +4994,10 @@ function buildAudioGenerationMetadata(config: AiConfig, sourceMetadata?: CanvasN
 }
 
 function selectMiMoVoiceCloneReference(config: AiConfig, metadata: CanvasNodeMetadata | undefined, references: ReferenceAudio[]) {
+    if (isNewAPIConfig(config)) {
+        if (references.length) throw new Error("NewAPI 标准语音接口不支持参考音频");
+        return undefined;
+    }
     if (!isMimoVoiceCloneModel(config.model || config.audioModel)) return undefined;
     const selectedId = metadata?.mimoVoiceCloneAudioNodeId || "";
     if (selectedId) {
@@ -5385,7 +5391,8 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
     };
 }
 
-function canvasAgentVideoDurationHint(modelName: string) {
+function canvasAgentVideoDurationHint(modelName: string, config?: AiConfig) {
+    if (config && isNewAPIConfig(config)) return { min: 1, max: 3600, range: "整数秒，具体允许值由 NewAPI 上游插件校验" };
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
     if (key.includes("seedance-2-5")) return { min: 4, max: 30, auto: -1, range: "智能（-1）或 4-30 秒，范围内任意整数秒数均可；videoSeconds 仅为默认值，可由本次 seconds 覆盖" };
@@ -5395,7 +5402,8 @@ function canvasAgentVideoDurationHint(modelName: string) {
     return { values: [6, 10, 12, 16, 20], range: "1-30 秒" };
 }
 
-function validateCanvasAgentVideoSeconds(modelName: string, seconds: number) {
+function validateCanvasAgentVideoSeconds(modelName: string, seconds: number, config?: AiConfig) {
+    if (config && isNewAPIConfig(config)) return Number.isInteger(seconds) && seconds >= 1 && seconds <= 3600 ? "" : "视频时长必须是 1 到 3600 之间的整数秒";
     if (!Number.isInteger(seconds)) return "视频总时长必须为整数秒";
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key) && seconds !== 5 && seconds !== 10) return "当前 CogVideoX-3 模型仅支持 5 或 10 秒";

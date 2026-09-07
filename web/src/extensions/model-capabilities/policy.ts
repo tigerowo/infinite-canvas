@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 export type ModelKind = "text" | "image" | "video" | "audio";
-export type ModelPolicy = { imageTransfer: "url" | "base64"; overrides: Record<string, ModelKind> };
+export type ModelPolicy = { imageTransfer: "url" | "base64"; overrides: Record<string, ModelKind>; newapiVideoProfiles?: Record<string, "canvas-v1"> };
 export const useModelPolicy = create<{ policy: ModelPolicy; loadedAt: number }>(() => ({
     policy: { imageTransfer: "url", overrides: {} }, loadedAt: 0,
 }));

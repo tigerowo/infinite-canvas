@@ -5,10 +5,12 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tigerowo/infinite-canvas/extensions/newapi"
 	"github.com/tigerowo/infinite-canvas/model"
 )
 
 const (
+	ModelChannelProtocolNewAPI   = newapi.Protocol
 	ModelChannelProtocolOpenAI   = "openai"
 	ModelChannelProtocolGrok2API = "grok2api"
 	ModelChannelProtocolAPIMart  = "apimart"
@@ -32,6 +34,7 @@ var modelProtocolRegistry map[string]modelProtocolAdapter
 var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocol88API}
 
 func init() {
+	modelProtocolIDs = append(modelProtocolIDs, ModelChannelProtocolNewAPI)
 	compatible := modelProtocolAdapter{
 		buildURL: buildOpenAIModelChannelURL,
 		setAuth: func(request *http.Request, channel model.ModelChannel) {
@@ -133,10 +136,17 @@ func modelProtocolForChannel(channel model.ModelChannel) modelProtocolAdapter {
 }
 
 func matchModelProtocol(rules []modelProtocolRule, channel model.ModelChannel, modelName string) (modelProtocolAdapter, bool) {
+	if IsNewAPIChannel(channel) {
+		return modelProtocolRegistry[ModelChannelProtocolNewAPI], true
+	}
 	for _, rule := range rules {
 		if rule.matches(channel, modelName) {
 			return modelProtocolRegistry[rule.id], true
 		}
 	}
 	return modelProtocolRegistry[ModelChannelProtocolOpenAI], false
+}
+
+func IsNewAPIChannel(channel model.ModelChannel) bool {
+	return newapi.IsProtocol(channel.Protocol)
 }

@@ -333,6 +333,9 @@ var builtinAIProtocols = []aiProtocolAdapter{
 }
 
 func prepareAIProtocolRequest(input aiProtocolRequest) (aiProtocolRequest, string, error) {
+	if service.IsNewAPIChannel(input.channel) {
+		return input, service.ModelChannelProtocolNewAPI, nil
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.prepare == nil {
 			continue
@@ -348,6 +351,9 @@ func prepareAIProtocolRequest(input aiProtocolRequest) (aiProtocolRequest, strin
 }
 
 func copyAIProtocolResponse(w http.ResponseWriter, response *http.Response, request *http.Request, channel model.ModelChannel, context aiLogContext, onFailure func()) bool {
+	if service.IsNewAPIChannel(channel) {
+		return false
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.copyResponse != nil && adapter.copyResponse(w, response, request, channel, context, onFailure) {
 			return true
@@ -357,6 +363,9 @@ func copyAIProtocolResponse(w http.ResponseWriter, response *http.Response, requ
 }
 
 func transformAIProtocolVideoPayload(payload []byte, request *http.Request, channel model.ModelChannel, modelName string, status bool) []byte {
+	if service.IsNewAPIChannel(channel) {
+		return payload
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.videoResponse != nil {
 			if result, ok := adapter.videoResponse(payload, request, channel, modelName, status); ok {
@@ -368,6 +377,9 @@ func transformAIProtocolVideoPayload(payload []byte, request *http.Request, chan
 }
 
 func readAIProtocolVideoError(payload []byte, channel model.ModelChannel, modelName string, status bool) string {
+	if service.IsNewAPIChannel(channel) {
+		return ""
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.videoError != nil {
 			if message := adapter.videoError(payload, channel, modelName, status); message != "" {

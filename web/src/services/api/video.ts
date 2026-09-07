@@ -1,6 +1,6 @@
 import axios from "axios";
 
-import { createLecSeedRequest, usesLecSeedJSON } from "@/extensions/lec-video/request";
+import { createNewAPIVideoRequest, isNewAPIConfig, parseNewAPIVideoResponse } from "@/extensions/newapi/request";
 import { publicImageURL, publicMediaURL } from "@/extensions/public-media/references";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
@@ -45,6 +45,7 @@ function aiApiUrl(config: AiConfig, path: string) {
 }
 
 function aiVideoPollUrl(config: AiConfig, model: string, id: string) {
+    if (isNewAPIConfig(config)) return aiApiUrl(config, `/videos/${encodeURIComponent(id)}`);
     if (!usesAccountProxy(config) && isGeminiConfig(config, model)) {
         const channel = localChannelForActiveModel(config);
         return geminiOperationUrl(channel?.baseUrl || config.baseUrl, id);
@@ -116,7 +117,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
         const headers = { ...aiHeaders(config), ...(accountProxy && createOptions.clientTaskId ? { "X-Client-Video-Task-ID": createOptions.clientTaskId } : {}), ...(accountProxy && createOptions.source ? { "X-Video-Task-Source": createOptions.source } : {}), ...(accountProxy && createOptions.sourceId ? { "X-Video-Task-Source-ID": createOptions.sourceId } : {}) };
         const directProvider = !accountProxy ? directAIProviderForConfig(config) : null;
         const channel = localChannelForActiveModel(config);
-        const createUrl = !accountProxy && isGeminiConfig(config, model)
+        const createUrl = isNewAPIConfig(config) ? aiApiUrl(config, "/videos") : !accountProxy && isGeminiConfig(config, model)
             ? geminiActionUrl(channel?.baseUrl || config.baseUrl, model, "predictLongRunning")
             : !accountProxy && isMiniMaxH3Config(config, model)
                 ? miniMaxApiUrl(config, "/v2/video_generation")
@@ -127,7 +128,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
             : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers })).data);
         if (!created.id && !created.video_id) throw new Error("视频接口没有返回任务 ID");
         if (typeof created.progress === "number") onProgress?.(created.progress, created);
-        return { task: created, pollId: videoPollId(model, created), startedAt, requestBody: body };
+        return { task: created, pollId: videoPollId(model, created, config), startedAt, requestBody: body };
     } catch (error) {
         const { message, detail } = readAxiosError(error, "视频生成失败");
         void writeVideoAICallLog(config, model, "/videos", "POST", startedAt, axios.isAxiosError(error) ? error.response?.status || 0 : 0, stringifyLogPayload(summarizeVideoRequestBody(body)), stringifyLogPayload(detail), message);
@@ -141,7 +142,7 @@ function normalizeVideoTaskCreateOptions(options?: string | VideoTaskCreateOptio
 
 export async function pollCreatedVideoGenerationTask(config: AiConfig, task: VideoResponse, { startedAt = Date.now(), requestBody, initialDelayMs = 0, onProgress, onPoll }: { startedAt?: number; requestBody?: unknown; initialDelayMs?: number; onProgress?: VideoProgressHandler; onPoll?: (task: VideoResponse) => void } = {}) {
     const model = config.model || config.videoModel;
-    const pollId = videoPollId(model, task);
+    const pollId = videoPollId(model, task, config);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const directPoll = directProvider ? (await import("@/services/api/direct-ai")).pollDirectVideoTask : null;
@@ -152,6 +153,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
     try {
         if (initialDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
         for (; ;) {
+            if (isNewAPIConfig(config) && Date.now() - startedAt > 60 * 60 * 1000) throw new VideoRequestError("视频等待超过一小时，任务仍保留，可稍后刷新状态", task);
             const video = await cacheProtectedVideo(config, model, await cacheProtectedGeminiVideo(config, model, await pollOnce()));
             onPoll?.(video);
             if (isFailedVideoStatus(video.status)) throw new VideoRequestError(video.error?.message || "视频生成失败", video);
@@ -177,7 +179,7 @@ export async function pollCreatedVideoGenerationTask(config: AiConfig, task: Vid
 
 export async function pollVideoGenerationTaskStatus(config: AiConfig, task: VideoResponse) {
     const model = config.model || config.videoModel;
-    const pollId = videoPollId(model, task);
+    const pollId = videoPollId(model, task, config);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const result = directProvider
@@ -212,13 +214,13 @@ async function cacheProtectedVideo(config: AiConfig, model: string, task: VideoR
     const needsGrokContent = isGrok2APIVideoConfig(config, model) && /\/v1\/videos\/[^/]+\/content(?:[?#]|$)/.test(url);
     // New API / some OpenAI-compatible video channels report only `status=completed`
     // and expose the actual MP4 from `/videos/{id}/content`.
-    const needsProxyContent = usesAccountProxy(config) && isCompletedVideoStatus(task.status) && !url;
+    const needsProxyContent = (usesAccountProxy(config) || isNewAPIConfig(config)) && isCompletedVideoStatus(task.status) && !url;
     if (!isCompletedVideoStatus(task.status) || task.storageKey || (!needsProxyContent && !needs88APIContent && !needsGrokContent)) return task;
-    const taskId = task.task_id || task.id || task.video_id || "";
+    const taskId = isNewAPIConfig(config) ? task.id : task.task_id || task.id || task.video_id || "";
     const response = await fetch(`${aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`)}?model=${encodeURIComponent(model)}`, { headers: aiHeaders(config) });
     if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
     const blob = await response.blob();
-    if (blob.type.includes("json") || blob.type.startsWith("text/")) {
+    if (!blob.size || blob.type.includes("json") || blob.type.startsWith("text/")) {
         const text = await blob.text().catch(() => "");
         throw new VideoRequestError(text || "视频内容接口没有返回视频文件", task);
     }
@@ -307,7 +309,7 @@ async function create88APIVideoRequestBody(config: AiConfig, model: string, prom
 }
 
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
-    if (usesLecSeedJSON(model, videoChannelProtocol(config, model))) return createLecSeedRequest(model, prompt, config.size, input);
+    if (isNewAPIConfig(config)) return createNewAPIVideoRequest(config, model, prompt, input);
     if (videoChannelProtocol(config, model) === "88api") return create88APIVideoRequestBody(config, model, prompt, input);
     const size = normalizeVideoSize(config.size);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return createGeminiVeoRequestBody(config, model, prompt, input);
@@ -630,7 +632,8 @@ function isAgnesVideoModel(model: string) {
     return model.toLowerCase().includes("agnes-video");
 }
 
-function videoPollId(model: string, task: VideoResponse) {
+function videoPollId(model: string, task: VideoResponse, config?: AiConfig) {
+    if (config && isNewAPIConfig(config)) return task.id;
     return isAgnesVideoModel(model) ? task.video_id || task.id : task.id || task.task_id || task.video_id || "";
 }
 
@@ -693,6 +696,7 @@ function unwrapVideoResponse(payload: ApiVideoResponse): VideoResponse {
 }
 
 function unwrapVideoResponseForConfig(config: AiConfig, model: string, payload: ApiVideoResponse) {
+    if (isNewAPIConfig(config)) return parseNewAPIVideoResponse(payload);
     if (isGeminiVideoModel(model) && isGeminiConfig(config, model)) return normalizeGeminiVideoResponse(payload);
     if (isMiniMaxH3Config(config, model)) {
         const root = payload as unknown as Record<string, unknown>;

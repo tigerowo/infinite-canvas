@@ -1,4 +1,5 @@
 "use client";
+import { isNewAPIConfig } from "@/extensions/newapi/config";
 import axios from "axios";
 
 import { AlertCircle, ArrowLeft, ArrowRight, BookOpen, CheckSquare, ChevronDown, ChevronUp, ClipboardPaste, CloudUpload, Copy, Download, FolderPlus, History, LoaderCircle, Music2, PanelBottom, PanelLeft, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
@@ -569,6 +570,7 @@ export default function VideoPage() {
 
     const buildRequestSnapshot = ({ promptText = prompt, negativePromptText, referenceItems = references, firstFrameItem = firstFrame, lastFrameItem = lastFrame, videoReferenceItems = videoReferences, audioReferenceItems = audioReferences, taskCountValue = taskCount, configValue = videoConfig, modelValue = model }: { promptText?: string; negativePromptText?: string; referenceItems?: ReferenceImage[]; firstFrameItem?: ReferenceImage | null; lastFrameItem?: ReferenceImage | null; videoReferenceItems?: ReferenceVideo[]; audioReferenceItems?: ReferenceAudio[]; taskCountValue?: number; configValue?: AiConfig; modelValue?: string } = {}) => {
         const text = promptText.trim();
+        if (text && isNewAPIConfig({ ...configValue, model: modelValue })) return { text, model: modelValue, config: buildVideoConfig(configValue, modelValue), references: [...referenceItems], firstFrame: firstFrameItem, lastFrame: lastFrameItem, videoReferences: [...videoReferenceItems], audioReferences: [...audioReferenceItems], taskCount: normalizeVideoCount(taskCountValue) };
         const currentNegativePrompt = (negativePromptText ?? configValue.videoNegativePrompt ?? negativePrompt).trim();
         const klingV26 = isAPIMartKlingV26Config(configValue, modelValue);
         const klingV3 = isKlingV3Config(configValue, modelValue);
@@ -1363,9 +1365,9 @@ function WorkbenchPanel({
     bottomSettingsCollapsed?: boolean;
     setBottomSettingsCollapsed?: (value: boolean) => void;
 }) {
-    const frameReferencesEnabled = supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
-    const cogVideoX3 = isCogVideoX3Model(model);
-    const audioGenerationEnabled = supportsVideoAudioGeneration(model, channelProtocolForConfig({ ...config, model, videoModel: model }));
+    const frameReferencesEnabled = isNewAPIConfig({ ...config, model }) || supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
+    const cogVideoX3 = !isNewAPIConfig({ ...config, model }) && isCogVideoX3Model(model);
+    const audioGenerationEnabled = !isNewAPIConfig({ ...config, model }) && supportsVideoAudioGeneration(model, channelProtocolForConfig({ ...config, model, videoModel: model }));
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
     const klingBottomConfig = resolveKlingWorkbenchConfig(config, model);
     const klingBottomVariant = klingBottomConfig?.variant || "";
@@ -2761,6 +2763,9 @@ function buildLog({ prompt, model, config, references, firstFrame, lastFrame, vi
 }
 
 function buildVideoConfig(config: AiConfig, model: string): AiConfig {
+    const resolvedChannelId = resolveVideoChannelId(config, model, config.videoChannelId, config.activeChannelId);
+    const selected = { ...config, model, videoModel: model, videoChannelId: resolvedChannelId, activeChannelId: resolvedChannelId };
+    if (isNewAPIConfig(selected)) return selected;
     const seedance = isSeedanceVideoConfig({ ...config, model });
     const cogVideoX3 = isCogVideoX3Model(model);
     const klingV26 = isAPIMartKlingV26Config(config, model);

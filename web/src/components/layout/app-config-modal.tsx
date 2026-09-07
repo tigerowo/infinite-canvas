@@ -220,7 +220,7 @@ export function AppConfigModal() {
     };
 
     const addLocalChannel = () => {
-        updateLocalChannels([...normalizeLocalChannels(config), { id: "local-" + Date.now(), protocol: "openai", name: "新渠道", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [] }]);
+        updateLocalChannels([...normalizeLocalChannels(config), { id: "local-" + Date.now(), protocol: "newapi", name: "新渠道", baseUrl: modelChannelDefaultBaseUrls.newapi, apiKey: "", models: [] }]);
     };
 
     const removeLocalChannel = (id: string) => {

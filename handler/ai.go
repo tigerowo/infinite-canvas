@@ -74,6 +74,9 @@ func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func AIVideoContent(w http.ResponseWriter, r *http.Request, id string) {
+	if serveNewAPIVideoTaskContent(w, r, id) {
+		return
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.videoContent != nil && adapter.videoContent(w, r, id) {
 			return
@@ -486,6 +489,9 @@ func readAIRequestCount(body []byte, contentType string) int {
 }
 
 func resolveAIProxyURL(channel model.ModelChannel, modelName string, path string) string {
+	if service.IsNewAPIChannel(channel) {
+		return service.BuildModelChannelURL(channel, path)
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.url != nil {
 			if resolved, ok := adapter.url(channel, modelName, path); ok {
@@ -508,6 +514,9 @@ func agnesVideoQueryID(modelName string, path string) (string, bool) {
 }
 
 func resolveAIProxyPath(channel model.ModelChannel, modelName string, path string) string {
+	if service.IsNewAPIChannel(channel) {
+		return path
+	}
 	for _, adapter := range builtinAIProtocols {
 		if adapter.path != nil {
 			if resolved, ok := adapter.path(channel, modelName, path); ok {

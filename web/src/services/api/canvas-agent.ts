@@ -1,4 +1,5 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
+import { imageToDataUrl } from "@/services/image-storage";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
 import { publicImageURL, geminiPublicPart } from "@/extensions/public-media/references";
@@ -112,7 +113,7 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         activeChannelId: input.config.textChannelId || input.config.activeChannelId,
         textChannelId: input.config.textChannelId,
     };
-    let messages = await normalizeAgentImages(input.messages);
+    let messages = await normalizeAgentImages(input.messages, requestConfig);
     let toolMode = input.toolMode;
     let requestError: unknown;
 
@@ -126,7 +127,7 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
             return { ...message, toolMode };
         } catch (error) {
             requestError = error;
-            if (isCanvasAgentContextLimitError(error)) throw error;
+            if (channelProtocolForConfig(requestConfig) === "newapi" || isCanvasAgentContextLimitError(error)) throw error;
             if (hasImageContent(messages) && isImageCompatibilityError(error)) {
                 messages = stripImageContent(messages);
                 continue;
@@ -145,10 +146,11 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
     throw requestError;
 }
 
-async function normalizeAgentImages(messages: CanvasAgentProtocolMessage[]) {
+async function normalizeAgentImages(messages: CanvasAgentProtocolMessage[], config: AiConfig) {
+    const referenceURL = channelProtocolForConfig(config) === "newapi" ? imageToDataUrl : publicImageURL;
     return Promise.all(messages.map(async (message) => {
         if ((message.role !== "user" && message.role !== "system") || !Array.isArray(message.content)) return message;
-        return { ...message, content: await Promise.all(message.content.map(async (part) => part.type === "image_url" ? { ...part, image_url: { url: await publicImageURL({ url: part.image_url.url, dataUrl: part.image_url.url }) } } : part)) };
+        return { ...message, content: await Promise.all(message.content.map(async (part) => part.type === "image_url" ? { ...part, image_url: { url: await referenceURL({ url: part.image_url.url, dataUrl: part.image_url.url }) } } : part)) };
     })) as Promise<CanvasAgentProtocolMessage[]>;
 }
 

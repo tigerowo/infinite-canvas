@@ -34,8 +34,20 @@ description: 当前后端主要数据表与字段说明
 - `canvas_projects`
 - `user_configs`
 - `storage_objects`
+- `ext_model_policy`（定制路由初始化时单独迁移）
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
+
+### ext_model_policy
+
+定制模型分类与图片传输策略表，由 `extensions/modelcapabilities/policy.go` 的 `RegisterPolicy` 初始化，独立于上游 `settings` 表。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | uint | 主键，当前固定使用 1 保存全局策略 |
+| `value` | text | 非空 JSON；`imageTransfer` 为 `url` 或 `base64`，`overrides` 为模型 ID 到 `text`、`image`、`video`、`audio` 的映射；可选 `newapiVideoProfiles` 将 `<软件渠道ID>::<小写模型ID>` 映射为 `canvas-v1`，默认未启用，见 [EXT-0011](../customizations/changes/0011-newapi-channel.md) |
+
+启动时执行 `AutoMigrate` 并读取记录；无记录时使用内存默认策略，管理员保存时写入。代码回退不会自动删除此表。权限、默认值、迁移失败处理和验证范围统一见 [EXT-0009](../customizations/changes/0009-public-media.md)。本表不保存存储密钥、素材文件或签名 URL。
 
 ### users
 

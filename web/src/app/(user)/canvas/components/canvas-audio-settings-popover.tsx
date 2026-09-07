@@ -1,4 +1,5 @@
 "use client";
+import { isNewAPIConfig } from "@/extensions/newapi/config";
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
@@ -100,7 +101,7 @@ function AudioSettingsPortal({ buttonRect, panelRef, placement, theme, config, o
         <div ref={panelRef} className="canvas-image-settings-popover" style={style} onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()}>
             <div className="space-y-4">
                 <div className="text-lg font-semibold">音频设置</div>
-                {isMimoVoiceCloneModel(model) ? (
+                {!isNewAPIConfig(config) && isMimoVoiceCloneModel(model) ? (
                     <ResourceSinglePicker
                         label="参考音频"
                         value={cloneAudioNodeId}
@@ -124,6 +125,7 @@ function validCloneAudioNodeId(value: string | undefined, options: CanvasVideoRe
 }
 
 function audioSettingsSummary(config: AiConfig, cloneAudioNodeId: string, audioOptions: CanvasVideoResourceOption[]) {
+    if (isNewAPIConfig(config)) return `${audioVoiceLabel(config.audioVoice)} · ${audioFormatLabel(config.audioFormat)} · ${audioSpeedLabel(config.audioSpeed)}`;
     const model = config.model || config.audioModel || "";
     if (isGeminiTtsModel(model) && isGeminiConfig(config, model)) return normalizeGeminiTtsVoice(config.geminiTtsVoice);
     if (isGlmTtsModel(model)) return `${glmTtsVoiceLabel(config.glmTtsVoice)} · ${normalizeGlmTtsFormat(config.glmTtsFormat).toUpperCase()} · ${normalizeGlmTtsSpeed(config.glmTtsSpeed)}x`;

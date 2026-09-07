@@ -11,6 +11,8 @@ export function ModelPolicyPanel() {
     const [text, setText] = useState("");
     const [kind, setKind] = useState<ModelKind>("text");
     const [loading, setLoading] = useState(false);
+    const [channelId, setChannelId] = useState("");
+    const [videoModel, setVideoModel] = useState("");
     useEffect(() => { void loadModelPolicy().then(setPolicy).catch(() => {}); }, []);
     const add = () => {
         const name = text.trim().toLowerCase();
@@ -34,5 +36,12 @@ export function ModelPolicyPanel() {
             <Button onClick={add}>添加或覆盖分类</Button>
         </Space>
         <Space wrap style={{ marginTop: 12 }}>{Object.entries(policy.overrides).map(([name, value]) => <Tag key={name} closable onClose={() => setPolicy({ ...policy, overrides: Object.fromEntries(Object.entries(policy.overrides).filter(([key]) => key !== name)) })}>{name}：{value}</Tag>)}</Space>
+        <Space wrap style={{ marginTop: 16, display: "flex" }}>
+            <span>NewAPI 视频扩展：</span>
+            <Input aria-label="NewAPI 渠道 ID" placeholder="渠道 ID" value={channelId} onChange={(event) => setChannelId(event.target.value)} style={{ width: 200 }} />
+            <Input aria-label="NewAPI 视频模型 ID" placeholder="视频模型 ID" value={videoModel} onChange={(event) => setVideoModel(event.target.value)} style={{ width: 240 }} />
+            <Button disabled={!channelId.trim() || !videoModel.trim()} onClick={() => setPolicy({ ...policy, newapiVideoProfiles: { ...policy.newapiVideoProfiles, [`${channelId.trim()}::${videoModel.trim().toLowerCase()}`]: "canvas-v1" } })}>启用 Canvas v1</Button>
+        </Space>
+        <Space wrap style={{ marginTop: 12 }}>{Object.entries(policy.newapiVideoProfiles || {}).map(([key, value]) => <Tag key={key} style={{ maxWidth: "100%", whiteSpace: "normal", overflowWrap: "anywhere" }} closable onClose={() => setPolicy({ ...policy, newapiVideoProfiles: Object.fromEntries(Object.entries(policy.newapiVideoProfiles || {}).filter(([name]) => name !== key)) })}>{key}：{value}</Tag>)}</Space>
     </Card>;
 }

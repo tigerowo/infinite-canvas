@@ -217,8 +217,8 @@ export function buildNodeChatMessages(context: NodeGenerationContext): ChatCompl
     ];
 }
 
-export async function hydrateNodeGenerationContext(context: NodeGenerationContext) {
-    const { publicImageURL } = await import("@/extensions/public-media/references");
+export async function hydrateNodeGenerationContext(context: NodeGenerationContext, protocol = "") {
+    const publicImageURL = protocol === "newapi" ? (await import("@/services/image-storage")).imageToDataUrl : (await import("@/extensions/public-media/references")).publicImageURL;
     return {
         ...context,
         referenceImages: await Promise.all(context.referenceImages.map(async (image) => ({ ...image, dataUrl: await publicImageURL(image) }))),

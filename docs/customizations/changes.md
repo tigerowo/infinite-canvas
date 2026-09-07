@@ -11,7 +11,12 @@
 | EXT-0005 | [修复算力点日志 Space 弃用警告](changes/0005-admin-space.md) | 组件渲染验证通过 | `web/src/app/(admin)/admin/credit-logs/page.tsx` |
 | EXT-0006 | [修复 TOS 上传失败](changes/0006-s3-tos.md) | 本地测试及真实 TOS 上传读取通过 | `service/storage.go`、回归测试、`Dockerfile` |
 | EXT-0007 | [修复视频模型别名分类](changes/0007-model-capabilities.md) | 前后端分类回归通过；生成验证限制见记录 | `web/src/stores/use-config-store.ts`、`service/settings.go`、回归测试 |
-| EXT-0008 | [LEC Seedance 请求格式适配](changes/0008-lec-video.md) | 请求构造回归通过；计费生成待验证 | `web/src/services/api/video.ts` |
-| EXT-0009 | [素材公网 URL 与模型能力策略](changes/0009-public-media.md) | 后端包测试通过；前端需登录后验证真实 S3 链接和后台设置 | `extensions/publicmedia/`、`extensions/modelcapabilities/`、素材请求接入点 |
+| EXT-0008 | [通过 NewAPI 发送 LEC Seedance 特定请求体](changes/0008-lec-video.md) | 历史实现，已被 EXT-0011 取代 | 客户端 LEC 请求分支已删除，转换移至 NewAPI 插件 |
+| EXT-0009 | [素材公网 URL 与模型能力策略](changes/0009-public-media.md) | 已实现，完整兼容验证待补；登录要求、协议限制及数据表见记录 | 路由、存储、前后端分类、管理面板及图片/视频/音频/画布请求入口 |
+| EXT-0010 | [视频完成后通过内容接口取回并缓存文件](changes/0010-video-content.md) | 已实现；用户反馈当前流程可用，未逐渠道复测 | `web/src/services/api/video.ts` / `cacheProtectedVideo` |
+
+| EXT-0011 | [独立 NewAPI 默认通道](changes/0011-newapi-channel.md) | 本地实现及契约测试完成，真实插件部署和上游验收待执行 | 通道默认值、前后端调用链、视频 ID、素材与设置入口；paipu 插件源码同步 |
+
+各项验证以正式记录为准。用户此前“ok了已经”的反馈只对应当时已运行流程，不扩大为 EXT-0011 或全部模型、计费路径通过。
 
 后续按 [单项修改模板](change-template.md) 新建记录，不把多个功能堆入同一份日志。

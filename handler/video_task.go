@@ -143,7 +143,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		Fail(w, message)
 		return
 	}
-	parsed := parseVideoTaskPayload(transformed, modelName)
+	parsed := parseChannelVideoTaskPayload(transformed, modelName, channel)
 	if parsed.UpstreamTaskID == "" && parsed.UpstreamVideoID == "" {
 		if credits > 0 {
 			refundVideoCredits(user.ID, modelName, credits, upstreamPath)
@@ -161,7 +161,7 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		ChannelName:     channel.Name,
 		Source:          readVideoTaskSource(r),
 		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:     readClientVideoTaskID(r),
+		ClientTaskID:    readClientVideoTaskID(r),
 		UpstreamTaskID:  parsed.UpstreamTaskID,
 		UpstreamVideoID: parsed.UpstreamVideoID,
 		Status:          parsed.Status,
@@ -280,7 +280,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		return service.VideoTaskPollUpdate{}, err
 	}
 	pollID := firstNonEmpty(task.UpstreamTaskID, task.ID)
-	if isAIProtocolVideoID(task.Model, task.UpstreamVideoID) {
+	if !service.IsNewAPIChannel(channel) && isAIProtocolVideoID(task.Model, task.UpstreamVideoID) {
 		pollID = task.UpstreamVideoID
 	}
 	if strings.TrimSpace(pollID) == "" {
@@ -318,7 +318,7 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		return service.VideoTaskPollUpdate{Status: "failed", Error: message, ErrorDetail: message, ResponseBody: string(payload)}, nil
 	}
 	transformed := transformVideoStatusPayload(payload, request, channel, task.Model)
-	parsed := parseVideoTaskPayload(transformed, task.Model)
+	parsed := parseChannelVideoTaskPayload(transformed, task.Model, channel)
 	if parsed.Status == "failed" && parsed.Error == "" {
 		parsed.Error = firstNonEmpty(parsed.ErrorDetail, "视频任务生成失败")
 	}
@@ -402,10 +402,16 @@ func transformGeminiVideoTaskResponse(payload []byte) ([]byte, bool) {
 }
 
 func readVideoCreateErrorMessage(raw []byte, transformed []byte, channel model.ModelChannel, modelName string) string {
+	if service.IsNewAPIChannel(channel) {
+		return firstNonEmpty(readProviderPayloadError(raw), parseChannelVideoTaskPayload(transformed, modelName, channel).Error)
+	}
 	return firstNonEmpty(readAIProtocolVideoError(raw, channel, modelName, false), readProviderPayloadError(raw), readNormalizedVideoError(transformed))
 }
 
 func readVideoStatusErrorMessage(raw []byte, transformed []byte, channel model.ModelChannel, modelName string) string {
+	if service.IsNewAPIChannel(channel) {
+		return firstNonEmpty(readProviderPayloadError(raw), parseChannelVideoTaskPayload(transformed, modelName, channel).Error)
+	}
 	return firstNonEmpty(readAIProtocolVideoError(raw, channel, modelName, true), readProviderPayloadError(raw), readNormalizedVideoError(transformed))
 }
 

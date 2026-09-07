@@ -14,8 +14,9 @@ import (
 )
 
 type Policy struct {
-	ImageTransfer string            `json:"imageTransfer"`
-	Overrides     map[string]string `json:"overrides"`
+	ImageTransfer       string            `json:"imageTransfer"`
+	Overrides           map[string]string `json:"overrides"`
+	NewAPIVideoProfiles map[string]string `json:"newapiVideoProfiles,omitempty"`
 }
 
 type policyRow struct {
@@ -63,6 +64,22 @@ func validatePolicy(p Policy) (Policy, error) {
 		normalized[name] = kind
 	}
 	p.Overrides = normalized
+	if len(p.NewAPIVideoProfiles) > 2000 {
+		return Policy{}, errors.New("最多设置 2000 个 NewAPI 视频扩展")
+	}
+	profiles := make(map[string]string, len(p.NewAPIVideoProfiles))
+	for key, profile := range p.NewAPIVideoProfiles {
+		parts := strings.SplitN(key, "::", 2)
+		if len(key) > 512 || len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" || profile != "canvas-v1" {
+			return Policy{}, errors.New("NewAPI 视频扩展必须指定渠道 ID、模型 ID 和有效版本")
+		}
+		normalizedKey := strings.TrimSpace(parts[0]) + "::" + strings.ToLower(strings.TrimSpace(parts[1]))
+		if _, exists := profiles[normalizedKey]; exists {
+			return Policy{}, errors.New("NewAPI 视频扩展重复")
+		}
+		profiles[normalizedKey] = profile
+	}
+	p.NewAPIVideoProfiles = profiles
 	return p, nil
 }
 

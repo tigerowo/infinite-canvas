@@ -1,4 +1,7 @@
+import { newAPIProtocol } from "@/extensions/newapi/protocol";
+
 export const modelChannelProtocols = [
+    newAPIProtocol,
     { value: "openai", label: "OpenAI", baseUrl: "https://api.openai.com" },
     { value: "gemini", label: "Gemini", baseUrl: "https://generativelanguage.googleapis.com" },
     { value: "grok2api", label: "Grok2API", baseUrl: "" },

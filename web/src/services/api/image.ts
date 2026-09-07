@@ -1,4 +1,6 @@
 import axios from "axios";
+import { isNewAPIConfig } from "@/extensions/newapi/config";
+import { createNewAPIImageBody } from "@/extensions/newapi/image";
 import { publicImageURL, geminiPublicPart } from "@/extensions/public-media/references";
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
@@ -158,7 +160,7 @@ function resolveRequestSize(quality: string | undefined, size: string) {
 
 function createImageRequestParams(config: AiConfig): ImageRequestParams {
     const normalizedQuality = normalizeQuality(config.quality);
-    const zhipu = isZhipuImageModel(config.model);
+    const zhipu = !isNewAPIConfig(config) && isZhipuImageModel(config.model);
     const quality = zhipu ? normalizeZhipuImageQuality(config.model, normalizedQuality) : normalizedQuality;
     return {
         n: normalizeBoundedInteger(config.count, 1, 1, 15),
@@ -944,6 +946,24 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 }
 
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+    if (isNewAPIConfig(config)) {
+        const params = createImageRequestParams(config);
+        const { endpoint, body } = await createNewAPIImageBody(config, withPromptGuard(config, withSystemPrompt(config, prompt)), references, params);
+        return requestAndParseImages(config, endpoint, body, params.timeoutSeconds,
+            () => withTimeout(params.timeoutSeconds, (signal) => fetch(aiApiUrl(config, endpoint), {
+                method: "POST", headers: aiHeaders(config, body instanceof FormData ? undefined : "application/json"),
+                body: body instanceof FormData ? body : JSON.stringify(body), signal,
+            })),
+            async (response) => {
+                if (isEventStreamResponse(response)) {
+                    const images = endpoint === "/responses" ? await parseResponsesStreamResponse(response, IMAGE_MIME) : await parseImagesStreamResponse(response, IMAGE_MIME);
+                    return { images, responseBody: summarizeGeneratedImages(images, "event-stream") };
+                }
+                const payload = await response.json();
+                const images = endpoint === "/responses" ? parseResponsesPayload(payload, IMAGE_MIME) : endpoint === "/chat/completions" ? parseChatImagesPayload(payload) : parseImagePayload(payload, IMAGE_MIME);
+                return { images, responseBody: stringifyLogPayload(payload) };
+            });
+    }
     assertImageReferencesSupported(config.model, references);
     const params = createImageRequestParams(config);
     const inputImageDataUrls = references.length ? await Promise.all(references.map((image) => publicImageURL(image))) : [];
@@ -1032,12 +1052,22 @@ export async function pollCanvasImageTaskStatus(taskId: string): Promise<CanvasI
 }
 
 async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], params: ImageRequestParams, options: CanvasImageTaskOptions): Promise<RequestInit> {
-    assertImageReferencesSupported(config.model, references);
+    if (!isNewAPIConfig(config)) assertImageReferencesSupported(config.model, references);
     const taskChannelId = channelIdForActiveModel(config);
     const taskChannelHeader: Record<string, string> = config.channelMode === "remote" && taskChannelId ? { "X-Model-Channel-ID": taskChannelId } : {};
     const tokenHeaders = { ...aiHeaders(config), ...taskChannelHeader };
     const jsonHeaders = { ...aiHeaders(config, "application/json"), ...taskChannelHeader };
     const meta = { nodeId: options.nodeId || "", source: options.source || "canvas", sourceId: options.sourceId || "", clientTaskId: options.clientTaskId || "", prompt, channelId: taskChannelId };
+    if (isNewAPIConfig(config)) {
+        const { endpoint, body } = await createNewAPIImageBody(config, withPromptGuard(config, withSystemPrompt(config, prompt)), references, params);
+        if (body instanceof FormData) {
+            for (const [key, value] of Object.entries({ _canvas_endpoint: endpoint, _canvas_source: meta.source, _canvas_node_id: meta.nodeId, _canvas_source_id: meta.sourceId, _canvas_task_id: meta.clientTaskId, _canvas_prompt: meta.prompt, _canvas_channel_id: meta.channelId })) {
+                if (value) body.set(key, value);
+            }
+            return { method: "POST", headers: tokenHeaders, body };
+        }
+        return { method: "POST", headers: jsonHeaders, body: JSON.stringify({ endpoint, ...meta, request: body }) };
+    }
     if (isGeminiConfig(config)) {
         const body = await createGeminiImageBody(config, prompt, references, params);
         return {
@@ -1190,12 +1220,12 @@ export async function fetchImageModels(config: AiConfig) {
     if (config.channelMode === "remote") return config.models;
     const channel = localChannelForActiveModel(config);
     if (channel?.protocol === "gemini") return fetchGeminiModels(channel.baseUrl, channel.apiKey);
-    if (isMiniMaxChannel(channel)) return [...miniMaxModels];
-    if (isMimoChannel(channel || { baseUrl: config.baseUrl })) return [...mimoModels];
+    if (!isNewAPIConfig(config) && isMiniMaxChannel(channel)) return [...miniMaxModels];
+    if (!isNewAPIConfig(config) && isMimoChannel(channel || { baseUrl: config.baseUrl })) return [...mimoModels];
     try {
-        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(config.baseUrl, "/models"), {
+        const response = await axios.get<{ data?: Array<{ id?: string }>; error?: { message?: string } }>(buildApiUrl(channel?.baseUrl || config.baseUrl, "/models"), {
             headers: {
-                Authorization: `Bearer ${config.apiKey}`,
+                Authorization: `Bearer ${channel?.apiKey || config.apiKey}`,
             },
             timeout: IMAGE_REQUEST_TIMEOUT_SECONDS * 1000,
         });

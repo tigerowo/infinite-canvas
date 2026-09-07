@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import { isCustomVideoModel } from "@/extensions/model-capabilities/config";
+import { newAPIDefaultChannel } from "@/extensions/newapi/protocol";
 import { modelTypeOverride } from "@/extensions/model-capabilities/policy";
 import { directAIProviderForProtocol, type DirectAIProvider, type ModelChannelProtocol } from "@/lib/model-channel";
 import { apiGet } from "@/services/api/request";
@@ -99,7 +100,7 @@ export type ModelCapability = "image" | "video" | "text" | "audio";
 
 export const defaultConfig: AiConfig = {
     channelMode: "local",
-    baseUrl: "https://api.openai.com",
+    baseUrl: "",
     apiKey: "",
     model: "gpt-image-2",
     imageModel: "gpt-image-2",
@@ -156,7 +157,7 @@ export const defaultConfig: AiConfig = {
         workflow: "",
         workflowAgent: "",
     },
-    localChannels: [],
+    localChannels: [{ ...newAPIDefaultChannel, models: [] }],
     publicChannels: [],
     syncStorageConfig: false,
     syncWebDAVStorageConfig: false,
@@ -415,7 +416,7 @@ export const useConfigStore = create<ConfigStore>()(
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
-                const localChannels = normalizeLocalChannels(config);
+                const localChannels = normalizeLocalChannels(persistedState.config ? { ...config, localChannels: persistedConfig.localChannels || [], baseUrl: persistedConfig.baseUrl ?? "https://api.openai.com" } : config);
                 const localModels = normalizeModelList(localChannels.flatMap((channel) => channel.models));
                 return {
                     ...current,

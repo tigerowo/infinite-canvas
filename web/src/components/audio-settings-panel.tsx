@@ -1,6 +1,7 @@
 "use client";
 
 import { Select } from "antd";
+import { isNewAPIConfig } from "@/extensions/newapi/config";
 import { type ReactNode } from "react";
 
 import { GrokTtsVoiceSelect } from "@/components/grok-tts-voice-select";
@@ -34,7 +35,7 @@ export function AudioSettingsPanel({ config, onConfigChange, theme, showTitle = 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">音频设置</div> : null}
-                {gemini ? <GeminiAudioSettings config={config} onConfigChange={onConfigChange} theme={theme} /> : isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <AudioSpeechSettings config={config} model={model} glm={isGlmTtsModel(model)} grok={grok} onConfigChange={onConfigChange} theme={theme} />}
+                {gemini ? <GeminiAudioSettings config={config} onConfigChange={onConfigChange} theme={theme} /> : !isNewAPIConfig(config) && isMimoTtsModel(model) ? <MiMoAudioSettings config={config} model={model} onConfigChange={onConfigChange} theme={theme} /> : <AudioSpeechSettings config={config} model={model} glm={!isNewAPIConfig(config) && isGlmTtsModel(model)} grok={grok} onConfigChange={onConfigChange} theme={theme} />}
             </div>
         </ImageSettingsTheme>
     );
