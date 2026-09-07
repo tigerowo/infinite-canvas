@@ -16,6 +16,7 @@ import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-co
 import { useCanvasStore } from "./canvas/stores/use-canvas-store";
 import { canvasResourceLabel } from "./canvas/utils/canvas-resource-references";
 import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
+import { filterHomeBanners } from "@/extensions/home-banners/config";
 import {
     MAX_CANVAS_AGENT_SKILLS,
     CanvasNodeType,
@@ -27,14 +28,14 @@ import {
 } from "./canvas/types";
 
 
-const HOME_BANNERS: HomeBanner[] = [
+const HOME_BANNERS: HomeBanner[] = filterHomeBanners([
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.7/img/infinite-canvas/88.webp", videoUrl: "", linkUrl: "https://88api.ai/sign-up?aff=25ty", alt: "1" },
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.6/img/infinite-canvas/metaso.webp", videoUrl: "", linkUrl: "https://metaso.cn/minimax-h3/?s=tt", alt: "2" },
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.5/img/infinite-canvas/3ddirectortl.webp", videoUrl: "", linkUrl: "", alt: "3" },
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/agent.webp", videoUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/agent.webm", linkUrl: "", alt: "4" },
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/panorama.webp", videoUrl: "", linkUrl: "", alt: "5" },
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/3ddirector.webp", videoUrl: "", linkUrl: "", alt: "6" },
-];
+]);
 
 function toPendingAgentAsset(payload: InsertAssetPayload, label: string): PendingAgentAsset {
     const nodeId = nanoid();
