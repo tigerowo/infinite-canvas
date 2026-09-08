@@ -7,7 +7,7 @@ import { App } from "antd";
 
 import { fetchUserConfig } from "@/services/api/user-config";
 import { defaultUserStorageProvider, defaultUserWebDAVStorageProvider, saveUserStorageProvider, saveUserWebDAVStorageProvider } from "@/services/image-storage";
-import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { normalizeLocalChannels, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 export function ClientRootInit({ children }: { children: ReactNode }) {
@@ -20,6 +20,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const loadPublicSettings = useConfigStore((state) => state.loadPublicSettings);
     const publicSettings = useConfigStore((state) => state.publicSettings);
     const channelMode = useConfigStore((state) => state.config.channelMode);
+    const config = useConfigStore((state) => state.config);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const isLoginPage = pathname === "/login" || pathname === "/admin/login";
@@ -87,11 +88,26 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             message.error("后台未允许用户自定义渠道，请联系管理员进行配置");
             return;
         }
+        const channelId = "local-newapi-link";
+        const channels = normalizeLocalChannels(config);
+        const nextChannel = {
+            id: channelId,
+            protocol: "newapi" as const,
+            name: "",
+            baseUrl: baseUrl || channels.find((channel) => channel.id === channelId)?.baseUrl || "",
+            apiKey: apiKey || channels.find((channel) => channel.id === channelId)?.apiKey || "",
+            models: channels.find((channel) => channel.id === channelId)?.models || [],
+        };
+        const nextChannels = [...channels.filter((channel) => channel.id !== channelId), nextChannel];
         updateConfig("channelMode", "local");
-        if (baseUrl) updateConfig("baseUrl", baseUrl);
-        if (apiKey) updateConfig("apiKey", apiKey);
+        updateConfig("localChannels", nextChannels);
+        updateConfig("imageChannelId", channelId);
+        updateConfig("videoChannelId", channelId);
+        updateConfig("textChannelId", channelId);
+        updateConfig("audioChannelId", channelId);
+        updateConfig("activeChannelId", channelId);
         openConfigDialog(false);
-    }, [message, openConfigDialog, publicSettings, updateConfig]);
+    }, [config, message, openConfigDialog, publicSettings, updateConfig]);
 
     return <>{children}</>;
 }

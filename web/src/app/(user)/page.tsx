@@ -37,6 +37,9 @@ const HOME_BANNERS: HomeBanner[] = filterHomeBanners([
     { imageUrl: "https://gcore.jsdelivr.net/gh/tigerowo/cdn-tdeh@v0.4/img/infinite-canvas/3ddirector.webp", videoUrl: "", linkUrl: "", alt: "6" },
 ]);
 
+// 首页暂时隐藏宣传卡片；需要恢复时改为 true 即可。
+const SHOW_HOME_BANNERS = false;
+
 function toPendingAgentAsset(payload: InsertAssetPayload, label: string): PendingAgentAsset {
     const nodeId = nanoid();
     let reference: CanvasAssistantReference;
@@ -120,8 +123,8 @@ export default function IndexPage() {
         }
         setSubmitting(true);
         const titles = new Set(useCanvasStore.getState().projects.map(({ title }) => title));
-        let title = "无限画布";
-        for (let i = 1; titles.has(title); i++) title = `无限画布 ${i}`;
+        let title = "微鑫画布";
+        for (let i = 1; titles.has(title); i++) title = `微鑫画布 ${i}`;
         const projectId = createProject(title, {
             agentConfig,
             pendingAgentRequest: { prompt: text, assets: pendingAssets.filter((asset) => referenceIds.includes(asset.nodeId)), skills: selectedSkills },
@@ -140,7 +143,7 @@ export default function IndexPage() {
         <main className="relative h-full overflow-x-hidden overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] text-stone-950 dark:bg-[radial-gradient(rgba(245,245,244,.18)_1px,transparent_1px)] dark:text-stone-100">
             <section className="relative mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-6">
                 <section className="relative flex min-h-[620px] flex-col items-center justify-center py-10 sm:py-14">
-                    <HomeBannerCarousel banners={HOME_BANNERS} />
+                    {SHOW_HOME_BANNERS ? <HomeBannerCarousel banners={HOME_BANNERS} /> : null}
                     <div className="mt-12 w-full max-w-[820px]">
                         <CanvasAssistantComposer
                             prompt={prompt}
