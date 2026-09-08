@@ -549,6 +549,19 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [hydrated, openProject, projectId, router]);
 
     useEffect(() => {
+        if (!projectLoaded) return;
+        const openFromLink = () => {
+            const params = new URLSearchParams(window.location.hash.slice(1));
+            if (!params.has("agentUrl") && !params.has("agentToken")) return;
+            setAssistantMounted(true);
+            setAgentPanel((current) => ({ ...current, open: true }));
+        };
+        openFromLink();
+        window.addEventListener("hashchange", openFromLink);
+        return () => window.removeEventListener("hashchange", openFromLink);
+    }, [projectLoaded, projectId]);
+
+    useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
         const next = createHistoryEntry();
         const previous = lastHistoryRef.current;
@@ -1749,7 +1762,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
             const target = new BufferTarget();
             const output = new Output({ format: new WavOutputFormat(), target });
-            conversion = await Conversion.init({ input, output, tracks: "primary", trim });
+            conversion = await Conversion.init({
+                input, output, tracks: "primary", trim,
+                audio: { process: (sample) => { if (sample.timestamp < 0 && sample.timestamp > -1e-9) sample.setTimestamp(0); return sample; } },
+            });
             if (!conversion.isValid) throw new Error("当前浏览器无法解码该文件的音频");
             await conversion.execute();
 
@@ -4482,6 +4498,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             </section>
             {assistantMounted ? (
                 <CanvasAssistantPanel
+                    canvasId={projectId}
                     nodes={nodes}
                     selectedNodeIds={selectedNodeIds}
                     referenceNodeClick={agentReferenceNodeClick}

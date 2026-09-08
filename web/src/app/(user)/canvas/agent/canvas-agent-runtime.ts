@@ -53,7 +53,7 @@ export type RunCanvasAgentInput = {
     contextCheckpoint?: string;
     preferredJsonMode?: CanvasAgentJsonFallbackMode;
     getContext: (state: CanvasAgentState) => CanvasAgentContext;
-    executeAction: (action: CanvasAgentAction) => Promise<CanvasAgentToolResult>;
+    executeAction: (action: CanvasAgentAction, signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
     onEvent?: (event: CanvasAgentRuntimeEvent) => void;
     onCheckpoint?: (checkpoint: {
         state: CanvasAgentState;
@@ -200,7 +200,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             step -= 1;
             continue;
         }
-        const arrangeRequested = /整理|排列|排序|对齐|布局|排版|重新摆放/.test(input.userText) && !/(不要|别|无需|不用).{0,8}(整理|排列|排序|对齐|布局|排版|重新摆放)/.test(input.userText);
+        const arrangeRequested = canvasAgentAllowsArrangement(input.userText);
         const requestedActions = nativeActions.length ? nativeActions : parsedJson.actions;
         const actions = requestedActions.filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
         const rejectedToolMessages: CanvasAgentProtocolMessage[] = nativeActions.filter((action) => action.name === "arrange_nodes" && !arrangeRequested).map((action) => ({
@@ -274,7 +274,11 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     return { reply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint, jsonFallbackMode: usedJsonFallbackMode };
 }
 
-async function executeActions(
+export function canvasAgentAllowsArrangement(userText: string) {
+    return /整理|排列|排序|对齐|布局|排版|重新摆放/.test(userText) && !/(不要|别|无需|不用).{0,8}(整理|排列|排序|对齐|布局|排版|重新摆放)/.test(userText);
+}
+
+export async function executeActions(
     actions: CanvasAgentAction[],
     initialState: CanvasAgentState,
     executeAction: (action: CanvasAgentAction) => Promise<CanvasAgentToolResult>,

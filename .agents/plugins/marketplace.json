@@ -1,0 +1,20 @@
+{
+  "name": "infinite-canvas",
+  "interface": {
+    "displayName": "infinite-canvas-plugin"
+  },
+  "plugins": [
+    {
+      "name": "canvas-agent",
+      "source": {
+        "source": "local",
+        "path": "./canvas-agent"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

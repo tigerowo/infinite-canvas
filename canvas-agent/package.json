@@ -1,0 +1,30 @@
+{
+    "name": "@tigerowo/canvas-agent",
+    "version": "0.1.0",
+    "type": "module",
+    "bin": {
+        "canvas-agent": "index.mjs"
+    },
+    "files": ["index.mjs", "codex.mjs"],
+    "publishConfig": {
+        "access": "public"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/tigerowo/infinite-canvas.git",
+        "directory": "canvas-agent"
+    },
+    "scripts": {
+        "start": "node index.mjs",
+        "codex": "codex"
+    },
+    "engines": {
+        "node": ">=22"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.12.1",
+        "@openai/codex": "0.153.4",
+        "express": "^5.1.0",
+        "open": "^11.0.1"
+    }
+}
