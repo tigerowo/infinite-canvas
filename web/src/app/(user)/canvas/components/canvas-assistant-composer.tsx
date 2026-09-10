@@ -2,7 +2,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { ArrowUp, Brain, FolderOpen, ImageIcon, Menu, Settings2, Square, Upload, Video } from "lucide-react";
-import { Button, Dropdown, Switch, Tooltip } from "antd";
+import { Button, Dropdown, Switch } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { channelProtocolForConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -164,15 +164,13 @@ export function CanvasAssistantComposer({
                     </div>
                     <div className="ml-auto flex shrink-0 items-center gap-1">
                         {canConfigure && !codexControls ? (
-                        <Dropdown trigger={["click"]} menu={{
+                        <Dropdown trigger={["click"]} placement="topRight" autoAdjustOverflow menu={{
                             selectable: true,
                             selectedKeys: [effort],
-                            items: efforts.map((key) => ({ key, label: key === "auto" ? "自动（使用模型默认设置）" : reasoningLabels[key] })),
+                            items: efforts.map((key) => ({ key, label: reasoningLabels[key] })),
                             onClick: ({ key }) => onAgentConfigChange({ textReasoningEffort: key as ReasoningEffort, textReasoningEnabled: key !== "auto" && key !== "none" }),
                         }}>
-                            <Tooltip title={effort === "auto" ? "使用模型默认思考设置，不指定强度" : "思考强度"}>
-                                <Button type="text" className="!h-9 !px-2" icon={<Brain className="size-4" />} aria-label={`思考强度：${reasoningLabels[effort]}`}>{reasoningLabels[effort]}</Button>
-                            </Tooltip>
+                            <Button type="text" className="!h-9 !px-2" icon={<Brain className="size-4" />} aria-label={`思考强度：${reasoningLabels[effort]}`}>{reasoningLabels[effort]}</Button>
                         </Dropdown>
                         ) : null}
                         <Button

@@ -48,6 +48,7 @@ export function CanvasCameraControl({ value, onChange, buttonClassName }: Canvas
     return (
         <SettingsPopover
             title="摄像机"
+            surface="solid"
             width={900}
             placement="top"
             trigger={

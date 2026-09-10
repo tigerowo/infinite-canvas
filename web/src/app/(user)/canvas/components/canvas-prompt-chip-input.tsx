@@ -41,6 +41,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onReference
     const editorRef = useRef<HTMLDivElement>(null);
     const skillIconRef = useRef<SVGSVGElement>(null);
     const composingRef = useRef(false);
+    const [isComposing, setIsComposing] = useState(false);
     const lastEmittedRef = useRef(value);
     const [mention, setMention] = useState<MentionState | null>(null);
     const [activeIndex, setActiveIndex] = useState(0);
@@ -153,7 +154,7 @@ export function CanvasPromptChipInput({ value, references, onChange, onReference
         emitChange(serializePromptEditor(editor));
     };
 
-    const showPlaceholder = !value.trim() && !pendingReferences?.length && !skills?.length;
+    const showPlaceholder = !isComposing && !value.trim() && !pendingReferences?.length && !skills?.length;
 
     return (
         <div className="relative w-full">
@@ -215,18 +216,20 @@ export function CanvasPromptChipInput({ value, references, onChange, onReference
                 }}
                 onCompositionStart={() => {
                     composingRef.current = true;
+                    setIsComposing(true);
+                    closeMention();
                 }}
                 onCompositionEnd={() => {
                     composingRef.current = false;
+                    setIsComposing(false);
                     syncFromEditor();
                 }}
                 onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
                     event.stopPropagation();
-                    const committed = commitPendingReferences();
-
                     const nativeEvent = event.nativeEvent;
                     const isComposing = composingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229;
                     if (isComposing) return;
+                    const committed = commitPendingReferences();
 
                     if (mention && candidates.length) {
                         if (event.key === "ArrowDown") {

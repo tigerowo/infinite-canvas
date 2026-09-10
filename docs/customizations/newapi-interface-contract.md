@@ -2,7 +2,7 @@
 
 用途：接入新上游时，查清本软件会向 NewAPI 请求哪个接口、发送哪些参数和素材，再据此编写 NewAPI 侧的上游适配器或插件。本文按当前工作区中渠道协议为 `newapi` 的请求代码编写，核查日期为 2026-09-10；其他直连供应商协议不混入本文。
 
-以下示例是 **NewAPI HTTP 入口收到的请求结构**。模型名、提示词、工具定义和素材为占位值，需替换成真实配置；可选字段仅在相应条件成立时发送。思考强度菜单已实现，但只发送当前模型能力表允许的档位；不表示所有上游均支持任意档位。
+以下示例是 **NewAPI HTTP 入口收到的请求结构**。模型名、提示词、工具定义和素材为占位值，需替换成真实配置；可选字段仅在相应条件成立时发送。思考强度默认关闭，所有文本模型均提供五档手动选项；用户应选择上游支持的档位。
 
 ## 1. 公共约定与接口索引
 
@@ -50,23 +50,22 @@ multipart 的 Content-Type 为 `multipart/form-data; boundary=...`，boundary �
 | tools | array | 原生工具模式且有工具时发送；元素为 `{type:"function",function:{name,description,parameters}}` |
 | tool_choice | string | 有原生工具时发送 auto |
 | response_format | object | 结构化工具模式且有工具 Schema 时发送，结构见下文 |
-| reasoning_effort | string | 非自动且模型支持时发送所选值：none、minimal、low、medium、high 或 xhigh；按模型限制，见下表 |
+| reasoning_effort | string | 手动选档后发送 low、medium、high、xhigh 或 max；关闭时省略，见下表 |
 
 此构造器不主动发送 temperature、top_p、max_tokens、max_completion_tokens。省略推理字段由网关/模型决定，不等于强制关闭思考。
 
-当前软件的能力筛选规则如下，模型名为大小写不敏感的前缀匹配；别名如果不符合这些规则，只显示自动。插件应按收到的值转换至上游字段，不要自行固定为 high。
+所有文本模型（包括新增模型和别名）使用以下选项，不再按模型名限制。插件应按收到的值转换至上游字段，不要自行固定为 high。
 
-| 模型族 | 自动以外的软件选项 |
+| 软件选项 | 请求值 |
 | --- | --- |
-| gpt-5.2、gpt-5.4、gpt-5.5，排除 pro | none、low、medium、high、xhigh |
-| gpt-5.1 | none、low、medium、high |
-| gpt-5，排除 pro | minimal、low、medium、high |
-| o1、o3、o4 | low、medium、high |
-| gemini-3.1-pro、gemini-3-flash | low、medium、high |
-| gemini-3-pro、gemini-3.0-pro | low、high |
-| 其他模型或不支持的旧选择 | 自动，即省略字段 |
+| 关闭（默认） | 省略字段 |
+| 低 | low |
+| 中 | medium |
+| 高 | high |
+| 极高 | xhigh |
+| 最高 | max |
 
-没有保存新档位的旧布尔配置：开启映射 high，但仍先通过模型能力校验；关闭映射自动。切换模型后不支持的选择按自动处理。这里描述软件当前请求行为，不代替上游支持承诺。
+没有保存新档位的旧布尔配置：开启映射 high，关闭省略字段。旧 auto 和 none 归一为关闭、不传字段；旧 minimal 归一为 low。切换模型保留已选档位。这里描述软件当前请求行为，不代替上游支持承诺。
 
 | 消息 | 实际结构 |
 | --- | --- |
@@ -149,7 +148,7 @@ multipart 的 Content-Type 为 `multipart/form-data; boundary=...`，boundary �
 | tools | array | 原生工具模式且有工具时发送；扁平 `{type:"function",name,description,parameters}` |
 | tool_choice | string | 有原生工具时发送 auto |
 | text | object | 结构化工具模式发送 `{format:{type:"json_schema",name:"canvas_agent_actions",schema:实际Schema}}` |
-| reasoning | object | 非自动且模型支持时发送 `{effort:"所选值"}`，取值与文本 Chat 能力表相同；自动省略 |
+| reasoning | object | 手动选档后发送 `{effort:"所选值"}`，取值与文本 Chat 选项表相同；关闭时省略 |
 
 当前 Agent 此分支不发送 stream、previous_response_id；在 input 中传递所需历史。文本消息 content 可以是字符串；带图时使用 input_text/input_image。已保留的 Responses 输出项原样进入后续 input，包括推理项或 function_call。
 
@@ -604,7 +603,7 @@ voice 选项：alloy、ash、ballad、coral、echo、fable、nova、onyx、sage�
 | 模型 | 各创建请求的 model，随后按 NewAPI 模型映射处理 |
 | 文本上下文 | Chat 的 messages；Responses 的 instructions + input |
 | Agent 工具 | Chat 的 tools[].function；Responses 的 tools[] 扁平定义 |
-| 思考强度 | Chat 的 reasoning_effort；文本 Responses 的 reasoning.effort；按能力发送菜单所选值，自动省略 |
+| 思考强度 | Chat 的 reasoning_effort；文本 Responses 的 reasoning.effort；发送五档手动选择值，关闭时省略 |
 | 图片提示词 | Images 的 prompt；Chat 的 user content；Responses 的 input |
 | 图片参考素材 | Images 的 image / image[] 文件；Chat 的 image_url.url；Responses 的 input_image.image_url |
 | 图片尺寸、质量 | Images 根 size/quality；Responses 的 tools[0].size/quality；Chat 生图不发送 |

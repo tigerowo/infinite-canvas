@@ -107,7 +107,7 @@ if(!process.argv[2]) {
  await editor.getByRole('button',{name:/Close|关闭/}).click();
  await editor.waitFor({state:'hidden'});
  assert.equal(await parent.isVisible(),false);
- await page.getByRole('button',{name:'思考强度：自动'}).click();
+ await page.getByRole('button',{name:'思考强度：关闭'}).click();
  await page.getByRole('menuitem',{name:'高',exact:true}).click();
  await page.getByRole('menu').waitFor({state:'hidden'});
  assert.equal(await page.getByRole('button',{name:'思考强度：高'}).count(),1);

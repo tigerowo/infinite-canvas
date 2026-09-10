@@ -51,6 +51,7 @@ export function CanvasVideoSettingsPopover({
     return (
         <SettingsPopover
             title="视频设置"
+            surface="solid"
             placement={placement}
             trigger={
                 <Button
