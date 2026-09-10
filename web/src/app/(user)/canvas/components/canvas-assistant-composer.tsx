@@ -2,7 +2,7 @@
 
 import { useMemo, type ReactNode } from "react";
 import { ArrowUp, Brain, FolderOpen, ImageIcon, Menu, Settings2, Square, Upload, Video } from "lucide-react";
-import { Button, Dropdown, Switch } from "antd";
+import { Button, Dropdown } from "antd";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { channelProtocolForConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
@@ -141,11 +141,6 @@ export function CanvasAssistantComposer({
                                 else if (key === "size") onAgentConfigChange({ videoSize: value });
                             }}
                         />
-                        <div className="flex items-center justify-between gap-3 border-t pt-3" style={{ borderColor: theme.node.stroke }}>
-                            <span className="text-sm">自动提交生成</span>
-                            <Switch aria-label="自动提交生成" checked={agentConfig.autoGenerateMedia} onChange={(autoGenerateMedia) => onAgentConfigChange({ autoGenerateMedia })} />
-                        </div>
-                        <p className="text-xs leading-5 opacity-65">{agentConfig.autoGenerateMedia ? "Agent 创建媒体节点后立即提交生成，使用对应模型额度。" : "先创建待生成节点，检查后在画布点击“生成”。"}</p>
                         </div>
                         </SettingsPopover> : null}
                         {canConfigure && onSkillSelect && onSkillRemove ? <CanvasAgentSkillPopover selectedSkills={selectedSkills} onSelect={onSkillSelect} onDeleteSelected={onSkillRemove} /> : null}

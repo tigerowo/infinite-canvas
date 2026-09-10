@@ -91,9 +91,7 @@ if(!process.argv[2]) {
  await search.waitFor({state:'hidden'});
  await settingsButton.click();
  assert.equal(await parent.getByRole('button',{name:'Skill',exact:true}).count(),0);
- assert.equal(await page.getByRole('switch',{name:'自动提交生成'}).getAttribute('aria-checked'),'false');
- await page.getByRole('switch',{name:'自动提交生成'}).click();
- assert.equal(await page.getByRole('switch',{name:'自动提交生成'}).getAttribute('aria-checked'),'true');
+ assert.equal(await parent.getByRole('switch',{name:'自动提交生成'}).count(),0);
  await page.getByRole('button',{name:'关闭工具设置'}).click();
  await parent.waitFor({state:'hidden'});
  await page.getByRole('button',{name:'Skill',exact:true}).click();

@@ -1,37 +1,37 @@
 "use client";
 
 import { Popover } from "radix-ui";
-import { useId, type ReactElement, type ReactNode } from "react";
+import { useId, useState, type ReactElement, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
 import styles from "./glass-ui.module.css";
-import { PanelResizeHandle } from "./panel-resize-handle";
 
 export type SettingsPlacement = "topLeft" | "top" | "topRight" | "bottomLeft" | "bottom" | "bottomRight";
 
 // Radix owns collision detection, focus restoration and exit presence for both settings panels.
-export function SettingsPopover({ title, trigger, children, placement = "topLeft", width = 360, surface = "glass", onOpenChange }: { title: string; trigger: ReactElement; children: ReactNode; placement?: SettingsPlacement; width?: number; surface?: "glass" | "solid"; onOpenChange?: (open: boolean) => void }) {
+export function SettingsPopover({ title, trigger, children, placement = "topLeft", width = 360, onOpenChange }: { title: string; trigger: ReactElement; children: ReactNode; placement?: SettingsPlacement; width?: number; onOpenChange?: (open: boolean) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const titleId = useId();
+    const [boundary, setBoundary] = useState<HTMLElement | null>(null);
     return (
         <Popover.Root onOpenChange={onOpenChange}>
-            <Popover.Trigger asChild>{trigger}</Popover.Trigger>
+            <Popover.Trigger asChild onClick={(event) => setBoundary(event.currentTarget.closest("[data-canvas-node-editor]") ? document.querySelector<HTMLElement>("[data-canvas-area]") : null)}>{trigger}</Popover.Trigger>
             <Popover.Portal>
                 <Popover.Content
                     aria-label={title}
                     aria-labelledby={titleId}
                     data-canvas-no-zoom
-                    data-resizable-panel
                     className={styles.popover}
                     side={placement.startsWith("top") ? "top" : "bottom"}
                     align={placement.endsWith("Right") ? "end" : placement.endsWith("Left") ? "start" : "center"}
                     sideOffset={10}
                     avoidCollisions
+                    collisionBoundary={boundary}
                     collisionPadding={12}
                     sticky="always"
                     updatePositionStrategy="always"
-                    style={{ width: `min(${width}px, calc(100vw - 24px))`, resize: "both", minWidth: "min(280px, calc(100vw - 24px))", minHeight: 160, maxWidth: "calc(100vw - 24px)", backgroundColor: theme.glass.panel, borderColor: theme.glass.border, color: theme.node.text, ...(surface === "solid" ? { background: "var(--popover)", backdropFilter: "none", WebkitBackdropFilter: "none" } : {}) }}
+                    style={{ width: `min(${width}px, calc(100vw - 24px), var(--radix-popover-content-available-width, 100vw))`, borderColor: theme.glass.border, color: theme.node.text }}
                     onInteractOutside={(event) => {
                         // Ant Design select options are portalled to the body.
                         if (event.target instanceof Element && event.target.closest(".ant-select-dropdown, [data-ext-skill-overlay], .ext-skill-editor")) event.preventDefault();
@@ -53,7 +53,6 @@ export function SettingsPopover({ title, trigger, children, placement = "topLeft
                         </Popover.Close>
                     </div>
                     {children}
-                    <PanelResizeHandle />
                 </Popover.Content>
             </Popover.Portal>
         </Popover.Root>

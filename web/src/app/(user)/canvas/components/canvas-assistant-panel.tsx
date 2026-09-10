@@ -554,7 +554,7 @@ export function CanvasAssistantPanel({
 
     return (
         <motion.div
-            className="flex shrink-0"
+            className="relative z-[100] flex shrink-0"
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: closing ? 0 : width + 1, opacity: closing ? 0 : 1 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
@@ -607,10 +607,10 @@ export function CanvasAssistantPanel({
                             />
                         </Tooltip>
                         <Tooltip title="Agent 设置">
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<Settings2 className="size-4" />} onClick={() => setSettingsOpen(true)} />
+                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<Settings2 className="size-4" />} aria-label="Agent 设置" onClick={() => setSettingsOpen(true)} />
                         </Tooltip>
                         <Tooltip title="收起对话">
-                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<PanelRightClose className="size-4" />} onClick={collapse} />
+                            <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={iconButtonStyle} icon={<PanelRightClose className="size-4" />} aria-label="收起对话" onClick={collapse} />
                         </Tooltip>
                     </div>
                 </div>
@@ -703,7 +703,7 @@ export function CanvasAssistantPanel({
                             <div className="text-sm font-medium">自动生成图片/视频/音频</div>
                             <div className="mt-1 text-xs leading-5 opacity-55">开启后，Agent 可直接提交图片/视频/音频生成，无需再次确认</div>
                         </div>
-                        <Switch checked={agentConfig.autoGenerateMedia} onChange={(autoGenerateMedia) => onAgentConfigChange({ autoGenerateMedia })} />
+                        <Switch aria-label="自动生成图片/视频/音频" checked={agentConfig.autoGenerateMedia} onChange={(autoGenerateMedia) => onAgentConfigChange({ autoGenerateMedia })} />
                     </div>
                 </Modal>
 

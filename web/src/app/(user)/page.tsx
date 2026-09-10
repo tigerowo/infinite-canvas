@@ -79,7 +79,7 @@ export default function IndexPage() {
     const [submitting, setSubmitting] = useState(false);
     const copyText = useCopyText();
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig>(() => ({
-        textApiMode: "chat",
+        textApiMode: "responses",
         autoGenerateMedia: false,
         imageQuality: effectiveConfig.quality,
         imageSize: effectiveConfig.size,

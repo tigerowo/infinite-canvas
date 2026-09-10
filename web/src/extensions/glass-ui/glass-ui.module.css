@@ -9,12 +9,10 @@
     border-radius: 24px;
     padding: 18px;
     color: var(--foreground);
-    background: linear-gradient(145deg, var(--glass-highlight), transparent 45%), var(--glass-surface);
+    background: var(--popover);
     box-shadow:
         var(--glass-shadow),
         inset 0 1px 0 var(--glass-highlight);
-    backdrop-filter: blur(18px) saturate(1.15);
-    -webkit-backdrop-filter: blur(18px) saturate(1.15);
     transform-origin: var(--radix-popover-content-transform-origin);
     z-index: 1200;
     outline: none;

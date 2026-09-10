@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { PanelResizeHandle } from "@/extensions/glass-ui/panel-resize-handle";
+import { fitNodePanel } from "@/extensions/glass-ui/node-panel-layout";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
@@ -128,7 +128,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     const nodeRef = useRef<HTMLDivElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
     const renderPanelRef = useRef(renderPanel);
-    const [panelPosition, setPanelPosition] = useState({ left: 12, top: 12, visible: false });
+    const [panelPosition, setPanelPosition] = useState({ left: 12, top: 12, width: 0, maxHeight: 0, visible: false });
     const [titleDraft, setTitleDraft] = useState(data.title || "");
     const isGroup = data.type === CanvasNodeType.Group;
     const hasImageContent = isCanvasImageNodeType(data.type) && Boolean(data.metadata?.content);
@@ -146,18 +146,18 @@ export const CanvasNode = React.memo(function CanvasNode({
         }
         const nodeRect = nodeRef.current.getBoundingClientRect();
         const panelRect = panelRef.current?.getBoundingClientRect();
-        const panelWidth = panelRect?.width || (isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? 622 : 500);
+        const preferredWidth = isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? 622 : 500;
         const panelHeight = panelRect?.height || 240;
-        const margin = 12;
-        const gap = 16;
-        const maxLeft = Math.max(margin, window.innerWidth - panelWidth - margin);
-        const left = Math.min(Math.max(margin, nodeRect.left + (nodeRect.width - panelWidth) / 2), maxLeft);
-        const below = nodeRect.bottom + gap;
-        const above = nodeRect.top - panelHeight - gap;
-        const candidateTop = below + panelHeight <= window.innerHeight - margin || above < margin ? below : above;
-        const maxTop = Math.max(margin, window.innerHeight - panelHeight - margin);
-        const top = Math.min(Math.max(margin, candidateTop), maxTop);
-        setPanelPosition((current) => current.visible && current.left === left && current.top === top ? current : { left, top, visible: true });
+        const area = nodeRef.current.closest("[data-canvas-area]")?.getBoundingClientRect();
+        const viewport = window.visualViewport;
+        const bounds = {
+            left: Math.max(area?.left ?? 0, viewport?.offsetLeft ?? 0),
+            right: Math.min(area?.right ?? window.innerWidth, (viewport?.offsetLeft ?? 0) + (viewport?.width ?? window.innerWidth)),
+            top: Math.max((area?.top ?? 0) + 64, viewport?.offsetTop ?? 0),
+            bottom: Math.min((area?.bottom ?? window.innerHeight) - 64, (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight)),
+        };
+        const next = fitNodePanel(nodeRect, bounds, preferredWidth, panelHeight);
+        setPanelPosition((current) => Object.keys(next).every((key) => current[key as keyof typeof next] === next[key as keyof typeof next]) ? current : next);
     }, [data.type, data.height, data.position.x, data.position.y, data.width, isGroup, scale, showPanel]);
 
     useIsomorphicLayoutEffect(() => {
@@ -183,6 +183,8 @@ export const CanvasNode = React.memo(function CanvasNode({
         const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
         if (nodeRef.current) observer?.observe(nodeRef.current);
         if (panelRef.current) observer?.observe(panelRef.current);
+        const area = nodeRef.current?.closest("[data-canvas-area]");
+        if (area) observer?.observe(area);
         const movementObserver = new MutationObserver(schedule);
         for (let ancestor = nodeRef.current?.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
             movementObserver.observe(ancestor, { attributes: true, attributeFilter: ["style", "class"] });
@@ -538,17 +540,14 @@ export const CanvasNode = React.memo(function CanvasNode({
             <div
                 ref={panelRef}
                 data-canvas-no-zoom
-                data-resizable-panel
-                className="pointer-events-auto fixed z-[1000] max-w-[calc(100vw-24px)] resize overflow-auto overscroll-contain"
+                data-canvas-node-editor
+                className="pointer-events-auto fixed z-[90] overflow-auto overscroll-contain rounded-2xl"
                 style={{
                     left: panelPosition.left,
                     top: panelPosition.top,
-                    width: `min(${isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? 622 : 500}px, calc(100vw - 24px))`,
-                    minWidth: "280px",
-                    maxWidth: "calc(100vw - 24px)",
-                    minHeight: "160px",
-                    maxHeight: "calc(100dvh - 24px)",
-                    resize: "both",
+                    width: panelPosition.width,
+                    maxHeight: panelPosition.maxHeight,
+                    background: "var(--popover)",
                     visibility: panelPosition.visible ? "visible" : "hidden",
                 }}
                 onPointerDown={(event) => event.stopPropagation()}
@@ -561,7 +560,6 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }}
             >
                 {renderPanel(data)}
-                <PanelResizeHandle />
             </div>,
             document.body,
         ) : null}

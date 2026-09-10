@@ -424,9 +424,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [canvasNow, setCanvasNow] = useState(Date.now());
     const resolvedAgentConfig = useMemo<CanvasAgentConfig>(
         () => {
-            const defaults = { textApiMode: "chat" as const, autoGenerateMedia: false };
+            const defaults = { textApiMode: "responses" as const, autoGenerateMedia: false };
             return agentConfig ? { ...defaults, ...agentConfig } : {
-                textApiMode: "chat",
+                textApiMode: "responses",
                 autoGenerateMedia: false,
                 imageQuality: effectiveConfig.quality,
                 imageSize: effectiveConfig.size,
@@ -4004,7 +4004,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 }}
                 onInsertAsset={handleAssetInsert}
             />
-            <section className="relative min-w-0 flex-1 overflow-hidden">
+            <section data-canvas-area className="relative min-w-0 flex-1 overflow-hidden">
                 <CanvasTopBar
                     title={currentProject?.title || "未命名画布"}
                     sidePanelOpen={sidePanel.open}

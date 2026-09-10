@@ -48,7 +48,6 @@ export function CanvasCameraControl({ value, onChange, buttonClassName }: Canvas
     return (
         <SettingsPopover
             title="摄像机"
-            surface="solid"
             width={900}
             placement="top"
             trigger={
@@ -68,8 +67,8 @@ export function CanvasCameraControl({ value, onChange, buttonClassName }: Canvas
                 </Button>
             }
         >
-                          <div className="px-4 py-5 sm:px-6">
-                              <div className="grid grid-cols-2 gap-y-4 sm:grid-cols-4 sm:gap-y-0">
+                          <div className="@container py-2">
+                              <div className="grid grid-cols-2 gap-y-4 @min-[700px]:grid-cols-4 @min-[700px]:gap-y-0">
                                       <SettingColumn
                                           theme={theme}
                                           label="相机"
@@ -163,13 +162,15 @@ function SettingColumn({ theme, separator, label, tooltipTitle, tooltipDesc, too
     );
 
     return (
-        <div className="flex flex-col items-center px-5" style={{ borderLeft: separator ? "1px solid " + theme.node.stroke : undefined }}>
+        <div className="flex min-w-0 flex-col items-center px-2" style={{ borderLeft: separator ? "1px solid " + theme.node.stroke : undefined }}>
             <Button type="text" disabled={!onPrevious} className="group !h-8 !w-full !p-0 hover:!bg-transparent" style={{ color: theme.node.faint }} icon={<ChevronUp className="h-5 w-8 rounded-md p-0.5 transition-colors group-hover:bg-foreground/5 group-hover:text-foreground/80" />} aria-label={"上一项" + label} onClick={onPrevious} />
             <Tooltip title={tooltip} mouseEnterDelay={0.7} color={theme.node.panel} zIndex={1300}>
                 <div className="relative flex h-[180px] w-full max-w-[180px] cursor-help flex-col items-center justify-between rounded-2xl border px-4 py-3 transition-colors" style={{ background: theme.node.fill, borderColor: theme.node.stroke }}>
-                    <span className="text-sm font-medium" style={{ color: theme.node.muted }}>{label}</span>
+                    <span className="flex flex-wrap items-center justify-center gap-1 text-sm font-medium" style={{ color: theme.node.muted }}>
+                        {label}
+                        {badge ? <span className="rounded-md px-1.5 py-0.5 text-xs" style={{ background: theme.toolbar.activeBg, color: theme.toolbar.activeText }}>{badge}</span> : null}
+                    </span>
                     <div className="flex flex-1 items-center justify-center">{visual}</div>
-                    {badge ? <span className="absolute right-2 top-2.5 rounded-md px-2 py-0.5 text-xs font-medium" style={{ background: theme.toolbar.activeBg, color: theme.toolbar.activeText }}>{badge}</span> : null}
                 </div>
             </Tooltip>
             <Button type="text" disabled={!onNext} className="group !h-8 !w-full !p-0 hover:!bg-transparent" style={{ color: theme.node.faint }} icon={<ChevronDown className="h-5 w-8 rounded-md p-0.5 transition-colors group-hover:bg-foreground/5 group-hover:text-foreground/80" />} aria-label={"下一项" + label} onClick={onNext} />

@@ -5,6 +5,8 @@ description: 当前版本已实现但仍需人工验证的变更项
 
 # 待测试
 
+- EXT-0041：设置和节点窗口统一不透明、自动适配尺寸、取消缩放把手，节点编辑避开文本对话；新配置默认 Responses，自动生成开关统一留在 Agent 设置。深浅主题、715px/390px 与画布回归见 [修改记录](../customizations/changes/0041-adaptive-canvas-panels.md)，真实模型 Responses 支持待按渠道验收。
+
 - EXT-0039：所有文本模型五档手动思考强度、默认关闭、中文组合输入占位修复、思考菜单去遮挡及视频/摄像机不透明弹层。浏览器与真实输入法/模型验收范围见 [修改记录](../customizations/changes/0039-composer-input-settings.md)。
 
 - EXT-0037：节点信息置顶、导演台 GitHub 入口隐藏、通用/NewAPI 自定义视频 1–30 秒已通过类型、契约与隔离浏览器验证；待加载新版后用支持 30 秒的真实模型验收生成。具体模型专用时长规则保留，见 [修改记录](../customizations/changes/0037-canvas-overlay-video-duration.md)。
