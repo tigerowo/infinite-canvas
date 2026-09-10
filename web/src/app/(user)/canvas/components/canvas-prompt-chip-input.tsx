@@ -171,8 +171,10 @@ export function CanvasPromptChipInput({ value, references, onChange, onReference
                 role="textbox"
                 aria-multiline="true"
                 aria-readonly={readOnly}
-                aria-label={placeholder}
-                className={`${className || ""} overflow-y-auto whitespace-pre-wrap break-words outline-none [&_[data-pending-reference=true]]:opacity-50`}
+                aria-label={placeholder || (readOnly ? "用户提示词" : "提示词输入框")}
+                aria-controls={mention && candidates.length ? "canvas-resource-mention-menu" : undefined}
+                aria-activedescendant={mention && candidates.length ? `canvas-resource-option-${safeDomId(candidates[Math.min(activeIndex, candidates.length - 1)].id)}` : undefined}
+                className={`${className || ""} overflow-y-auto whitespace-pre-wrap break-words rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50 [&_[data-pending-reference=true]]:opacity-50`}
                 style={{ ...style, cursor: "text" }}
                 onFocus={commitPendingReferences}
                 onPointerDown={commitPendingReferences}
@@ -339,6 +341,9 @@ function MentionMenu({
 
     return createPortal(
         <div
+            id="canvas-resource-mention-menu"
+            role="listbox"
+            aria-label="画布资源引用候选项"
             data-canvas-resource-mention-menu="true"
             className="fixed z-[1100] max-h-56 w-64 overflow-y-auto rounded-xl border p-1 shadow-2xl backdrop-blur-md"
             style={{
@@ -357,6 +362,9 @@ function MentionMenu({
             {references.map((reference, index) => (
                 <button
                     key={reference.id}
+                    id={`canvas-resource-option-${safeDomId(reference.id)}`}
+                    role="option"
+                    aria-selected={index === activeIndex}
                     ref={index === activeIndex ? activeItemRef : undefined}
                     type="button"
                     className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition"
@@ -386,6 +394,10 @@ function MentionMenu({
         </div>,
         document.body,
     );
+}
+
+function safeDomId(value: string) {
+    return value.replace(/[^a-zA-Z0-9_-]/g, "-");
 }
 
 function ReferencePreview({ reference }: { reference: CanvasResourceReference }) {

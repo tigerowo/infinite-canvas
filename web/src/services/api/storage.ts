@@ -17,14 +17,22 @@ export type StorageObjectInfo = {
     direct: boolean;
 };
 
-export function getStorageObjectInfo(id: string) {
-    return apiGet<StorageObjectInfo>(`/api/files/${encodeURIComponent(id)}`);
+export type StorageObjectSignedURL = {
+    url: string;
+    expiresAt: string;
+    mimeType: string;
+    bytes: number;
+};
+
+export function getStorageObjectInfo(id: string, token?: string) {
+    return apiGet<StorageObjectInfo>(`/api/files/${encodeURIComponent(id)}`, undefined, token);
 }
 
-export function registerDirectStorageObject(
-    token: string,
-    payload: { provider: UserWebDAVStorageProvider; objectKey: string; mimeType: string; bytes: number },
-) {
+export function getStorageObjectSignedURL(id: string, token: string) {
+    return apiGet<StorageObjectSignedURL>(`/api/v1/files/${encodeURIComponent(id)}/signed-url`, undefined, token);
+}
+
+export function registerDirectStorageObject(token: string, payload: { provider: UserWebDAVStorageProvider; objectKey: string; mimeType: string; bytes: number }) {
     return apiPost<RegisteredStorageObject>("/api/v1/files/direct", payload, token);
 }
 

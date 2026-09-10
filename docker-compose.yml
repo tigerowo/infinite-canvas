@@ -4,7 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    pull_policy: always
+    pull_policy: missing
     container_name: infinite-canvas
     env_file:
       - .env

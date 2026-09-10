@@ -7,6 +7,8 @@ import { readImageMeta } from "@/lib/image-utils";
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
 import { apiGet } from "@/services/api/request";
 import { useUserStore } from "@/stores/use-user-store";
+import { isSignedMediaURL, privateMediaURL } from "@/extensions/storage-access/signed-url";
+import { assertMediaSession, clearMediaMapsOnSessionChange, mediaSession, retryableRequest, scopedMediaStore } from "@/extensions/media-reliability/cache";
 
 export type UploadedImage = {
     url: string;
@@ -52,12 +54,13 @@ export type StorageConfig = {
     allowUserGlobalProvider: boolean;
 };
 
-const store = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
+const store = scopedMediaStore(localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" }));
 const objectUrls = new Map<string, string>();
 const serverUrls = new Map<string, string>();
+clearMediaMapsOnSessionChange(objectUrls, serverUrls);
 export const USER_STORAGE_PROVIDER_KEY = "infinite-canvas:user_storage_provider";
 export const USER_WEBDAV_STORAGE_PROVIDER_KEY = "infinite-canvas:user_webdav_storage_provider";
-let storageConfigPromise: Promise<StorageConfig> | null = null;
+const storageConfigRequest = retryableRequest(() => apiGet<StorageConfig>("/api/storage/config"));
 
 export function canUseGlobalStorage(config: StorageConfig) {
     const user = useUserStore.getState().user;
@@ -66,51 +69,28 @@ export function canUseGlobalStorage(config: StorageConfig) {
 
 function isLocalNetworkHost(hostname: string) {
     const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
-    if (
-        host === "localhost" ||
-        host.endsWith(".localhost") ||
-        host.endsWith(".local") ||
-        host === "host.docker.internal" ||
-        host === "::1"
-    ) {
+    if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host === "host.docker.internal" || host === "::1") {
         return true;
     }
-    if (
-        host.includes(":") &&
-        (host.startsWith("fc") ||
-            host.startsWith("fd") ||
-            /^fe[89ab]/.test(host))
-    ) {
+    if (host.includes(":") && (host.startsWith("fc") || host.startsWith("fd") || /^fe[89ab]/.test(host))) {
         return true;
     }
     const parts = host.split(".").map(Number);
-    if (
-        parts.length !== 4 ||
-        parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-    ) {
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
         return false;
     }
     const [a, b] = parts;
-    return (
-        a === 10 ||
-        a === 127 ||
-        (a === 172 && b >= 16 && b <= 31) ||
-        (a === 192 && b === 168) ||
-        (a === 169 && b === 254)
-    );
+    return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254);
 }
 
 export function getProxyUrl(url: string): string {
+    if (isSignedMediaURL(url)) return url;
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
         return url;
     }
     try {
         const parsed = new URL(url);
-        if (
-            isLocalNetworkHost(parsed.hostname) ||
-            (typeof window !== "undefined" &&
-                parsed.host === window.location.host)
-        ) {
+        if (isLocalNetworkHost(parsed.hostname) || (typeof window !== "undefined" && parsed.host === window.location.host)) {
             return url;
         }
     } catch {
@@ -125,12 +105,12 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     if (typeof url === "string") {
         const response = await fetch(url);
         if (!response.ok) {
-            const payload = await response.json().catch(() => null) as { msg?: string } | null;
+            const payload = (await response.json().catch(() => null)) as { msg?: string } | null;
             throw new Error(payload?.msg || `代理图片拉取失败：${response.status}`);
         }
         const contentType = response.headers.get("content-type") || "";
         if (contentType.includes("application/json")) {
-            const payload = await response.json().catch(() => null) as { msg?: string } | null;
+            const payload = (await response.json().catch(() => null)) as { msg?: string } | null;
             throw new Error(payload?.msg || "代理图片下载失败");
         }
         blob = await response.blob();
@@ -149,17 +129,19 @@ export async function uploadImage(input: string | Blob, options: UploadImageOpti
     return { url: urlObj, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type || meta.mimeType };
 }
 
-export async function uploadRemoteImageToServer(url: string, filename: string): Promise<UploadedImage> {
+export async function uploadRemoteImageToServer(url: string, filename: string, globalOnly = false): Promise<UploadedImage> {
+    const session = mediaSession();
     const response = await fetch(getProxyUrl(url));
     if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { msg?: string } | null;
+        const payload = (await response.json().catch(() => null)) as { msg?: string } | null;
         throw new Error(payload?.msg || "代理图片拉取失败：" + response.status);
     }
     const blob = await response.blob();
     const config = await loadStorageConfig();
-    const userProvider = config.allowUserProvider ? loadUserStorageProvider() : null;
+    const userProvider = !globalOnly && config.allowUserProvider ? loadUserStorageProvider() : null;
     if (!canUseGlobalStorage(config) && !userProvider) throw new Error("服务端对象存储未启用");
     const token = useUserStore.getState().token;
+    assertMediaSession(session);
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVImageDirect(blob, filename || `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider);
         if (directUpload) return directUpload;
@@ -175,16 +157,22 @@ export async function uploadRemoteImageToServer(url: string, filename: string): 
     const uploadResponse = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: "Bearer " + token }, body: formData });
     const payload = (await uploadResponse.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "服务端图片上传失败");
-    const meta = await readImageMeta(payload.data.url);
-    if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
-    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
+    assertMediaSession(session);
+    return cacheAnonymousImage(payload.data, blob);
 }
 
 export function clearStorageConfigCache() {
-    storageConfigPromise = null;
+    storageConfigRequest.clear();
 }
 
 export async function resolveImageUrl(storageKey?: string, fallback = "") {
+    const session = mediaSession();
+    const result = await resolveImageUrlInSession(storageKey, fallback);
+    assertMediaSession(session);
+    return result;
+}
+
+async function resolveImageUrlInSession(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     if (storageKey.startsWith("server:webdav:")) {
         const localUrl = await resolveLocalImageUrl(storageKey).catch(() => "");
@@ -192,18 +180,23 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
         const provider = loadUserStorageProvider();
         if (provider?.type !== "webdav") return fallback;
         const direct = await import("@/services/webdav-direct-storage");
+        const session = mediaSession();
         const blob = await direct.readDirectWebDAV(provider, direct.directWebDAVObjectKey(storageKey));
+        assertMediaSession(session);
         return setImageBlob(storageKey, blob);
     }
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
-        if (fallback && !fallback.startsWith("blob:") && !fallback.includes("direct=1")) return fallback;
         const localUrl = await resolveLocalImageUrl(storageKey).catch(() => "");
         if (localUrl) return localUrl;
+        const signed = await privateMediaURL(id);
+        if (signed) return signed;
+        if (isSignedMediaURL(fallback)) fallback = "";
+        if (fallback && !fallback.startsWith("blob:") && !fallback.includes("direct=1")) return fallback;
         const cachedUrl = serverUrls.get(id);
         if (cachedUrl) return cachedUrl;
         const { getStorageObjectInfo } = await import("@/services/api/storage");
-        const info = await getStorageObjectInfo(id).catch(() => null);
+        const info = await getStorageObjectInfo(id, useUserStore.getState().token).catch(() => null);
         if (!info) return fallback;
         const provider = loadUserStorageProvider();
         if (info.direct && provider?.type === "webdav") {
@@ -219,7 +212,7 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
         serverUrls.set(id, url);
         return url;
     }
-    return await resolveLocalImageUrl(storageKey) || fallback;
+    return (await resolveLocalImageUrl(storageKey)) || fallback;
 }
 
 async function resolveLocalImageUrl(storageKey: string) {
@@ -233,12 +226,14 @@ async function resolveLocalImageUrl(storageKey: string) {
 }
 
 async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | null> {
+    const session = mediaSession();
     const config = await loadStorageConfig().catch(() => null);
     const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
     const canUseGlobalProvider = config ? canUseGlobalStorage(config) : false;
     const useServerStorage = canUseGlobalProvider || Boolean(userProvider);
     if (!config || !useServerStorage) return null;
     const token = useUserStore.getState().token;
+    assertMediaSession(session);
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVImageDirect(blob, `image-${nanoid()}.${imageExtension(blob.type)}`, userProvider);
         if (directUpload) return directUpload;
@@ -264,9 +259,8 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
         if (!canUseGlobalProvider) return null;
         throw new Error(payload?.msg || "服务端图片上传失败");
     }
-    const meta = await readImageMeta(payload.data.url);
-    if (payload.data.storageKey?.startsWith("server:")) serverUrls.set(payload.data.storageKey.slice("server:".length), payload.data.url);
-    return { ...payload.data, width: payload.data.width || meta.width, height: payload.data.height || meta.height, mimeType: payload.data.mimeType || blob.type || "image/png", bytes: payload.data.bytes || blob.size };
+    assertMediaSession(session);
+    return cacheAnonymousImage(payload.data, blob);
 }
 
 async function uploadWebDAVImageDirect(blob: Blob, filename: string, provider: UserWebDAVStorageProvider): Promise<UploadedImage | null> {
@@ -276,17 +270,14 @@ async function uploadWebDAVImageDirect(blob: Blob, filename: string, provider: U
 }
 
 async function cacheAnonymousImage(uploaded: UploadedImage, blob: Blob) {
-    await store.setItem(uploaded.storageKey, blob);
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(uploaded.storageKey, url);
+    const url = await setImageBlob(uploaded.storageKey, blob);
     if (uploaded.storageKey.startsWith("server:") && uploaded.url && !uploaded.url.includes("direct=1")) serverUrls.set(uploaded.storageKey.slice("server:".length), uploaded.url);
     const meta = await readImageMeta(url);
     return { ...uploaded, url, width: uploaded.width || meta.width, height: uploaded.height || meta.height, mimeType: uploaded.mimeType || blob.type || meta.mimeType, bytes: uploaded.bytes || blob.size };
 }
 
 export async function loadStorageConfig() {
-    storageConfigPromise ||= apiGet<StorageConfig>("/api/storage/config");
-    return storageConfigPromise;
+    return storageConfigRequest.get();
 }
 
 function imageExtension(mimeType: string) {
@@ -301,6 +292,8 @@ export async function getImageBlob(storageKey: string) {
 
 export async function setImageBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
+    const previous = objectUrls.get(storageKey);
+    if (previous) URL.revokeObjectURL(previous);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -310,12 +303,8 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
     const serverObjectId = image.storageKey?.startsWith("server:") ? image.storageKey.slice("server:".length) : "";
     const directGuestObject = image.storageKey?.startsWith("server:webdav:");
     const hasPersistedUrl = [image.dataUrl, image.url].some((url) => Boolean(url && !url.startsWith("blob:")));
-    const localUrl = !useUserStore.getState().token && serverObjectId && image.storageKey && !hasPersistedUrl
-        ? await resolveLocalImageUrl(image.storageKey).catch(() => "")
-        : "";
-    const resolvedUrl = image.storageKey
-        ? await resolveImageUrl(image.storageKey, image.url || image.dataUrl || "")
-        : "";
+    const localUrl = !useUserStore.getState().token && serverObjectId && image.storageKey && !hasPersistedUrl ? await resolveLocalImageUrl(image.storageKey).catch(() => "") : "";
+    const resolvedUrl = image.storageKey ? await resolveImageUrl(image.storageKey, image.url || image.dataUrl || "") : "";
     const urls = [
         image.dataUrl && !image.dataUrl.startsWith("blob:") ? image.dataUrl : "",
         image.url && !image.url.startsWith("blob:") ? image.url : "",
@@ -345,9 +334,10 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
 export async function deleteStoredImages(keys: Iterable<string>) {
     const { useAssetStore } = await import("@/stores/use-asset-store");
     const assetKeys = new Set(
-        useAssetStore.getState().assets
-            .map((a) => (a.kind !== "text" ? a.data.storageKey : null))
-            .filter((k): k is string => Boolean(k))
+        useAssetStore
+            .getState()
+            .assets.map((a) => (a.kind !== "text" ? a.data.storageKey : null))
+            .filter((k): k is string => Boolean(k)),
     );
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
@@ -515,6 +505,10 @@ async function deleteServerImage(storageKey: string) {
     });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string } | null;
     if (!response.ok || payload?.code !== 0) throw new Error(payload?.msg || "删除服务端图片失败");
+    const url = objectUrls.get(storageKey);
+    if (url) URL.revokeObjectURL(url);
+    objectUrls.delete(storageKey);
+    await store.removeItem(storageKey);
 }
 
 function blobToDataUrl(blob: Blob) {

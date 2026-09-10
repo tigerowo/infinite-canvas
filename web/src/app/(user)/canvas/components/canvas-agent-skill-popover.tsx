@@ -55,6 +55,8 @@ export function CanvasAgentSkillPopover({ selectedSkills, onSelect, onDeleteSele
 
     const removeSkill = (skill: AgentSkill) => {
         modal.confirm({
+            zIndex: 1400,
+            rootClassName: "ext-skill-editor",
             title: `删除「${skill.name}」？`,
             content: "删除后无法恢复，已发送的历史消息不会被删除。",
             okText: "删除",
@@ -90,7 +92,7 @@ export function CanvasAgentSkillPopover({ selectedSkills, onSelect, onDeleteSele
     };
 
     const content = (
-        <div className="w-[420px] max-w-[calc(100vw-24px)]" onPointerDown={(event) => event.stopPropagation()}>
+        <div data-ext-skill-overlay className="w-[420px] max-w-[calc(100vw-52px)]" onPointerDown={(event) => event.stopPropagation()}>
             <div className="relative mb-3">
                 <div className="text-sm font-semibold">Skill</div>
                 {tab === "user" ? (
@@ -154,8 +156,9 @@ export function CanvasAgentSkillPopover({ selectedSkills, onSelect, onDeleteSele
     return (
         <>
             <Popover
+                zIndex={1300}
                 trigger="click"
-                placement="topLeft"
+                placement="top"
                 open={open}
                 onOpenChange={setOpen}
                 content={content}
@@ -163,7 +166,7 @@ export function CanvasAgentSkillPopover({ selectedSkills, onSelect, onDeleteSele
             >
                 <Button type="text" shape="circle" className="!h-8 !w-8 !min-w-8" style={{ color: theme.node.text }} icon={<Wrench className="size-4" />} title="Skill" aria-label="Skill" />
             </Popover>
-            <Modal title="编辑 Skill" open={Boolean(editingSkill)} width={920} footer={null} destroyOnHidden onCancel={() => setEditingSkill(null)}>
+            <Modal title="编辑 Skill" rootClassName="ext-skill-editor" zIndex={1400} open={Boolean(editingSkill)} width={920} footer={null} destroyOnHidden onCancel={() => setEditingSkill(null)}>
                 <Form form={form} layout="vertical" requiredMark={false}>
                     <Form.Item name="coverUrl" hidden><Input /></Form.Item>
                     <Form.Item name="coverStorageKey" hidden><Input /></Form.Item>

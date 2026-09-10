@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/extensions/modelcapabilities"
+	"github.com/tigerowo/infinite-canvas/extensions/storageaccess"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 )
@@ -39,6 +40,14 @@ func UserCanUseRemoteModelChannel(user model.AuthUser) bool {
 	return err == nil && settings.ModelChannel.AllowUserRemoteChannel != nil && *settings.ModelChannel.AllowUserRemoteChannel
 }
 
+func UserRemoteModelAPIKeyMode() string {
+	settings, err := PublicSettings()
+	if err != nil || settings.ModelChannel.APIKeyMode != "user" {
+		return "admin"
+	}
+	return "user"
+}
+
 func AdminSettings() (model.Settings, error) {
 	settings, err := repository.GetSettings()
 	return hidePrivateAPIKeys(normalizeSettings(settings)), err
@@ -49,10 +58,17 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	if err != nil {
 		return model.Settings{}, err
 	}
+	saved = normalizeSettings(saved)
 	settings = normalizeSettings(settings)
-	keepPrivateAPIKeys(&settings, normalizeSettings(saved))
-	keepPrivateAuthSecrets(&settings, normalizeSettings(saved))
-	keepPrivateStorageSecrets(&settings, normalizeSettings(saved))
+	keepPrivateAPIKeys(&settings, saved)
+	keepPrivateAuthSecrets(&settings, saved)
+	keepPrivateStorageSecrets(&settings, saved)
+	if err := storageaccess.ValidateProviderChanges(saved.Private.Storage.Providers, settings.Private.Storage.Providers); err != nil {
+		return model.Settings{}, safeMessageError{message: err.Error()}
+	}
+	if err := storageaccess.RequireOSS(settings.Private.Storage.Providers); err != nil {
+		return model.Settings{}, safeMessageError{message: err.Error()}
+	}
 	if err := validateEnabledStorageProviderTypes(settings.Private.Storage.Providers); err != nil {
 		return model.Settings{}, err
 	}
@@ -143,6 +159,9 @@ func DefaultSystemPrompts() model.SystemPromptSetting {
 }
 
 func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []model.ModelChannel) model.PublicSetting {
+	if setting.ModelChannel.APIKeyMode != "user" {
+		setting.ModelChannel.APIKeyMode = "admin"
+	}
 	if setting.ModelChannel.AvailableModels == nil {
 		setting.ModelChannel.AvailableModels = []string{}
 	}
@@ -208,6 +227,7 @@ func ModelCost(modelName string) (int, error) {
 }
 
 func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting {
+	setting.NewAPI.BaseURL = strings.TrimSpace(setting.NewAPI.BaseURL)
 	if setting.Channels == nil {
 		setting.Channels = []model.ModelChannel{}
 	}
@@ -405,23 +425,18 @@ func uniqueModelNames(models []string) []string {
 func repairDefaultModel(current string, models []string, preferred func(string) bool) string {
 	current = strings.TrimSpace(current)
 	for _, item := range models {
-		if item == current {
+		if item == current && preferred(item) {
 			return current
 		}
 	}
-	for _, item := range models {
-		if preferred(item) {
-			return item
-		}
-	}
-	if len(models) > 0 {
-		return models[0]
-	}
+	// Empty or unavailable defaults stay automatic; clients resolve by capability.
 	return ""
 }
 
 func isVideoModelName(modelName string) bool {
-	if kind := modelcapabilities.Override(modelName); kind != "" { return kind == "video" }
+	if kind := modelcapabilities.Override(modelName); kind != "" {
+		return kind == "video"
+	}
 	if modelcapabilities.IsVideo(modelName) {
 		return true
 	}
@@ -430,13 +445,23 @@ func isVideoModelName(modelName string) bool {
 }
 
 func isImageModelName(modelName string) bool {
-	if kind := modelcapabilities.Override(modelName); kind != "" { return kind == "image" }
+	if kind := modelcapabilities.Override(modelName); kind != "" {
+		return kind == "image"
+	}
 	name := strings.ToLower(strings.TrimSpace(modelName))
 	return strings.Contains(name, "seedream") || strings.Contains(name, "gpt-image") || strings.Contains(name, "image")
 }
 
 func isTextModelName(modelName string) bool {
-	if kind := modelcapabilities.Override(modelName); kind != "" { return kind == "text" }
+	if kind := modelcapabilities.Override(modelName); kind != "" {
+		return kind == "text"
+	}
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	for _, hint := range []string{"audio", "tts", "speech", "voice", "music", "sound", "elevenlabs", "suno", "lyrics", "vocal", "midi", "wav"} {
+		if strings.Contains(name, hint) {
+			return false
+		}
+	}
 	return !isImageModelName(modelName) && !isVideoModelName(modelName)
 }
 
@@ -521,11 +546,16 @@ func fetchOpenAIAdminChannelModels(channel model.ModelChannel) ([]string, error)
 			ID string `json:"id"`
 		} `json:"data"`
 	}
-	_ = json.Unmarshal(body, &payload)
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Data == nil {
+		return nil, safeMessageError{message: "读取模型失败：上游未返回有效的模型列表，请检查渠道地址或手动填写模型名称"}
+	}
 	result := make([]string, 0, len(payload.Data))
+	seen := make(map[string]bool)
 	for _, item := range payload.Data {
-		if strings.TrimSpace(item.ID) != "" {
-			result = append(result, item.ID)
+		id := strings.TrimSpace(item.ID)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			result = append(result, id)
 		}
 	}
 	sort.Strings(result)
@@ -1007,6 +1037,9 @@ func normalizeStorageProvider(provider model.StorageProvider) model.StorageProvi
 		provider.Type = model.StorageProviderTypeS3
 	}
 	provider.Endpoint = strings.TrimRight(strings.TrimSpace(provider.Endpoint), "/")
+	if provider.Endpoint != "" && !strings.Contains(provider.Endpoint, "://") {
+		provider.Endpoint = "https://" + provider.Endpoint
+	}
 	provider.Bucket = strings.TrimSpace(provider.Bucket)
 	provider.AccessKeyID = strings.TrimSpace(provider.AccessKeyID)
 	if provider.Type == model.StorageProviderTypeWebDAV {

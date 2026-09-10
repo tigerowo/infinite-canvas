@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
@@ -29,6 +30,45 @@ func TestFetchAdminChannelModelsParsesOpenAIModels(t *testing.T) {
 	}
 	if want := []string{"a-model", "z-model"}; !reflect.DeepEqual(models, want) {
 		t.Fatalf("models = %#v, want %#v", models, want)
+	}
+}
+
+func TestNewAPIModelDiscoveryResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		status    int
+		body      string
+		wantError bool
+	}{
+		{"empty", 200, `{"data":[]}`, false},
+		{"unauthorized", 401, `{"error":{"message":"invalid key"}}`, true},
+		{"missing endpoint", 404, `{"error":{"message":"not found"}}`, true},
+		{"html response", 200, `<html>dashboard</html>`, true},
+		{"invalid payload", 200, `{}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			models, err := fetchAdminChannelModels(model.ModelChannel{Protocol: "newapi", BaseURL: server.URL, APIKey: "test-key"})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("models=%v error=%v", models, err)
+			}
+		})
+	}
+}
+
+func TestNewAPIModelDiscoveryTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
+	defer server.Close()
+	previous := adminModelHTTPClient
+	adminModelHTTPClient = &http.Client{Timeout: 25 * time.Millisecond}
+	defer func() { adminModelHTTPClient = previous }()
+	_, err := fetchAdminChannelModels(model.ModelChannel{Protocol: "newapi", BaseURL: server.URL, APIKey: "test-key"})
+	if err == nil || !strings.Contains(err.Error(), "无响应") {
+		t.Fatalf("expected timeout, got %v", err)
 	}
 }
 

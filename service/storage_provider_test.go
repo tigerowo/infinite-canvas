@@ -70,6 +70,15 @@ func TestStorageProviderConfigured(t *testing.T) {
 	}
 }
 
+func TestNormalizeStorageProviderAddsHTTPSForLegacyEndpoint(t *testing.T) {
+	provider := normalizeStorageProvider(model.StorageProvider{
+		Type: model.StorageProviderTypeS3, Endpoint: "wxsh6.s3.cn-east-1.qiniucs.com", Bucket: "wxsh6",
+	})
+	if provider.Endpoint != "https://wxsh6.s3.cn-east-1.qiniucs.com" {
+		t.Fatalf("unexpected normalized endpoint: %q", provider.Endpoint)
+	}
+}
+
 func TestCleanStoragePath(t *testing.T) {
 	if got, err := cleanStoragePath("/infinite-canvas/user/file.png/"); err != nil || got != "infinite-canvas/user/file.png" {
 		t.Fatalf("cleanStoragePath() = %q, %v", got, err)

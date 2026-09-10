@@ -86,6 +86,7 @@ export type AiConfig = {
     };
     localChannels: LocalModelChannel[];
     publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    remoteChannelKeys: Record<string, string>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -159,6 +160,7 @@ export const defaultConfig: AiConfig = {
     },
     localChannels: [{ ...newAPIDefaultChannel, models: [] }],
     publicChannels: [],
+    remoteChannelKeys: {},
     syncStorageConfig: false,
     syncWebDAVStorageConfig: false,
     activeChannelId: "",
@@ -369,10 +371,21 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
     const configuredModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
     const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
     const selectableModels = selectableModelsByCapability(config, capability);
-    const matches = (model: string | undefined) => Boolean(model && (selectableModels.length ? selectableModels.includes(model) : modelMatchesCapability(model, capability)));
-    if (matches(currentModel)) return currentModel!;
-    if (matches(configuredModel)) return configuredModel;
-    return selectableModels[0] || fallbackModel;
+    const matches = (model: string | undefined) => Boolean(model?.trim() && (config.channelMode === "remote" || selectableModels.length ? selectableModels.includes(model.trim()) : modelMatchesCapability(model.trim(), capability)));
+    if (matches(currentModel)) return currentModel!.trim();
+    if (matches(configuredModel)) return configuredModel.trim();
+    if (selectableModels[0]) return selectableModels[0];
+    return config.channelMode === "remote" ? "" : fallbackModel;
+}
+
+export function selectableModelOptions(config: AiConfig, capability?: ModelCapability) {
+    const allowed = new Set(config.models);
+    const channels = config.channelMode === "remote" ? config.publicChannels : normalizeLocalChannels(config);
+    return channels.filter((channel) => !("enabled" in channel) || channel.enabled !== false).flatMap((channel) =>
+        normalizeModelList(channel.models || [])
+            .filter((model) => allowed.has(model) && (!capability || modelMatchesCapability(model, capability, channel.protocol || "")))
+            .map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name || (config.channelMode === "remote" ? "云端渠道" : "本地渠道"), model })),
+    );
 }
 
 function isAiConfigReady(config: AiConfig, model: string) {

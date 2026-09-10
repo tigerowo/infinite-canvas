@@ -6,7 +6,7 @@ export const meta = {
   description: {
     en: "Paipu video API with signed, credentialless video downloads.",
   },
-  version: "1.1.0",
+  version: "1.1.1",
   author: { name: "Custom" },
   // Public Paipu model IDs avoid the built-in Sora routing bindings.
   models: [
@@ -128,9 +128,9 @@ export function buildSubmitRequest(ctx) {
   const body = Object.assign({}, req, { model: ctx.upstreamModel || ctx.model || req.model });
   const headers = authHeaders(ctx);
   const url = endpoint(ctx, "/videos");
-  if (body.model === "lec-seed-2-0-900") {
+  if (["lec-seed-2-0-900", "lec-md-seedance-2-0-900-720p"].includes(body.model)) {
     headers["Content-Type"] = "application/json";
-    return { url, method: "POST", headers, body: buildLecSeedBody(body, ctx.files || []) };
+    return { url, method: "POST", headers, body: buildLecImageVideoBody(body, ctx.files || []) };
   }
   if ((req.metadata || {}).canvas_video !== undefined) throw new Error("Canvas video v1 is not implemented for upstream model: " + body.model);
   if ((ctx.files || []).length) {
@@ -148,24 +148,34 @@ export function buildSubmitRequest(ctx) {
   return { url, method: "POST", headers, body };
 }
 
-function buildLecSeedBody(req, files) {
+function buildLecImageVideoBody(req, files) {
+  const isMd = req.model === "lec-md-seedance-2-0-900-720p";
+  const name = isMd ? "LEC MD 900" : "LEC Seed 900";
+  const ratios = isMd ? ["16:9", "9:16", "1:1", "4:3", "3:4"] : ["16:9", "9:16"];
   const extension = (req.metadata || {}).canvas_video;
   const allowed = new Set(["model", "prompt", "seconds", "size", "input_reference", "metadata", "images", "aspect_ratio"]);
+  if (isMd) allowed.add("duration");
   for (const key of Object.keys(req)) if (!allowed.has(key)) throw new Error("Unsupported LEC Seed field: " + key);
   // The historical LEC endpoint has a fixed duration; do not silently discard
   // a different requested duration or bill it as a different number of seconds.
-  if (req.seconds !== undefined && Number(req.seconds) !== 15) throw new Error("LEC Seed 900 requires 15 seconds");
+  const duration = Number(req.seconds ?? req.duration ?? 15);
+  if (isMd) {
+    if (req.seconds !== undefined && req.duration !== undefined && Number(req.seconds) !== Number(req.duration)) throw new Error("LEC MD has conflicting seconds and duration");
+    if (![5, 10, 15].includes(duration)) throw new Error("LEC MD requires 5, 10 or 15 seconds");
+  } else if (duration !== 15) throw new Error("LEC Seed 900 requires 15 seconds");
   let aspect = req.aspect_ratio || "16:9";
   if (req.size !== undefined) {
     const match = /^(\d+)x(\d+)$/.exec(trimmed(req.size));
     if (!match) throw new Error("LEC Seed requires a valid size");
     const width = Number(match[1]), height = Number(match[2]);
-    if (width * 9 === height * 16) aspect = "16:9";
-    else if (width * 16 === height * 9) aspect = "9:16";
-    else throw new Error("LEC Seed supports only 16:9 or 9:16");
-    if (Math.min(width, height) !== 720) throw new Error("LEC Seed 900 supports 720p only");
+    aspect = ratios.find(ratio => {
+      const [w, h] = ratio.split(":").map(Number);
+      return width * h === height * w;
+    });
+    if (!aspect) throw new Error(isMd ? "LEC MD has unsupported aspect ratio" : "LEC Seed supports only 16:9 or 9:16");
+    if (Math.min(width, height) !== 720) throw new Error(name + " supports 720p only");
   }
-  if (!["16:9", "9:16"].includes(aspect)) throw new Error("LEC Seed supports only 16:9 or 9:16");
+  if (!ratios.includes(aspect)) throw new Error(name + " has unsupported aspect ratio");
   let images = req.images || [];
   if (extension !== undefined) {
     if (!isObject(extension) || extension.version !== 1 || !Array.isArray(extension.media)) throw new Error("Invalid Canvas video v1 metadata");
@@ -188,7 +198,7 @@ function buildLecSeedBody(req, files) {
     if (isObject(image) && image.__fileRef) continue;
     if (typeof image !== "string" || !/^(https:\/\/|data:image\/[a-z0-9.+-]+;base64,)/i.test(image)) throw new Error("Reference images must be HTTPS URLs or image data URLs");
   }
-  return { model: req.model, prompt: req.prompt, aspect_ratio: aspect, ...(images.length ? { images } : {}) };
+  return { model: req.model, prompt: req.prompt, ...(isMd ? { duration } : {}), aspect_ratio: aspect, ...(images.length ? { images } : {}) };
 }
 
 export function parseSubmitResponse(ctx, resp) {

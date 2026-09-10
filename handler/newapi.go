@@ -19,7 +19,7 @@ func serveNewAPIVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 	if err != nil || !found {
 		return false
 	}
-	channel, _, err := selectAIRequestChannel(user, task.Model, task.ChannelID, task.UserChannelID)
+	channel, err := selectVideoTaskChannel(task)
 	if err != nil {
 		Fail(w, "视频任务渠道不可用")
 		return true

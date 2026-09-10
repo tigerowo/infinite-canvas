@@ -65,6 +65,8 @@ export function AppConfigModal() {
     const effectiveMode = canUseRemoteChannel ? (allowCustomChannel ? config.channelMode : "remote") : "local";
     const localModelConfig: AiConfig = effectiveMode === "local" && config.channelMode !== "local" ? { ...config, channelMode: "local" } : config;
     const modelConfig = effectiveMode === "remote" ? effectiveConfig : localModelConfig;
+    const remoteKeyMode = modelChannel?.apiKeyMode === "user" ? "user" : "admin";
+    const remoteChannelKeys = config.remoteChannelKeys || {};
     const canUseUserStorageProvider = allowUserStorageProvider;
     const glmTts = isGlmTtsModel(config.audioModel);
     const grokTts = isGrok2APITtsConfig({ ...modelConfig, model: config.audioModel, audioModel: config.audioModel }, config.audioModel);
@@ -125,6 +127,7 @@ export function AppConfigModal() {
     const finishConfig = async () => {
         const localIncomplete = effectiveMode === "local" && normalizeLocalChannels(config).some((channel) => !channel.baseUrl.trim() || !channel.apiKey.trim());
         const modelIncomplete = !modelConfig.imageModel.trim() || !modelConfig.videoModel.trim() || !modelConfig.textModel.trim();
+        const remoteKeyIncomplete = effectiveMode === "remote" && remoteKeyMode === "user" && !Object.values(remoteChannelKeys).some((value) => value.trim());
         if (userStorage.enabled && userWebDAVStorage.enabled) {
             message.error("S3/R2 与 WebDAV 不能同时启用");
             return;
@@ -154,7 +157,7 @@ export function AppConfigModal() {
             clearFileStorageCache();
             setConfigDialogOpen(false);
             if ((config.syncStorageConfig || config.syncWebDAVStorageConfig) && !token) message.warning("请登录后再同步配置");
-            else if (localIncomplete || modelIncomplete) message.warning("部分模型或本地渠道密钥尚未配置完整，配置已保存");
+            else if (localIncomplete || modelIncomplete || remoteKeyIncomplete) message.warning("部分模型或渠道密钥尚未配置完整，配置已保存");
             else message.success(shouldPromptContinue ? "配置已保存，请继续刚才的请求" : "配置已保存");
             clearPromptContinue();
         } catch (error) {
@@ -371,9 +374,34 @@ export function AppConfigModal() {
                             </div>
                         </>
                     ) : (
-                        <div className="mb-5 rounded-lg border border-stone-200 p-3 text-sm text-stone-500 dark:border-stone-800">
-                            <div className="font-medium text-stone-900 dark:text-stone-100">云端渠道</div>
-                            <div className="mt-1">由系统后台渠道转发请求，当前可用 {modelChannel?.availableModels.length || 0} 个模型。</div>
+                        <div className="mb-5 space-y-3 rounded-lg border border-stone-200 p-3 dark:border-stone-800">
+                            <div>
+                                <div className="font-medium text-stone-900 dark:text-stone-100">云端渠道</div>
+                                <div className="mt-1 text-sm text-stone-500">接口地址和模型由管理员维护，前端只选择模型。当前可用 {modelChannel?.availableModels.length || 0} 个模型。</div>
+                            </div>
+                            {remoteKeyMode === "user" ? (
+                                <div className="space-y-2 rounded-md bg-stone-50 p-2 dark:bg-stone-900">
+                                    <div className="text-xs text-stone-500">管理员要求使用个人 Key。Key 只用于当前账号的云端请求，不会改变管理员配置的接口地址。</div>
+                                    {(modelConfig.publicChannels || []).length ? (modelConfig.publicChannels || []).map((channel, index) => {
+                                        const channelId = channel.id || `remote-${index}`;
+                                        return (
+                                            <div key={channelId} className="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] md:items-center">
+                                                <div className="min-w-0">
+                                                    <div className="truncate text-sm font-medium">{channel.name || "云端渠道"}</div>
+                                                    <div className="truncate text-xs text-stone-500">{channel.baseUrl || "管理员未配置接口地址"}</div>
+                                                </div>
+                                                <Input.Password
+                                                    value={remoteChannelKeys[channelId] || ""}
+                                                    placeholder="填写该渠道的 API Key"
+                                                    onChange={(event) => updateConfig("remoteChannelKeys", { ...remoteChannelKeys, [channelId]: event.target.value })}
+                                                />
+                                            </div>
+                                        );
+                                    }) : <div className="rounded-md border border-dashed border-stone-300 px-3 py-4 text-center text-xs text-stone-500 dark:border-stone-700">管理员暂未发布可用云端渠道，请联系管理员配置模型。</div>}
+                                </div>
+                            ) : (
+                                <div className="rounded-md bg-stone-50 p-2 text-xs text-stone-500 dark:bg-stone-900">当前由管理员统一使用后台保存的 API Key，用户无需填写。管理员可在后台“私有配置 → 渠道管理 → 编辑 → 管理员 API Key”中设置。</div>
+                            )}
                         </div>
                     )}
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

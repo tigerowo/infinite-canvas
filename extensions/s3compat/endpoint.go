@@ -19,7 +19,7 @@ func ObjectURL(rawEndpoint, bucket, objectKey string) (*url.URL, error) {
 		if host == serviceHost {
 			endpoint.Host = bucket + "." + endpoint.Host
 		}
-	} else {
+	} else if !(strings.HasPrefix(serviceHost, "s3.") && strings.HasSuffix(serviceHost, ".qiniucs.com") && host != serviceHost) {
 		objectPath = bucket + "/" + objectPath
 	}
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + objectPath

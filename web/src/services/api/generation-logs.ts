@@ -1,31 +1,31 @@
-import { apiDelete, apiGet, apiPost } from "@/services/api/request";
+import { deleteHistory, fetchHistory, saveHistory } from "@/extensions/media-reliability/history";
 
 export async function fetchVideoGenerationLogs<T>(token: string) {
-    return apiGet<T[]>("/api/v1/generation-logs/videos", undefined, token);
+    return fetchHistory<T>("videos", token);
 }
 
 export async function saveVideoGenerationLogs<T>(token: string, logs: T[]) {
-    return apiPost<T[]>("/api/v1/generation-logs/videos", { logs }, token);
+    return saveHistory("videos", token, logs);
 }
 
 export async function deleteVideoGenerationLog(token: string, id: string) {
-    return apiDelete<{ deleted: boolean }>(`/api/v1/generation-logs/videos/${encodeURIComponent(id)}`, token);
+    return deleteHistory("videos", token, [id]);
 }
 
 export async function deleteVideoGenerationLogs(token: string, ids: string[]) {
-    return apiPost<{ deleted: boolean }>("/api/v1/generation-logs/videos/delete", { ids }, token);
+    return deleteHistory("videos", token, ids);
 }
 
 export async function fetchImageGenerationLogs<T>(token: string) {
-    return apiGet<T[]>("/api/v1/generation-logs/images", undefined, token);
+    return fetchHistory<T>("images", token);
 }
 
 export async function saveImageGenerationLogs<T>(token: string, logs: T[]) {
-    return apiPost<T[]>("/api/v1/generation-logs/images", { logs }, token);
+    return saveHistory("images", token, logs);
 }
 
 export async function deleteImageGenerationLogs(token: string, ids: string[]) {
-    return apiPost<{ deleted: boolean }>("/api/v1/generation-logs/images/delete", { ids }, token);
+    return deleteHistory("images", token, ids);
 }
 
 

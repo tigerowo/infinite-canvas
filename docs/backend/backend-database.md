@@ -35,6 +35,7 @@ description: 当前后端主要数据表与字段说明
 - `user_configs`
 - `storage_objects`
 - `ext_model_policy`（定制路由初始化时单独迁移）
+- `ext_storage_access`（私有 OSS/CDN 访问配置初始化时单独迁移）
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -48,6 +49,18 @@ description: 当前后端主要数据表与字段说明
 | `value` | text | 非空 JSON；`imageTransfer` 为 `url` 或 `base64`，`overrides` 为模型 ID 到 `text`、`image`、`video`、`audio` 的映射；可选 `newapiVideoProfiles` 将 `<软件渠道ID>::<小写模型ID>` 映射为 `canvas-v1`，默认未启用，见 [EXT-0011](../customizations/changes/0011-newapi-channel.md) |
 
 启动时执行 `AutoMigrate` 并读取记录；无记录时使用内存默认策略，管理员保存时写入。代码回退不会自动删除此表。权限、默认值、迁移失败处理和验证范围统一见 [EXT-0009](../customizations/changes/0009-public-media.md)。本表不保存存储密钥、素材文件或签名 URL。
+
+### ext_storage_access
+
+私有 OSS 读取和 EdgeOne Type B 配置，由 `extensions/storageaccess/handler.go` 初始化。每个已保存的全局 S3 Provider 对应一行；Provider 的 Endpoint 或 Bucket 变化后不会复用原访问配置。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `provider_id` | string | 主键，对应 `settings.private.storage.providers[].id` |
+| `scope` | text | Endpoint 和 Bucket 快照，用于配置隔离 |
+| `value` | text | JSON；包含允许来源、读取方式、CDN 域名和后端 Token B 密钥 |
+
+Token B 密钥只在后端数据库保存，管理接口只返回 `hasTokenKey`，不会返回密钥正文。数据库备份和访问权限仍需按生产密钥标准保护。
 
 ### users
 
@@ -435,3 +448,15 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 | `admin_adjust` | 后台手动调整 |
 | `ai_consume` | 调用后端模型接口消费 |
 | `ai_refund` | 后端模型接口调用失败返还 |
+## StorageObject 与私有 OSS
+
+私有 OSS 读取复用现有 `StorageObject` 索引和存储 Provider 配置，不新增表或字段，也不修改 NewAPI 数据库。文件正文保留在 OSS，数据库保存对象 ID、Provider、Bucket、ObjectKey 和媒体元数据。
+
+私有对象通过后端鉴权后签发短时 GET URL，浏览器直接读取 OSS；WebDAV、本地缓存和旧公开 URL 继续使用各自的兼容路径。
+
+## 定制扩展数据
+
+- `ext_video_task_identity`：`extensions/taskidentity/identity.go` 按需迁移。`task_id`、`user_id` 为联合主键，`source` 为 user/admin/local，仅记录视频创建的凭证来源，不存密钥。旧任务无记录时走兼容查询；新记录冲突不覆盖原来源。
+- `ext_storage_access`：存储访问扩展的既有配置表。默认上传以 `__default_upload_provider__` 独立配置行保存 Provider ID，scope 为 default；不修改上游 Provider 表字段，也不迁移旧存储对象。
+
+浏览器 IndexedDB 新增 `ext_pending_history` 与 `ext_media_archive` 对象仓库，按账号保存待同步历史与归档状态；这些不是服务端持久后台作业，不保证关页后继续执行。

@@ -46,6 +46,7 @@ type PublicModelChannelSetting struct {
 	SystemPrompts          SystemPromptSetting      `json:"systemPrompts"`
 	AllowCustomChannel     *bool                    `json:"allowCustomChannel"`
 	AllowUserRemoteChannel *bool                    `json:"allowUserRemoteChannel"`
+	APIKeyMode             string                   `json:"apiKeyMode"`
 }
 
 type SystemPromptSetting struct {
@@ -93,10 +94,15 @@ type PublicLinuxDoAuthSetting struct {
 // PrivateSetting 私有配置。
 type PrivateSetting struct {
 	Channels   []ModelChannel        `json:"channels"`
+	NewAPI     NewAPISetting         `json:"newapi"`
 	PromptSync PromptSyncSetting     `json:"promptSync"`
 	AILog      AILogSetting          `json:"aiLog"`
 	Auth       PrivateAuthSetting    `json:"auth"`
 	Storage    PrivateStorageSetting `json:"storage"`
+}
+
+type NewAPISetting struct {
+	BaseURL string `json:"baseUrl"`
 }
 
 type AILogSetting struct {

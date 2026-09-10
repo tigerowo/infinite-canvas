@@ -61,6 +61,19 @@ test("standard reference is an actual multipart file; unsupported inputs fail", 
     assert.equal(newAPIVideoSize("1:1", "720"), "720x720");
 });
 
+test("NewAPI video rejects an empty model before sending a request", async () => {
+    const cfg = config("");
+    await assert.rejects(createNewAPIVideoRequest({ ...cfg, model: "", videoModel: "" }, "", "test", noReferences), /模型名称不能为空/);
+    const adapter = axios.defaults.adapter;
+    let calls = 0;
+    axios.defaults.adapter = async () => { calls++; throw new Error("unexpected request"); };
+    try {
+        await assert.rejects(createVideoGenerationTask({ ...cfg, model: " ", videoModel: "" }, "test"), /模型名称不能为空/);
+        await assert.rejects(createVideoGenerationTask({ ...config("video-model"), videoSeconds: "16" }, "test"), /1 到 15/);
+        assert.equal(calls, 0);
+    } finally { axios.defaults.adapter = adapter; }
+});
+
 test("canvas preprocessing keeps local NewAPI images usable without login", async () => {
     config();
     const context = { referenceImages: [image], firstFrame: image, lastFrame: null } as NodeGenerationContext;

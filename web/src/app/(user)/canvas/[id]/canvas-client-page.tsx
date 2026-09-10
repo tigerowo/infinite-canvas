@@ -15,6 +15,7 @@ import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_IN
 import { channelProtocolForConfig, defaultConfig, resolveModelForCapability, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
 import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
+import { useCanvasArchive } from "@/extensions/media-reliability/canvas-archive";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
@@ -29,7 +30,7 @@ import { PANORAMA_IMAGE_SIZE, PANORAMA_NODE_SIZE, buildPanoramaPrompt, isCanvasI
 import { applyCameraPrompt } from "../utils/canvas-camera";
 import { GROUP_PADDING, findContainingGroupId, findGroupDropTarget, getNodeBounds, snapNodesIntoGroup } from "../utils/canvas-group";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
-import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
+import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
 import { isGlmTtsModel } from "@/lib/audio-generation";
 import { isGrok2APITtsConfig } from "@/lib/grok-tts";
@@ -53,7 +54,7 @@ import { CanvasNodeHoverToolbar, CanvasNodeInfoModal } from "../components/canva
 import { InfiniteCanvas } from "../components/infinite-canvas";
 import { Minimap } from "../components/canvas-mini-map";
 import { CanvasNode } from "../components/canvas-node";
-import { CanvasNodePromptPanel, type CanvasNodeGenerationMode, type CanvasVideoFrameOption } from "../components/canvas-node-prompt-panel";
+import { CanvasNodePromptPanel, type CanvasNodeGenerationMode } from "../components/canvas-node-prompt-panel";
 import type { CanvasVideoResourceOption } from "../components/canvas-video-settings-popover";
 import { CanvasToolbar } from "../components/canvas-toolbar";
 import { AssetPickerModal, type AssetPickerTab } from "../components/asset-picker-modal";
@@ -329,6 +330,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         startX: number;
         startY: number;
         initialSelectedNodes: { id: string; x: number; y: number }[];
+        initialPositionsById: Map<string, { x: number; y: number }>;
         clickedGroupId: string | null;
     }>({
         isDraggingNode: false,
@@ -337,6 +339,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         startX: 0,
         startY: 0,
         initialSelectedNodes: [],
+        initialPositionsById: new Map(),
     });
 
     const config = useConfigStore((state) => state.config);
@@ -376,7 +379,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     const [nodeCreatePosition, setNodeCreatePosition] = useState<Position | null>(null);
     const [runningNodeId, setRunningNodeId] = useState<string | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
-    const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
+    const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("dots");
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [sidePanel, setSidePanel] = useState(() => DEFAULT_CANVAS_SIDE_PANEL);
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
@@ -436,6 +439,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const nodesRef = useRef(nodes);
+    useCanvasArchive(nodes, setNodes, message.warning);
     const consumedAgentRequestProjectRef = useRef<string | null>(null);
     const connectionsRef = useRef(connections);
     const selectedNodeIdsRef = useRef(selectedNodeIds);
@@ -847,8 +851,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         const viewRight = viewLeft + width / viewport.k + padding * 2;
         const viewBottom = viewTop + height / viewport.k + padding * 2;
 
-        return nodes.filter((node) => !isHiddenBatchChild(node, nodes, collapsingBatchIds) && node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom);
-    }, [collapsingBatchIds, nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
+        // A screen-space editor must survive culling of its offscreen anchor node.
+        return nodes.filter((node) => !isHiddenBatchChild(node, nodes, collapsingBatchIds) && (node.id === dialogNodeId || (node.position.x + node.width > viewLeft && node.position.x < viewRight && node.position.y + node.height > viewTop && node.position.y < viewBottom)));
+    }, [collapsingBatchIds, dialogNodeId, nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
 
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     const toolbarNode = toolbarNodeId ? nodeById.get(toolbarNodeId) || null : null;
@@ -1010,19 +1015,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         return map;
     }, [connections, nodeById]);
     const referenceConnectedNodeIds = useMemo(() => new Set([referencePickerNodeId, ...(referencePickerNodeId ? connectedNodesByNodeId.get(referencePickerNodeId)?.map((node) => node.id) || [] : [])].filter((id): id is string => Boolean(id))), [connectedNodesByNodeId, referencePickerNodeId]);
-    const videoFrameOptionsByNodeId = useMemo(() => {
-        const map = new Map<string, CanvasVideoFrameOption[]>();
-        nodes.forEach((node) => {
-            if (node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Config) return;
-            const options = connections.flatMap((connection) => {
-                if (connection.toNodeId !== node.id) return [];
-                const imageNode = nodeById.get(connection.fromNodeId);
-                return isCanvasImageNodeType(imageNode?.type) && imageNode?.metadata?.content ? [{ nodeId: imageNode.id, label: imageNode.title || "图片节点", previewUrl: imageNode.metadata.content }] : [];
-            });
-            map.set(node.id, options);
-        });
-        return map;
-    }, [connections, nodeById, nodes]);
     const videoResourceOptionsByNodeId = useMemo(() => {
         const map = new Map<string, CanvasVideoResourceOption[]>();
         nodes.forEach((node) => {
@@ -1426,8 +1418,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         [cancelPendingConnectionCreate, screenToCanvas],
     );
 
-    const handleNodeMouseDown = useCallback((event: ReactMouseEvent, nodeId: string) => {
+    const handleNodeMouseDown = useCallback((event: ReactPointerEvent, nodeId: string) => {
+        if (event.button !== 0) return;
         event.stopPropagation();
+        event.currentTarget.setPointerCapture?.(event.pointerId);
         if (event.button === 0) setAgentReferenceNodeClick((current) => ({ nodeId, version: current.version + 1 }));
         setContextMenu(null);
         setHoveredNodeId(null);
@@ -1469,6 +1463,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             startX: event.clientX,
             startY: event.clientY,
             initialSelectedNodes: currentNodes.filter((node) => dragIds.has(node.id)).map((node) => ({ id: node.id, x: node.position.x, y: node.position.y })),
+            initialPositionsById: new Map(currentNodes.filter((node) => dragIds.has(node.id)).map((node) => [node.id, { x: node.position.x, y: node.position.y }])),
         };
         historyPausedRef.current = true;
         nodeDraggingRef.current = true;
@@ -1516,6 +1511,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         dragRef.current.hasMoved = false;
         dragRef.current.clickedGroupId = null;
         dragRef.current.initialSelectedNodes = [];
+        dragRef.current.initialPositionsById = new Map();
         setDropTargetGroupId(null);
         if (wasClick && clickedNodeId) {
             const clickedNode = nodesRef.current.find((node) => node.id === clickedNodeId);
@@ -1530,20 +1526,21 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, []);
 
     const handleGlobalMouseMove = useCallback(
-        (event: MouseEvent) => {
+        (event: PointerEvent) => {
             const currentViewport = viewportRef.current;
 
             if (dragRef.current.isDraggingNode) {
                 const dx = (event.clientX - dragRef.current.startX) / currentViewport.k;
                 const dy = (event.clientY - dragRef.current.startY) / currentViewport.k;
                 const initialPositions = dragRef.current.initialSelectedNodes;
+                const initialPositionsById = dragRef.current.initialPositionsById;
                 if (Math.abs(event.clientX - dragRef.current.startX) > 3 || Math.abs(event.clientY - dragRef.current.startY) > 3) {
                     dragRef.current.hasMoved = true;
                 }
 
                 const movedIds = new Set(initialPositions.map((item) => item.id));
                 const previewNodes = nodesRef.current.map((node) => {
-                    const initial = initialPositions.find((item) => item.id === node.id);
+                    const initial = initialPositionsById.get(node.id);
                     return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                 });
                 setDropTargetGroupId(findGroupDropTarget(movedIds, previewNodes)?.id || null);
@@ -1552,7 +1549,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 rafRef.current = requestAnimationFrame(() => {
                     setNodes((prev) =>
                         prev.map((node) => {
-                            const initial = initialPositions.find((item) => item.id === node.id);
+                            const initial = initialPositionsById.get(node.id);
                             return initial ? { ...node, position: { x: initial.x + dx, y: initial.y + dy } } : node;
                         }),
                     );
@@ -1606,7 +1603,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const handleGlobalMouseUp = useCallback(
-        (event: MouseEvent) => {
+        (event: PointerEvent) => {
             finishNodeDrag(event.clientX, event.clientY);
 
             selectionBoxRef.current = null;
@@ -1632,23 +1629,30 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     useEffect(() => {
-        const handlePointerUp = (event: PointerEvent) => finishNodeDrag(event.clientX, event.clientY);
-        const cancelNodeDrag = () => finishNodeDrag();
-        window.addEventListener("mousemove", handleGlobalMouseMove);
-        window.addEventListener("mouseup", handleGlobalMouseUp);
-        window.addEventListener("pointerup", handlePointerUp);
+        const cancelNodeDrag = () => {
+            finishNodeDrag();
+            selectionBoxRef.current = null;
+            setSelectionBox(null);
+            if (connectingParamsRef.current || pendingConnectionCreateRef.current) {
+                setConnecting(null);
+                setPendingConnectionCreate(null);
+                setConnectionTargetNodeId(null);
+                connectionTargetNodeIdRef.current = null;
+            }
+        };
+        window.addEventListener("pointermove", handleGlobalMouseMove);
+        window.addEventListener("pointermove", handleGlobalPointerMove);
+        window.addEventListener("pointerup", handleGlobalMouseUp);
         window.addEventListener("pointercancel", cancelNodeDrag);
         window.addEventListener("blur", cancelNodeDrag);
-        window.addEventListener("pointermove", handleGlobalPointerMove);
         return () => {
-            window.removeEventListener("mousemove", handleGlobalMouseMove);
-            window.removeEventListener("mouseup", handleGlobalMouseUp);
-            window.removeEventListener("pointerup", handlePointerUp);
+            window.removeEventListener("pointermove", handleGlobalMouseMove);
+            window.removeEventListener("pointermove", handleGlobalPointerMove);
+            window.removeEventListener("pointerup", handleGlobalMouseUp);
             window.removeEventListener("pointercancel", cancelNodeDrag);
             window.removeEventListener("blur", cancelNodeDrag);
-            window.removeEventListener("pointermove", handleGlobalPointerMove);
         };
-    }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove]);
+    }, [finishNodeDrag, handleGlobalMouseMove, handleGlobalMouseUp, handleGlobalPointerMove, setConnecting]);
 
     const appendImportedImageNode = useCallback((image: UploadedImage, title: string, position: Position, type: CanvasNodeType.Image | CanvasNodeType.Panorama) => {
         const isPanorama = type === CanvasNodeType.Panorama;
@@ -1919,8 +1923,11 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [copySelectedNodes, createGroupFromSelection, deleteConnection, deleteNodes, pasteCopiedNodes, pasteSystemClipboard, redoCanvas, selectedConnectionId, setConnecting, undoCanvas]);
 
     const handleConnectStart = useCallback(
-        (event: ReactMouseEvent, nodeId: string, handleType: "source" | "target") => {
+        (event: ReactPointerEvent, nodeId: string, handleType: "source" | "target") => {
+            if (event.button !== 0) return;
             event.stopPropagation();
+            event.preventDefault();
+            event.currentTarget.setPointerCapture?.(event.pointerId);
             setMouseWorld(screenToCanvas(event.clientX, event.clientY));
             setConnecting({ nodeId, handleType });
             connectionTargetNodeIdRef.current = null;
@@ -2206,7 +2213,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     );
 
     const uploadNodeMediaToCloud = useCallback(async (node: CanvasNodeData) => {
-        if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || node.metadata.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
+        if ((node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content || node.metadata.archivePending || node.metadata.storageKey?.startsWith("server:") || uploadingMediaNodeIdsRef.current.has(node.id)) return;
         uploadingMediaNodeIdsRef.current.add(node.id);
         const isAudio = node.type === CanvasNodeType.Audio;
         const mediaName = isAudio ? "音频" : "视频";
@@ -2214,12 +2221,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         try {
             const mediaUrl = await resolveMediaUrl(node.metadata.storageKey, node.metadata.content);
             const filename = `canvas-${node.type}-${node.id}.${isAudio ? audioExtension(node.metadata.mimeType) : "mp4"}`;
-            const uploaded = await uploadRemoteMediaToServer(mediaUrl, filename);
+            const uploaded = await uploadRemoteMediaToServer(mediaUrl, filename, true);
             setNodes((nodes) => nodes.map((item) => (item.id === node.id ? {
                 ...item,
                 metadata: {
                     ...item.metadata,
                     content: uploaded.url,
+                    archiveError: undefined,
+                    archivePending: false,
                     storageKey: uploaded.storageKey,
                     bytes: uploaded.bytes,
                     mimeType: uploaded.mimeType,
@@ -2242,17 +2251,19 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
     }, [message]);
 
     const uploadNodeImageToCloud = useCallback(async (node: CanvasNodeData) => {
-        if (!isCanvasImageNodeType(node.type) || !node.metadata?.content || node.metadata.storageKey?.startsWith("server:") || uploadingImageNodeIdsRef.current.has(node.id)) return;
+        if (!isCanvasImageNodeType(node.type) || !node.metadata?.content || node.metadata.archivePending || node.metadata.storageKey?.startsWith("server:") || uploadingImageNodeIdsRef.current.has(node.id)) return;
         uploadingImageNodeIdsRef.current.add(node.id);
         const hideLoading = message.loading("正在上传图片至云存储...", 0);
         try {
             const imageUrl = await resolveImageUrl(node.metadata.storageKey, node.metadata.content);
-            const uploaded = await uploadRemoteImageToServer(imageUrl, "canvas-image-" + node.id + ".png");
+            const uploaded = await uploadRemoteImageToServer(imageUrl, "canvas-image-" + node.id + ".png", true);
             setNodes((nodes) => nodes.map((item) => (item.id === node.id ? {
                 ...item,
                 metadata: {
                     ...item.metadata,
                     content: uploaded.url,
+                    archiveError: undefined,
+                    archivePending: false,
                     storageKey: uploaded.storageKey,
                     bytes: uploaded.bytes,
                     mimeType: uploaded.mimeType,
@@ -2778,6 +2789,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             if (!isAiConfigReady(generationConfig, generationConfig.model)) {
+                if (!generationConfig.model.trim()) message.warning(`当前没有可用的${mode === "video" ? "视频" : mode === "image" ? "图片" : mode === "audio" ? "音频" : "文本"}模型，请先配置模型`);
                 openConfigDialog(true);
                 return;
             }
@@ -3111,10 +3123,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
 
                 if (mode === "video") {
                     const videoGenerationConfig = withCanvasVideoAdvancedConfig(generationConfig, generationContext);
-                    const frameReferencesEnabled = isNewAPIConfig(videoGenerationConfig) || supportsVideoFrameReferences(videoGenerationConfig.model, channelProtocolForConfig(videoGenerationConfig));
-                    const firstFrame = frameReferencesEnabled ? generationContext.firstFrame : null;
-                    const lastFrame = frameReferencesEnabled ? generationContext.lastFrame : null;
-                    const videoReferenceImages = frameReferencesEnabled ? generationContext.referenceImages : [...generationContext.referenceImages, ...[generationContext.firstFrame, generationContext.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
+                    const videoReferenceImages = generationContext.referenceImages;
                     const spec = nodeSizeFromRatio(videoGenerationConfig.size, NODE_DEFAULT_SIZE[CanvasNodeType.Video].width, NODE_DEFAULT_SIZE[CanvasNodeType.Video].height) || NODE_DEFAULT_SIZE[CanvasNodeType.Video];
                     const isEmptyVideoNode = sourceNode?.type === CanvasNodeType.Video && !sourceNode.metadata?.content;
                     const videoId = isEmptyVideoNode ? nodeId : nanoid();
@@ -3127,12 +3136,12 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         position: isEmptyVideoNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y },
                         width: isEmptyVideoNode ? sourceNode.width : spec.width,
                         height: isEmptyVideoNode ? sourceNode.height : spec.height,
-                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, model: videoGenerationConfig.model, channelId: videoGenerationConfig.videoChannelId || videoGenerationConfig.activeChannelId, size: videoGenerationConfig.size, seconds: videoGenerationConfig.videoSeconds, vquality: videoGenerationConfig.vquality, mode: videoGenerationConfig.videoMode, negativePrompt: videoGenerationConfig.videoNegativePrompt, multiShot: videoGenerationConfig.videoMultiShot, shotType: videoGenerationConfig.videoShotType, generateAudio: videoGenerationConfig.videoGenerateAudio, characterOrientation: videoGenerationConfig.videoCharacterOrientation, watermark: videoGenerationConfig.videoWatermark, references: generationReferenceUrls({ ...generationContext, referenceImages: videoReferenceImages, firstFrame, lastFrame }), firstFrameNodeId: sourceNode?.metadata?.firstFrameNodeId, lastFrameNodeId: sourceNode?.metadata?.lastFrameNodeId, klingImageNodeIds: sourceNode?.metadata?.klingImageNodeIds, klingMultiPrompt: sourceNode?.metadata?.klingMultiPrompt, klingElementList: sourceNode?.metadata?.klingElementList, startedAt: generationStartedAt, progress: 0, videoTaskId: clientTaskId },
+                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, model: videoGenerationConfig.model, channelId: videoGenerationConfig.videoChannelId || videoGenerationConfig.activeChannelId, size: videoGenerationConfig.size, seconds: videoGenerationConfig.videoSeconds, vquality: videoGenerationConfig.vquality, mode: videoGenerationConfig.videoMode, negativePrompt: videoGenerationConfig.videoNegativePrompt, multiShot: videoGenerationConfig.videoMultiShot, shotType: videoGenerationConfig.videoShotType, generateAudio: videoGenerationConfig.videoGenerateAudio, characterOrientation: videoGenerationConfig.videoCharacterOrientation, watermark: videoGenerationConfig.videoWatermark, references: generationReferenceUrls({ ...generationContext, referenceImages: videoReferenceImages, firstFrame: null, lastFrame: null }), klingMultiPrompt: sourceNode?.metadata?.klingMultiPrompt, klingElementList: sourceNode?.metadata?.klingElementList, startedAt: generationStartedAt, progress: 0, videoTaskId: clientTaskId },
                     };
                     pendingChildIds = [videoId];
                     setNodes((prev) => (isEmptyVideoNode ? prev.map((node) => (node.id === nodeId ? { ...node, ...videoNode } : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode]));
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
-                    const created = await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references: videoReferenceImages, firstFrame, lastFrame, videoReferences: generationContext.referenceVideos, audioReferences: generationContext.referenceAudios }, undefined, { clientTaskId, source: "canvas", sourceId: videoId });
+                    const created = await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references: videoReferenceImages, videoReferences: generationContext.referenceVideos, audioReferences: generationContext.referenceAudios }, undefined, { clientTaskId, source: "canvas", sourceId: videoId });
                     setNodes((prev) => applyCanvasVideoTaskUpdate(prev, videoId, created.task, videoGenerationConfig, generationStartedAt, spec));
                     return;
                 }
@@ -3218,7 +3227,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 setRunningNodeId(null);
             }
         },
-        [effectiveConfig, openConfigDialog],
+        [effectiveConfig, message, openConfigDialog],
     );
 
     const getCanvasAgentContext = useCallback(
@@ -3749,11 +3758,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                 }
                 if (node.type === CanvasNodeType.Video) {
                     const videoGenerationConfig = context ? withCanvasVideoAdvancedConfig(generationConfig, context) : generationConfig;
-                    const frameReferencesEnabled = supportsVideoFrameReferences(videoGenerationConfig.model, channelProtocolForConfig(videoGenerationConfig));
-                    const firstFrame = frameReferencesEnabled ? context?.firstFrame || null : null;
-                    const lastFrame = frameReferencesEnabled ? context?.lastFrame || null : null;
-                    const references = frameReferencesEnabled ? retryImages : [...retryImages, ...[context?.firstFrame, context?.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
-                    const created = await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references, firstFrame, lastFrame, videoReferences: context?.referenceVideos || [], audioReferences: context?.referenceAudios || [] }, undefined, { clientTaskId: retryVideoTaskId, source: "canvas", sourceId: node.id });
+                    const created = await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references: retryImages, videoReferences: context?.referenceVideos || [], audioReferences: context?.referenceAudios || [] }, undefined, { clientTaskId: retryVideoTaskId, source: "canvas", sourceId: node.id });
                     setNodes((prev) => applyCanvasVideoTaskUpdate(prev, node.id, created.task, videoGenerationConfig, retryStartedAt, { width: node.width, height: node.height }));
                     return;
                 }
@@ -4100,7 +4105,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                                         isRunning={runningNodeId === panelNode.id}
                                         mentionReferences={mentionReferencesByNodeId.get(panelNode.id) || []}
                                         connectedNodes={connectedNodesByNodeId.get(panelNode.id) || []}
-                                        videoFrameOptions={videoFrameOptionsByNodeId.get(panelNode.id) || []}
                                         videoResourceOptions={videoResourceOptionsByNodeId.get(panelNode.id) || []}
                                         onPromptChange={handleNodePromptChange}
                                         onConfigChange={handleConfigNodeChange}
@@ -4122,7 +4126,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                                         node={contentNode}
                                         isRunning={runningNodeId === contentNode.id}
                                         inputSummary={getInputSummary(configInputsById.get(contentNode.id) || [])}
-                                        videoFrameOptions={videoFrameOptionsByNodeId.get(contentNode.id) || []}
                                         videoResourceOptions={videoResourceOptionsByNodeId.get(contentNode.id) || []}
                                         onConfigChange={handleConfigNodeChange}
                                         onComposerToggle={() => setDialogNodeId((current) => (current === contentNode.id ? null : contentNode.id))}
@@ -4150,6 +4153,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             onRetry={(node) => void handleRetryNode(node)}
                             onViewImage={(node) => setPreviewNodeId(node.id)}
                             onSelectReference={selectNodeReference}
+                            onClosePanel={() => setDialogNodeId((current) => current === node.id ? null : current)}
                             onContextMenu={(event, id) => {
                                 event.preventDefault();
                                 event.stopPropagation();
@@ -4377,7 +4381,9 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             disabled={trimmingAudio || audioTrimDuration < 0.5}
                             ariaLabelForHandle={["截取开始时间", "截取结束时间"]}
                             tooltip={{ formatter: (value) => `${(value ?? 0).toFixed(2)} 秒` }}
-                            onChange={([start, end]) => {
+                            onChange={(value: number | number[]) => {
+                                if (!Array.isArray(value)) return;
+                                const [start, end] = value;
                                 if (Math.round((end - start) * 100) < 50) return;
                                 audioTrimRef.current?.pause();
                                 setAudioTrimStart(start);
@@ -4597,7 +4603,7 @@ function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanora
     };
 
     return (
-        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/80 backdrop-blur-sm" data-canvas-no-zoom={isPanorama ? "" : undefined} onClick={onClose}>
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black/80 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label={`${alt}预览`} data-canvas-no-zoom={isPanorama ? "" : undefined} onClick={onClose}>
             {hasPrev || hasNext ? (
                 <>
                     <button
@@ -4605,7 +4611,8 @@ function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanora
                         disabled={!hasPrev}
                         onClick={(e) => { e.stopPropagation(); onPrev?.(); }}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="absolute left-4 top-1/2 z-[2010] -translate-y-1/2 flex size-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition-all hover:bg-white/10 hover:scale-105 active:scale-95 disabled:opacity-20 disabled:cursor-not-allowed"
+                        className="absolute left-4 top-1/2 z-[2010] -translate-y-1/2 flex size-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition-all hover:scale-105 hover:bg-white/10 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:cursor-not-allowed disabled:opacity-20"
+                        aria-label="上一个"
                     >
                         <ChevronLeft className="size-6" />
                     </button>
@@ -4614,7 +4621,8 @@ function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanora
                         disabled={!hasNext}
                         onClick={(e) => { e.stopPropagation(); onNext?.(); }}
                         onPointerDown={(e) => e.stopPropagation()}
-                        className="absolute right-4 top-1/2 z-[2010] -translate-y-1/2 flex size-10 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition-all hover:bg-white/10 hover:scale-105 active:scale-95 disabled:opacity-20 disabled:cursor-not-allowed"
+                        className="absolute right-4 top-1/2 z-[2010] -translate-y-1/2 flex size-11 items-center justify-center rounded-full border border-white/10 bg-white/5 text-white transition-all hover:scale-105 hover:bg-white/10 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:cursor-not-allowed disabled:opacity-20"
+                        aria-label="下一个"
                     >
                         <ChevronRight className="size-6" />
                     </button>
@@ -4682,11 +4690,11 @@ function FullscreenPreview({ src, alt, isVideo, isPanorama, proxyGeneratedPanora
                                 <button type="button" aria-label={isVideoPlaying ? "暂停" : "播放"} onPointerDown={(event) => event.preventDefault()} onClick={toggleVideoPlayback} className={VIDEO_PREVIEW_CONTROL_CLASS}>
                                     {isVideoPlaying ? <Pause className="size-5" /> : <Play className="size-5" />}
                                 </button>
-                                <div className="group/volume flex items-center">
+                                <div className="group/volume flex min-h-11 items-center">
                                     <button type="button" aria-label={videoVolume === 0 ? "恢复声音" : "静音"} onPointerDown={(event) => event.preventDefault()} onClick={() => { if (videoRef.current) videoRef.current.muted = !videoRef.current.muted; }} className={VIDEO_PREVIEW_CONTROL_CLASS}>
                                         {videoVolume === 0 ? <VolumeX className="size-5" /> : <Volume2 className="size-5" />}
                                     </button>
-                                    <input type="range" min={0} max={1} step="0.01" value={videoVolume} aria-label="音量" onChange={(event) => { const volume = Number(event.currentTarget.value); if (!videoRef.current) return; if (volume === 0) videoRef.current.muted = true; else { videoRef.current.volume = volume; videoRef.current.muted = false; } }} onPointerUp={() => videoRef.current?.focus({ preventScroll: true })} className="h-1 w-0 pointer-events-none cursor-pointer appearance-none rounded-full opacity-0 transition-[width,opacity] duration-200 focus-visible:outline-none group-hover/volume:mx-1 group-hover/volume:w-20 group-hover/volume:pointer-events-auto group-hover/volume:opacity-100 [&::-moz-range-thumb]:size-2 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:size-2 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white" style={{ background: `linear-gradient(to right, white ${videoVolume * 100}%, rgba(255,255,255,0.35) 0)` }} />
+                                    <input type="range" min={0} max={1} step="0.01" value={videoVolume} aria-label="音量" onChange={(event) => { const volume = Number(event.currentTarget.value); if (!videoRef.current) return; if (volume === 0) videoRef.current.muted = true; else { videoRef.current.volume = volume; videoRef.current.muted = false; } }} onPointerUp={() => videoRef.current?.focus({ preventScroll: true })} className="h-1 w-0 pointer-events-none cursor-pointer appearance-none rounded-full opacity-0 transition-[width,opacity] duration-200 focus-visible:pointer-events-auto focus-visible:w-20 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 group-hover/volume:mx-1 group-hover/volume:w-20 group-hover/volume:pointer-events-auto group-hover/volume:opacity-100 [&::-moz-range-thumb]:size-2 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-white [&::-webkit-slider-thumb]:size-2 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white" style={{ background: `linear-gradient(to right, white ${videoVolume * 100}%, rgba(255,255,255,0.35) 0)` }} />
                                 </div>
                             </div>
                             <div className="flex items-center gap-1">
@@ -4792,9 +4800,9 @@ function CanvasTopBar({
 
     return (
         <>
-            <div className="pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between px-4">
+            <div data-canvas-top-bar className="glass-surface pointer-events-none absolute left-0 right-0 top-0 z-50 flex h-16 items-center justify-between border-b px-4">
                 <div className="pointer-events-auto flex min-w-0 items-center gap-3">
-                    <button type="button" onClick={onToggleSidePanel} className="grid size-7 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label={sidePanelOpen ? "收起左侧面板" : "展开左侧面板"}>
+                    <button type="button" onClick={onToggleSidePanel} className="grid size-10 place-items-center rounded-xl transition hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label={sidePanelOpen ? "收起左侧面板" : "展开左侧面板"}>
                         {sidePanelOpen ? <PanelLeftClose className="size-4" /> : <PanelLeftOpen className="size-4" />}
                     </button>
                     <Dropdown
@@ -4814,7 +4822,7 @@ function CanvasTopBar({
                             ],
                         }}
                     >
-                        <button type="button" className="grid size-9 place-items-center rounded-full transition hover:bg-black/5 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label="打开画布菜单">
+                        <button type="button" className="grid size-10 place-items-center rounded-xl transition hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50 dark:hover:bg-white/10" style={{ color: theme.node.text }} aria-label="打开画布菜单">
                             <Menu className="size-5" />
                         </button>
                     </Dropdown>
@@ -4836,7 +4844,7 @@ function CanvasTopBar({
                         ) : (
                             <button
                                 type="button"
-                                className="max-w-[280px] truncate border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current"
+                                className="max-w-[280px] truncate rounded-md border-b border-dashed border-transparent text-left text-lg font-semibold tracking-normal transition hover:border-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50"
                                 onDoubleClick={onStartTitleEditing}
                                 title="双击修改画布名称"
                             >
@@ -4864,7 +4872,7 @@ function CanvasTopBar({
                             <Button
                                 type="text"
                                 className="!h-10 !rounded-xl !px-3 !font-medium"
-                                style={{ background: theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
+                                style={{ background: theme.glass.panel, borderColor: theme.glass.border, color: theme.node.text, boxShadow: `${theme.glass.shadow}, inset 0 1px 0 ${theme.glass.highlight}` }}
                                 icon={<Bot className="size-4" />}
                                 onClick={onExpandAssistant}
                             >
@@ -5409,18 +5417,18 @@ function canvasAgentTaskSummary(node: CanvasNodeData) {
 }
 
 function canvasAgentVideoDurationHint(modelName: string, config?: AiConfig) {
-    if (config && isNewAPIConfig(config)) return { min: 1, max: 3600, range: "整数秒，具体允许值由 NewAPI 上游插件校验" };
+    if (config && isNewAPIConfig(config)) return { min: 1, max: 15, range: "1-15 秒" };
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
     if (key.includes("seedance-2-5")) return { min: 4, max: 30, auto: -1, range: "智能（-1）或 4-30 秒，范围内任意整数秒数均可；videoSeconds 仅为默认值，可由本次 seconds 覆盖" };
     if (key.includes("seedance")) return { values: [-1, 4, 5, 6, 8, 10, 12, 15], range: "智能或 4-15 秒" };
     if (isCanvasAgentKlingV3(key)) return { values: [3, 15], range: "3-15 秒" };
     if (isCanvasAgentKlingV26(key)) return { values: [5, 10], range: "仅 5 或 10 秒" };
-    return { values: [6, 10, 12, 16, 20], range: "1-30 秒" };
+    return { values: [6, 10, 12, 15], range: "1-15 秒" };
 }
 
 function validateCanvasAgentVideoSeconds(modelName: string, seconds: number, config?: AiConfig) {
-    if (config && isNewAPIConfig(config)) return Number.isInteger(seconds) && seconds >= 1 && seconds <= 3600 ? "" : "视频时长必须是 1 到 3600 之间的整数秒";
+    if (config && isNewAPIConfig(config)) return Number.isInteger(seconds) && seconds >= 1 && seconds <= 15 ? "" : "视频时长必须是 1 到 15 之间的整数秒";
     if (!Number.isInteger(seconds)) return "视频总时长必须为整数秒";
     const key = modelKey(modelName);
     if (isCogVideoX3Model(key) && seconds !== 5 && seconds !== 10) return "当前 CogVideoX-3 模型仅支持 5 或 10 秒";
@@ -5428,7 +5436,7 @@ function validateCanvasAgentVideoSeconds(modelName: string, seconds: number, con
     if (key.includes("seedance") && seconds !== -1 && (seconds < 4 || seconds > seedanceMaxSeconds)) return `当前 Seedance 模型仅支持智能时长或 4-${seedanceMaxSeconds} 秒`;
     if (isCanvasAgentKlingV3(key) && (seconds < 3 || seconds > 15)) return "当前 Kling 3 模型仅支持 3-15 秒";
     if (isCanvasAgentKlingV26(key) && seconds !== 5 && seconds !== 10) return "当前 Kling 2.6 模型仅支持 5 或 10 秒";
-    if (!key.includes("seedance") && !key.includes("kling") && (seconds < 1 || seconds > 30)) return "当前视频模型仅支持 1-30 秒";
+    if (!key.includes("seedance") && !key.includes("kling") && (seconds < 1 || seconds > 15)) return "当前视频模型仅支持 1-15 秒";
     return "";
 }
 
@@ -5450,7 +5458,7 @@ function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | undefine
     const activeChannelId = mode === "image" ? imageChannelId : mode === "video" ? videoChannelId : mode === "text" ? textChannelId : mode === "audio" ? audioChannelId || config.activeChannelId : config.activeChannelId;
     return {
         ...config,
-        model: mode === "text" ? resolveModelForCapability(config, node?.metadata?.model, "text") : node?.metadata?.model || defaultModel || (mode === "audio" ? defaultConfig.audioModel : config.model || defaultConfig.model),
+        model: resolveModelForCapability(config, node?.metadata?.model || defaultModel || config.model, mode),
         activeChannelId,
         imageChannelId,
         videoChannelId,

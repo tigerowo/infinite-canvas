@@ -1,6 +1,7 @@
 import axios from "axios";
 import { isNewAPIConfig } from "@/extensions/newapi/config";
 import { createNewAPIImageBody } from "@/extensions/newapi/image";
+import { responsesImageState } from "@/extensions/newapi/response-state";
 import { publicImageURL, geminiPublicPart } from "@/extensions/public-media/references";
 
 import { isMiniMaxChannel, miniMaxModels } from "@/lib/minimax-video";
@@ -307,6 +308,7 @@ function collectResponsesImageBase64(item: Record<string, unknown>) {
 }
 
 function parseResponsesPayload(payload: ResponsesApiResponse, mime: string): GeneratedImage[] {
+    responsesImageState(payload);
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new ImageRequestError(payload.msg || "请求失败", payload);
     }
@@ -474,36 +476,17 @@ async function parseImagesStreamResponse(response: Response, mime: string): Prom
 
 async function parseResponsesStreamResponse(response: Response, mime: string): Promise<GeneratedImage[]> {
     let completedPayload: ResponsesApiResponse | null = null;
-    const output: Record<string, unknown>[] = [];
-    const partialImages: string[] = [];
+    let completed = false;
     const events = await readJsonServerSentEvents(response, (event) => {
-        if (event.type === "response.image_generation_call.partial_image") {
-            const b64 = getStringRecordValue(event, "partial_image_b64");
-            if (b64) partialImages.push(b64);
-            return;
-        }
+        if (!responsesImageState(event)) return;
         const responsePayload = event.response;
         if (responsePayload && typeof responsePayload === "object" && !Array.isArray(responsePayload)) {
             completedPayload = responsePayload as ResponsesApiResponse;
-        }
-        const item = event.item;
-        if (item && typeof item === "object" && !Array.isArray(item) && (item as Record<string, unknown>).type === "image_generation_call") {
-            output.push(item as Record<string, unknown>);
+            completed = true;
         }
     });
-    try {
-        return parseResponsesPayload(completedPayload || { output }, mime);
-    } catch (error) {
-        if (!partialImages.length) {
-            throw new ImageRequestError(error instanceof Error ? error.message : "Responses API 没有返回图片", {
-                completedPayload,
-                output,
-                events,
-            });
-        }
-        const lastPartialImage = partialImages[partialImages.length - 1];
-        return [{ id: nanoid(), dataUrl: normalizeBase64Image(lastPartialImage, mime) }];
-    }
+    if (!completed || !completedPayload) throw new ImageRequestError("图片生成中断，尚未返回最终结果", events);
+    return parseResponsesPayload(completedPayload, mime);
 }
 
 function withSystemPrompt(config: AiConfig, prompt: string) {

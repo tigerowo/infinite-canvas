@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import { Maximize2, Move } from "lucide-react";
 import { SYSTEM, Viewer } from "@photo-sphere-viewer/core";
 import "@photo-sphere-viewer/core/index.css";
@@ -16,7 +16,7 @@ type CanvasPanoramaViewerProps = {
     proxyGeneratedPanorama?: boolean;
     expandOnDoubleClick?: boolean;
     immersive?: boolean;
-    onMoveStart?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+    onMoveStart?: (event: ReactPointerEvent<HTMLButtonElement>) => void;
     onOpen?: () => void;
 };
 
@@ -224,7 +224,7 @@ export default function CanvasPanoramaViewer({ src, alt, proxyGeneratedPanorama 
                     aria-label="拖动节点"
                     className="absolute left-2 top-2 z-20 flex size-7 cursor-grab items-center justify-center rounded-md opacity-70 backdrop-blur transition-opacity hover:opacity-100 active:cursor-grabbing"
                     style={controlStyle}
-                    onMouseDown={(event) => {
+                    onPointerDown={(event) => {
                         event.preventDefault();
                         onMoveStart(event);
                     }}

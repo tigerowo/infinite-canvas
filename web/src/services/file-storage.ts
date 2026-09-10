@@ -4,15 +4,17 @@ import localforage from "localforage";
 import { nanoid } from "nanoid";
 
 import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
-import { apiGet } from "@/services/api/request";
-import { canUseGlobalStorage, getProxyUrl, loadUserStorageProvider, toProviderPayload, type StorageConfig, type UserWebDAVStorageProvider } from "@/services/image-storage";
+import { canUseGlobalStorage, getProxyUrl, loadStorageConfig, clearStorageConfigCache, loadUserStorageProvider, toProviderPayload, type UserWebDAVStorageProvider } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
+import { isSignedMediaURL, privateMediaURL } from "@/extensions/storage-access/signed-url";
+import { assertMediaSession, clearMediaMapsOnSessionChange, mediaSession, scopedMediaStore } from "@/extensions/media-reliability/cache";
+export { clearStorageConfigCache };
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
-const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
+const store = scopedMediaStore(localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" }));
 const objectUrls = new Map<string, string>();
-let storageConfigPromise: Promise<StorageConfig> | null = null;
+clearMediaMapsOnSessionChange(objectUrls);
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file"): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
@@ -51,16 +53,20 @@ export async function downloadRemoteMedia(url: string) {
     return blob;
 }
 
-export async function uploadRemoteMediaToServer(url: string, filename: string): Promise<UploadedFile> {
+export async function uploadRemoteMediaToServer(url: string, filename: string, globalOnly = false): Promise<UploadedFile> {
+    const session = mediaSession();
     const blob = await downloadRemoteMedia(url);
-    return uploadMediaBlobToServer(blob, filename);
+    assertMediaSession(session);
+    return uploadMediaBlobToServer(blob, filename, globalOnly);
 }
 
-async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<UploadedFile> {
+async function uploadMediaBlobToServer(blob: Blob, filename: string, globalOnly = false): Promise<UploadedFile> {
+    const session = mediaSession();
     const config = await loadStorageConfig().catch(() => null);
-    const userProvider = config?.allowUserProvider ? loadUserStorageProvider() : null;
+    const userProvider = !globalOnly && config?.allowUserProvider ? loadUserStorageProvider() : null;
     if (!config || (!canUseGlobalStorage(config) && !userProvider)) throw new Error("服务端对象存储未启用");
     const token = useUserStore.getState().token;
+    assertMediaSession(session);
     if (userProvider?.type === "webdav") {
         const directUpload = await uploadWebDAVMediaDirect(blob, filename, userProvider);
         if (directUpload) return directUpload;
@@ -76,8 +82,8 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string): Promise<Up
     const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "媒体同步失败");
-    const meta = payload.data.mimeType?.startsWith("video/") ? await readVideoMeta(payload.data.url) : {};
-    return { ...payload.data, bytes: payload.data.bytes || blob.size, mimeType: payload.data.mimeType || blob.type || "application/octet-stream", ...meta };
+    assertMediaSession(session);
+    return cacheAnonymousMedia(payload.data, blob);
 }
 
 async function uploadWebDAVMediaDirect(blob: Blob, filename: string, provider: UserWebDAVStorageProvider): Promise<UploadedFile | null> {
@@ -87,20 +93,9 @@ async function uploadWebDAVMediaDirect(blob: Blob, filename: string, provider: U
 }
 
 async function cacheAnonymousMedia(uploaded: UploadedFile, blob: Blob) {
-    await store.setItem(uploaded.storageKey, blob);
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(uploaded.storageKey, url);
+    const url = await setMediaBlob(uploaded.storageKey, blob);
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : {};
     return { ...uploaded, url, bytes: uploaded.bytes || blob.size, mimeType: uploaded.mimeType || blob.type || "application/octet-stream", ...meta };
-}
-
-async function loadStorageConfig() {
-    storageConfigPromise ||= apiGet<StorageConfig>("/api/storage/config");
-    return storageConfigPromise;
-}
-
-export function clearStorageConfigCache() {
-    storageConfigPromise = null;
 }
 
 export async function uploadMediaBlob(blob: Blob, filename: string): Promise<UploadedFile> {
@@ -108,10 +103,19 @@ export async function uploadMediaBlob(blob: Blob, filename: string): Promise<Upl
 }
 
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
+    const session = mediaSession();
+    const result = await resolveMediaUrlInSession(storageKey, fallback);
+    assertMediaSession(session);
+    return result;
+}
+
+async function resolveMediaUrlInSession(storageKey?: string, fallback = "") {
     if (!storageKey) return fallback;
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
+    const session = mediaSession();
     const blob = await store.getItem<Blob>(storageKey).catch(() => null);
+    assertMediaSession(session);
     if (blob) {
         const url = URL.createObjectURL(blob);
         objectUrls.set(storageKey, url);
@@ -125,9 +129,12 @@ export async function resolveMediaUrl(storageKey?: string, fallback = "") {
     }
     if (storageKey.startsWith("server:")) {
         const id = storageKey.slice("server:".length);
+        const signed = await privateMediaURL(id);
+        if (signed) return signed;
+        if (isSignedMediaURL(fallback)) fallback = "";
         if (fallback && !fallback.startsWith("blob:") && !fallback.includes("direct=1") && !fallback.startsWith("/webdav-media/")) return fallback;
         const { getStorageObjectInfo } = await import("@/services/api/storage");
-        const info = await getStorageObjectInfo(id).catch(() => null);
+        const info = await getStorageObjectInfo(id, useUserStore.getState().token).catch(() => null);
         if (!info) return fallback;
         const provider = loadUserStorageProvider();
         if (info.direct && provider?.type === "webdav") {
@@ -150,6 +157,8 @@ export async function getMediaBlob(storageKey: string) {
 
 export async function setMediaBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
+    const previous = objectUrls.get(storageKey);
+    if (previous) URL.revokeObjectURL(previous);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
@@ -187,14 +196,19 @@ async function deleteServerMedia(storageKey: string) {
     });
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string } | null;
     if (!response.ok || payload?.code !== 0) throw new Error(payload?.msg || "删除服务端视频失败");
+    const url = objectUrls.get(storageKey);
+    if (url) URL.revokeObjectURL(url);
+    objectUrls.delete(storageKey);
+    await store.removeItem(storageKey);
 }
 
 export async function deleteStoredMedia(keys: Iterable<string>) {
     const { useAssetStore } = await import("@/stores/use-asset-store");
     const assetKeys = new Set(
-        useAssetStore.getState().assets
-            .map((a) => (a.kind === "video" || a.kind === "audio" ? a.data.storageKey : null))
-            .filter((k): k is string => Boolean(k))
+        useAssetStore
+            .getState()
+            .assets.map((a) => (a.kind === "video" || a.kind === "audio" ? a.data.storageKey : null))
+            .filter((k): k is string => Boolean(k)),
     );
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
@@ -217,7 +231,12 @@ export async function cleanupUnusedMedia(usedData: unknown) {
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);
     });
-    await Promise.all(unused.map((key) => store.removeItem(key)));
+    await Promise.all(unused.map(async (key) => {
+        const url = objectUrls.get(key);
+        if (url) URL.revokeObjectURL(url);
+        objectUrls.delete(key);
+        await store.removeItem(key);
+    }));
 }
 
 export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()) {
@@ -230,7 +249,17 @@ export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()
 function readVideoMeta(url: string) {
     return new Promise<{ width: number; height: number }>((resolve) => {
         const video = document.createElement("video");
-        const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720 });
+        const done = () => {
+            const dimensions = { width: video.videoWidth || 1280, height: video.videoHeight || 720 };
+            clearTimeout(timeout);
+            video.onloadedmetadata = null;
+            video.onerror = null;
+            video.removeAttribute("src");
+            video.load();
+            resolve(dimensions);
+        };
+        const timeout = setTimeout(done, 15000);
+        video.preload = "metadata";
         video.onloadedmetadata = done;
         video.onerror = done;
         video.src = url;

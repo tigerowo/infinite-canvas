@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tigerowo/infinite-canvas/extensions/taskidentity"
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
@@ -73,6 +75,10 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	credits := 0
+	credentialSource := service.UserRemoteModelAPIKeyMode()
+	if userChannelID != "" {
+		credentialSource = "local"
+	}
 	if userChannelID == "" {
 		credits, err = service.ModelCost(modelName)
 		if err != nil {
@@ -153,27 +159,28 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, err := service.CreateVideoTask(service.VideoTaskCreateInput{
-		UserID:          user.ID,
-		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
-		Model:           modelName,
-		ChannelID:       channel.ID,
-		UserChannelID:   userChannelID,
-		ChannelName:     channel.Name,
-		Source:          readVideoTaskSource(r),
-		SourceID:        readVideoTaskSourceID(r),
-		ClientTaskID:    readClientVideoTaskID(r),
-		UpstreamTaskID:  parsed.UpstreamTaskID,
-		UpstreamVideoID: parsed.UpstreamVideoID,
-		Status:          parsed.Status,
-		Progress:        parsed.Progress,
-		Seconds:         parsed.Seconds,
-		Size:            parsed.Size,
-		VideoURL:        parsed.VideoURL,
-		Error:           parsed.Error,
-		ErrorDetail:     parsed.ErrorDetail,
-		RequestBody:     logContext.RequestBody,
-		ResponseBody:    string(transformed),
-		Credits:         credits,
+		CredentialSource: credentialSource,
+		UserID:           user.ID,
+		UserDisplayName:  firstNonEmpty(user.DisplayName, user.Username),
+		Model:            modelName,
+		ChannelID:        channel.ID,
+		UserChannelID:    userChannelID,
+		ChannelName:      channel.Name,
+		Source:           readVideoTaskSource(r),
+		SourceID:         readVideoTaskSourceID(r),
+		ClientTaskID:     readClientVideoTaskID(r),
+		UpstreamTaskID:   parsed.UpstreamTaskID,
+		UpstreamVideoID:  parsed.UpstreamVideoID,
+		Status:           parsed.Status,
+		Progress:         parsed.Progress,
+		Seconds:          parsed.Seconds,
+		Size:             parsed.Size,
+		VideoURL:         parsed.VideoURL,
+		Error:            parsed.Error,
+		ErrorDetail:      parsed.ErrorDetail,
+		RequestBody:      logContext.RequestBody,
+		ResponseBody:     string(transformed),
+		Credits:          credits,
 	})
 	if err != nil {
 		log.Printf("save video task failed: model=%s err=%v", modelName, err)
@@ -231,12 +238,7 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 	if err != nil || !found {
 		return false
 	}
-	var channel model.ModelChannel
-	if strings.TrimSpace(task.UserChannelID) != "" {
-		channel, err = service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
-	} else {
-		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID)
-	}
+	channel, err := selectVideoTaskChannel(task)
 	if err != nil || !service.IsGeminiChannel(channel) {
 		return false
 	}
@@ -269,13 +271,7 @@ func serveGeminiVideoTaskContent(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdate, error) {
-	var channel model.ModelChannel
-	var err error
-	if strings.TrimSpace(task.UserChannelID) != "" {
-		channel, err = service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
-	} else {
-		channel, err = service.SelectModelChannelForModel(task.Model, task.ChannelID)
-	}
+	channel, err := selectVideoTaskChannel(task)
 	if err != nil {
 		return service.VideoTaskPollUpdate{}, err
 	}
@@ -342,6 +338,32 @@ func pollVideoTaskFromUpstream(task model.VideoTask) (service.VideoTaskPollUpdat
 		ErrorDetail:  parsed.ErrorDetail,
 		ResponseBody: string(transformed),
 	}, nil
+}
+
+func selectVideoTaskChannel(task model.VideoTask) (model.ModelChannel, error) {
+	db, err := repository.DB()
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	source, err := taskidentity.Load(db, task.ID, task.UserID)
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	if strings.TrimSpace(task.UserChannelID) != "" {
+		return service.SelectUserLocalModelChannelForModel(task.UserID, task.Model, task.UserChannelID)
+	}
+	if source != "" && source != service.UserRemoteModelAPIKeyMode() {
+		return model.ModelChannel{}, errors.New("视频任务的凭证模式已变更，请恢复创建时的模式后重试")
+	}
+	user, found, err := repository.GetUserByID(task.UserID)
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	if !found || user.Status == model.UserStatusBan {
+		return model.ModelChannel{}, errors.New("视频任务所属账号不可用")
+	}
+	channel, _, err := selectAIRequestChannel(model.PublicUser(user), task.Model, task.ChannelID, "")
+	return channel, err
 }
 
 func normalizeVideoCreateBody(body []byte, contentType string, modelName string, channel model.ModelChannel, upstreamPath string) ([]byte, string, error) {

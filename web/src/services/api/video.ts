@@ -107,7 +107,8 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 }
 
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
-    const model = config.model || config.videoModel;
+    const model = (config.model || config.videoModel || "").trim();
+    if (!model) throw new VideoRequestError("模型名称不能为空，请先选择可用的视频模型");
     const systemPrompt = (config.systemPrompts.video || config.systemPrompt).trim();
     const body = await createVideoRequestBody(config, model, systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, normalizeVideoReferenceInput(references));
     const startedAt = Date.now();

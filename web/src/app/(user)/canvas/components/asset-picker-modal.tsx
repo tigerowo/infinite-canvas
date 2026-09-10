@@ -31,7 +31,7 @@ export function AssetPickerModal({ open, defaultTab = "my-assets", onInsert, onC
     }, [open, defaultTab]);
 
     return (
-        <Modal title="选择素材" open={open} onCancel={onClose} footer={null} width={860} destroyOnHidden styles={{ body: { padding: "0 24px 24px", minHeight: 480 } }}>
+        <Modal title="选择素材" open={open} onCancel={onClose} footer={null} width="min(860px, calc(100vw - 24px))" destroyOnHidden styles={{ body: { padding: "0 24px 24px", minHeight: "min(480px, calc(100dvh - 190px))", maxHeight: "calc(100dvh - 190px)", overflowY: "auto" } }}>
             <Tabs
                 activeKey={activeTab}
                 onChange={(key) => setActiveTab(key as AssetPickerTab)}
@@ -93,7 +93,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
         <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
                 <Input
-                    className="w-56"
+                    className="w-full sm:w-56"
                     size="small"
                     prefix={<Search className="size-3.5 text-stone-400" />}
                     placeholder="搜索素材"
@@ -104,7 +104,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
                         setKeyword(e.target.value);
                     }}
                 />
-                <div className="flex gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                     {[
                         { label: "全部", value: "" },
                         { label: "文本", value: "text" },
@@ -132,7 +132,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
                     <Spin />
                 </div>
             ) : items.length ? (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {items.map((asset) => (
                         <PickerCard key={asset.id} title={asset.title} kind={asset.type} cover={asset.coverUrl} loading={inserting === asset.id} onClick={() => void handleInsert(asset)} />
                     ))}
@@ -151,6 +151,13 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
 }
 
 function PickerCard({ title, kind, cover, loading, onClick }: { title: string; kind: string; cover: string; loading?: boolean; onClick: () => void }) {
+    const normalizedCover = cover.trim();
+    const [coverFailed, setCoverFailed] = useState(false);
+
+    useEffect(() => {
+        setCoverFailed(false);
+    }, [normalizedCover]);
+
     return (
         <button
             type="button"
@@ -158,8 +165,8 @@ function PickerCard({ title, kind, cover, loading, onClick }: { title: string; k
             onClick={onClick}
             disabled={loading}
         >
-            {cover ? (
-                <img src={cover} alt={title} className="aspect-[4/3] w-full object-cover" />
+            {normalizedCover && !coverFailed ? (
+                <img src={normalizedCover} alt={title} className="aspect-[4/3] w-full object-cover" onError={() => setCoverFailed(true)} />
             ) : (
                 <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-3 text-center text-xs leading-5 text-stone-500 dark:bg-stone-800 dark:text-stone-400">{title}</div>
             )}
@@ -306,7 +313,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
         <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-3">
                 <Input
-                    className="w-56"
+                    className="w-full sm:w-56"
                     size="small"
                     prefix={<Search className="size-3.5 text-stone-400" />}
                     placeholder="搜索素材"
@@ -317,7 +324,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                         setKeyword(e.target.value);
                     }}
                 />
-                <div className="flex gap-1.5">
+                <div className="flex flex-wrap gap-1.5">
                     {kindOptions.map((opt) => (
                         <Tag.CheckableTag
                             key={opt.value}
@@ -338,7 +345,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             </div>
 
             {visible.length ? (
-                <div className="grid grid-cols-4 gap-3">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {visible.map((asset) => (
                         <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")} onClick={() => handleInsert(asset)} />
                     ))}

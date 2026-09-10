@@ -3,6 +3,7 @@ package router
 import (
 	"github.com/tigerowo/infinite-canvas/extensions/modelcapabilities"
 	"github.com/tigerowo/infinite-canvas/extensions/publicmedia"
+	"github.com/tigerowo/infinite-canvas/extensions/storageaccess"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -15,7 +16,12 @@ func New() *gin.Engine {
 	router.RedirectTrailingSlash = false
 	_ = router.SetTrustedProxies(nil)
 	api := router.Group("/api")
-	if err := modelcapabilities.RegisterPolicy(api.Group("/extensions"), api.Group("/extensions", middleware.AdminAuth)); err != nil { panic(err) }
+	if err := modelcapabilities.RegisterPolicy(api.Group("/extensions"), api.Group("/extensions", middleware.AdminAuth)); err != nil {
+		panic(err)
+	}
+	if err := storageaccess.Register(api.Group("/extensions", middleware.AdminAuth)); err != nil {
+		panic(err)
+	}
 	api.GET("/health", func(c *gin.Context) {
 		c.String(http.StatusOK, "ok")
 	})
@@ -32,10 +38,10 @@ func New() *gin.Engine {
 	api.HEAD("/media/references/:id", func(c *gin.Context) {
 		handler.ReferenceMedia(c.Writer, c.Request, c.Param("id"))
 	})
-	api.GET("/files/:id", func(c *gin.Context) {
+	api.GET("/files/:id", middleware.OptionalAuth, func(c *gin.Context) {
 		handler.FileInfo(c.Writer, c.Request, c.Param("id"))
 	})
-	api.GET("/files/:id/content", func(c *gin.Context) {
+	api.GET("/files/:id/content", middleware.OptionalAuth, func(c *gin.Context) {
 		handler.FileContent(c.Writer, c.Request, c.Param("id"))
 	})
 	api.POST("/ai/direct-request", gin.WrapF(handler.PrepareDirectAIRequest))
@@ -46,6 +52,9 @@ func New() *gin.Engine {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
 	})
 	v1 := api.Group("/v1", middleware.UserAuth)
+	v1.GET("/files/:id/signed-url", func(c *gin.Context) {
+		handler.SignedFileURL(c.Writer, c.Request, c.Param("id"))
+	})
 	publicmedia.Register(api.Group("/extensions/public-media", middleware.UserAuth))
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))
@@ -124,7 +133,7 @@ func New() *gin.Engine {
 	v1.GET("/user-data/assets", gin.WrapF(handler.UserAssetData))
 	v1.POST("/user-data/assets", gin.WrapF(handler.SaveUserAssetData))
 	api.GET("/proxy-image", gin.WrapF(handler.ProxyImage))
-	api.GET("/prompts", middleware.OptionalAuth, gin.WrapF(handler.Prompts))
+	api.GET("/prompts", middleware.UserAuth, gin.WrapF(handler.Prompts))
 	api.GET("/agent-skills", gin.WrapF(handler.AgentSkills))
 	api.GET("/agent-skills/:id/file", func(c *gin.Context) {
 		handler.AgentSkillFile(c.Writer, c.Request, c.Param("id"))

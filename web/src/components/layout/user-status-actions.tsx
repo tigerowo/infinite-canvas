@@ -38,10 +38,10 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
     const credits = user?.credits ?? 0;
     const avatarUrl = user?.avatarUrl?.trim();
     const avatarText = (userName.trim()[0] || "U").toUpperCase();
-    const naturalIconClass = "inline-flex size-7 shrink-0 items-center justify-center text-stone-600 transition hover:text-stone-950 dark:text-stone-300 dark:hover:text-white [&_svg]:size-4";
+    const naturalIconClass = "inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-stone-600 transition hover:bg-black/5 hover:text-stone-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
     const iconStyle: CSSProperties | undefined = variant === "canvas" ? { color: canvasTheme.node.text } : undefined;
     const versionStyle = iconStyle;
-    const gitHubClassName = "size-7 text-base";
+    const gitHubClassName = "size-11 rounded-xl text-base";
     const gitHubStyle = iconStyle;
     const avatarStyle: CSSProperties | undefined = variant === "canvas" ? { borderColor: canvasTheme.toolbar.border, color: canvasTheme.node.text, background: "transparent" } : undefined;
     const menuItems: ItemType[] = [
@@ -75,15 +75,11 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                     <Keyboard className="size-4" />
                 </button>
             ) : null}
-            {!user ? (
-                <Link href="/login" className="px-1.5 text-sm font-medium text-stone-600 underline-offset-4 transition hover:text-stone-950 hover:underline dark:text-stone-300 dark:hover:text-stone-100" style={iconStyle}>
-                    登录
-                </Link>
-            ) : null}
+            {!user ? <Link href="/login" className="px-1.5 text-sm font-medium text-stone-600 underline-offset-4 transition hover:text-stone-950 hover:underline dark:text-stone-300 dark:hover:text-stone-100" style={iconStyle}>登录</Link> : null}
             {user ? (
                 <div ref={accountRef}>
                     <Dropdown open={accountOpen} onOpenChange={onAccountOpenChange} trigger={["click"]} placement="bottomRight" getPopupContainer={getPopupContainer} styles={{ root: { minWidth: 150 } }} menu={{ items: menuItems }}>
-                        <button type="button" className="flex size-7 shrink-0 items-center justify-center rounded-full bg-transparent p-0 text-[0] leading-[0] transition" aria-label="账户菜单">
+                        <button type="button" className="flex size-11 shrink-0 items-center justify-center rounded-full bg-transparent p-0 text-[0] leading-[0] transition hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50 dark:hover:bg-white/10" aria-label="账户菜单">
                             <Avatar
                                 size={24}
                                 src={avatarUrl ? <img src={avatarUrl} alt={userName} referrerPolicy="no-referrer" /> : undefined}

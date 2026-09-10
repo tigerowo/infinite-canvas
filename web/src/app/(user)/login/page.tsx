@@ -74,11 +74,10 @@ function LoginContent() {
                 return;
             }
             const action = mode === "register" ? register : login;
-            const user = await action({ username: values.username, password: values.password });
+            await action({ username: values.username, password: values.password });
             message.success(mode === "register" ? "注册成功" : "登录成功");
             router.replace(redirect);
             router.refresh();
-            if (user.role !== "admin") router.replace("/");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "登录失败");
         }
@@ -90,18 +89,17 @@ function LoginContent() {
                 <div className="mb-7 text-center">
                     <img src="/logo.png" alt="微鑫画布" className="mx-auto mb-4 block size-12 object-contain" />
                     <h1 className="text-3xl font-semibold tracking-normal text-stone-950 dark:text-stone-100">账号登录</h1>
-                    <p className="mt-3 text-base leading-7 text-stone-500 dark:text-stone-400">支持账号密码和 Linux.do 登录。</p>
                 </div>
 
                 <Form<LoginFormValues> layout="vertical" size="large" requiredMark={false} onFinish={submit}>
-                    <Form.Item>
+                    {allowRegister ? <Form.Item>
                         <Segmented
                             block
                             value={mode}
                             onChange={(value) => setMode(value as "login" | "register")}
                             options={allowRegister ? [{ label: "登录", value: "login" }, { label: "注册", value: "register" }] : [{ label: "登录", value: "login" }]}
                         />
-                    </Form.Item>
+                    </Form.Item> : null}
                     <Form.Item name="username" label={<span className="font-medium text-stone-800 dark:text-stone-200">用户名</span>} rules={[{ required: true, message: "请输入用户名" }]}>
                         <Input prefix={<UserOutlined />} autoComplete="username" />
                     </Form.Item>

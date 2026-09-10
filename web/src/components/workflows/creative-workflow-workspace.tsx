@@ -1130,7 +1130,7 @@ export function CreativeWorkflowWorkspace({
                                             <img src={image.dataUrl} alt={image.name} className="aspect-square w-full object-cover" />
                                             <button
                                                 type="button"
-                                                className="absolute right-1 top-1 grid size-6 place-items-center rounded bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                className="absolute right-1 top-1 z-10 grid size-11 place-items-center rounded bg-black/65 text-white sm:size-7 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
                                                 onClick={() => void removeAgentReference(image.id)}
                                                 aria-label="删除参考图"
                                             >
@@ -1223,7 +1223,7 @@ export function CreativeWorkflowWorkspace({
                                                 <img src={image.dataUrl} alt={image.name} className="aspect-square w-full object-cover" />
                                                 <button
                                                     type="button"
-                                                    className="absolute right-1 top-1 grid size-6 place-items-center rounded bg-black/65 text-white opacity-0 transition group-hover:opacity-100"
+                                                    className="absolute right-1 top-1 z-10 grid size-11 place-items-center rounded bg-black/65 text-white sm:size-7 sm:opacity-0 sm:transition-opacity sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
                                                     onClick={() => void removeWorkflowReference(image.id)}
                                                     aria-label="删除参考图"
                                                 >

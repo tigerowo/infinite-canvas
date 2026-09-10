@@ -39,7 +39,8 @@ type UserStorageProviders struct {
 }
 
 type userModelConfigInput struct {
-	LocalChannels []userLocalModelChannelInput `json:"localChannels"`
+	LocalChannels     []userLocalModelChannelInput `json:"localChannels"`
+	RemoteChannelKeys map[string]string            `json:"remoteChannelKeys"`
 }
 
 type userLocalModelChannelInput struct {
@@ -105,6 +106,80 @@ func SelectUserLocalModelChannelForModel(userID string, modelName string, channe
 		}, nil
 	}
 	return model.ModelChannel{}, errors.New("本地渠道不存在")
+}
+
+// SelectUserRemoteModelChannelForModel uses administrator-published endpoint
+// and model metadata, while the API key comes only from the current user.
+func SelectUserRemoteModelChannelForModel(userID string, modelName string, channelID string) (model.ModelChannel, error) {
+	userID = strings.TrimSpace(userID)
+	modelName = strings.TrimSpace(modelName)
+	channelID = strings.TrimSpace(channelID)
+	if userID == "" {
+		return model.ModelChannel{}, errors.New("请先登录")
+	}
+	if modelName == "" {
+		return model.ModelChannel{}, errors.New("缺少模型名称")
+	}
+	settings, err := repository.GetSettings()
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	settings = normalizeSettings(settings)
+	if settings.Public.ModelChannel.APIKeyMode != "user" {
+		return model.ModelChannel{}, errors.New("当前云端渠道使用管理员 API Key")
+	}
+	config, ok, err := repository.GetUserConfig(userID)
+	if err != nil {
+		return model.ModelChannel{}, err
+	}
+	if !ok || strings.TrimSpace(config.ModelConfig) == "" {
+		return model.ModelChannel{}, errors.New("请先配置云端 API Key")
+	}
+	var modelConfig userModelConfigInput
+	if err := json.Unmarshal([]byte(config.ModelConfig), &modelConfig); err != nil {
+		return model.ModelChannel{}, err
+	}
+	channels := remoteModelChannelsForModel(settings.Private.Channels, modelName)
+	if channelID != "" {
+		for _, channel := range channels {
+			if channel.ID == channelID {
+				return withUserRemoteChannelKey(channel, modelConfig.RemoteChannelKeys[channel.ID])
+			}
+		}
+		return model.ModelChannel{}, errors.New("指定模型渠道不可用")
+	}
+	for _, channel := range channels {
+		if key := strings.TrimSpace(modelConfig.RemoteChannelKeys[channel.ID]); key != "" {
+			channel.APIKey = key
+			return channel, nil
+		}
+	}
+	return model.ModelChannel{}, errors.New("请先配置云端 API Key")
+}
+
+func withUserRemoteChannelKey(channel model.ModelChannel, key string) (model.ModelChannel, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return model.ModelChannel{}, errors.New("请先配置该云端渠道的 API Key")
+	}
+	channel.APIKey = key
+	return channel, nil
+}
+
+func remoteModelChannelsForModel(channels []model.ModelChannel, modelName string) []model.ModelChannel {
+	result := make([]model.ModelChannel, 0, len(channels))
+	for _, channel := range channels {
+		if !channel.Enabled || strings.TrimSpace(channel.ID) == "" || strings.TrimSpace(channel.BaseURL) == "" {
+			continue
+		}
+		for _, item := range channel.Models {
+			if strings.EqualFold(strings.TrimSpace(item), modelName) {
+				result = append(result, channel)
+				break
+			}
+		}
+	}
+	return result
 }
 
 func userLocalChannelModels(models []string) []string {

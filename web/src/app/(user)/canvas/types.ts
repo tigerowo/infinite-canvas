@@ -82,6 +82,8 @@ export type CanvasNodeMetadata = {
     primaryImageId?: string;
     imageBatchExpanded?: boolean;
     storageKey?: string;
+    archivePending?: boolean;
+    archiveError?: string;
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
@@ -208,6 +210,7 @@ export type CanvasAgentConfig = {
     codexEffort?: string;
     textApiMode: "chat" | "responses";
     textReasoningEnabled?: boolean;
+    textReasoningEffort?: import("@/extensions/model-capabilities/reasoning").ReasoningEffort;
     autoGenerateMedia: boolean;
     imageQuality: string;
     imageSize: string;

@@ -8,13 +8,18 @@ import (
 )
 
 func ListPrompts(q model.Query) (model.PromptList, error) {
+	q.Normalize()
 	items, total, err := repository.ListPrompts(q)
 	if err != nil {
 		return model.PromptList{}, err
 	}
-	tags, err := repository.ListPromptTags(q)
-	if err != nil {
-		return model.PromptList{}, err
+	tags := []string{}
+	if q.Page == 1 {
+		var err error
+		tags, err = repository.ListPromptTags(q)
+		if err != nil {
+			return model.PromptList{}, err
+		}
 	}
 	categories := promptCategoryCodes(ListPromptCategories())
 	return model.PromptList{Items: items, Tags: tags, Categories: categories, Total: int(total)}, nil

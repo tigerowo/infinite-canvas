@@ -6,9 +6,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/tigerowo/infinite-canvas/extensions/taskidentity"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
 )
 
 const videoTaskPollInterval = 5 * time.Second
@@ -26,27 +27,28 @@ var (
 )
 
 type VideoTaskCreateInput struct {
-	UserID          string
-	UserDisplayName string
-	Model           string
-	ChannelID       string
-	UserChannelID   string
-	ChannelName     string
-	Source          string
-	SourceID        string
-	ClientTaskID    string
-	UpstreamTaskID  string
-	UpstreamVideoID string
-	Status          string
-	Progress        int
-	Seconds         string
-	Size            string
-	VideoURL        string
-	Error           string
-	ErrorDetail     string
-	RequestBody     string
-	ResponseBody    string
-	Credits         int
+	CredentialSource string
+	UserID           string
+	UserDisplayName  string
+	Model            string
+	ChannelID        string
+	UserChannelID    string
+	ChannelName      string
+	Source           string
+	SourceID         string
+	ClientTaskID     string
+	UpstreamTaskID   string
+	UpstreamVideoID  string
+	Status           string
+	Progress         int
+	Seconds          string
+	Size             string
+	VideoURL         string
+	Error            string
+	ErrorDetail      string
+	RequestBody      string
+	ResponseBody     string
+	Credits          int
 }
 
 type VideoTaskPollUpdate struct {
@@ -102,6 +104,15 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		task.Status = "failed"
 		task.CompletedAt = current
 	}
+	if input.CredentialSource != "" {
+		db, err := repository.DB()
+		if err != nil {
+			return model.VideoTask{}, err
+		}
+		if err := taskidentity.Save(db, task.ID, task.UserID, input.CredentialSource); err != nil {
+			return model.VideoTask{}, err
+		}
+	}
 	saved, err := repository.SaveVideoTask(task)
 	if err == nil && !IsCompletedVideoTaskStatus(saved.Status) && !IsFailedVideoTaskStatus(saved.Status) {
 		WakeVideoTaskPoller()
@@ -131,27 +142,27 @@ func DeleteUserVideoTask(userID string, id string) error {
 
 func VideoTaskResponse(task model.VideoTask) map[string]any {
 	result := map[string]any{
-		"id":           task.ID,
-		"object":       "video",
-		"model":        task.Model,
-		"channelId":    task.ChannelID,
+		"id":            task.ID,
+		"object":        "video",
+		"model":         task.Model,
+		"channelId":     task.ChannelID,
 		"userChannelId": task.UserChannelID,
-		"channelName":  task.ChannelName,
-		"source":       task.Source,
-		"source_id":    task.SourceID,
-		"status":       task.Status,
-		"progress":     task.Progress,
-		"task_id":      firstVideoTaskValue(task.UpstreamTaskID, task.ID),
-		"video_id":     task.UpstreamVideoID,
-		"seconds":      task.Seconds,
-		"size":         task.Size,
-		"created_at":   task.CreatedAt,
-		"updated_at":   task.UpdatedAt,
-		"started_at":   task.StartedAt,
-		"completed_at": task.CompletedAt,
-		"createdAt":    task.CreatedAt,
-		"updatedAt":    task.UpdatedAt,
-		"request_body": task.RequestBody,
+		"channelName":   task.ChannelName,
+		"source":        task.Source,
+		"source_id":     task.SourceID,
+		"status":        task.Status,
+		"progress":      task.Progress,
+		"task_id":       firstVideoTaskValue(task.UpstreamTaskID, task.ID),
+		"video_id":      task.UpstreamVideoID,
+		"seconds":       task.Seconds,
+		"size":          task.Size,
+		"created_at":    task.CreatedAt,
+		"updated_at":    task.UpdatedAt,
+		"started_at":    task.StartedAt,
+		"completed_at":  task.CompletedAt,
+		"createdAt":     task.CreatedAt,
+		"updatedAt":     task.UpdatedAt,
+		"request_body":  task.RequestBody,
 	}
 	if task.VideoURL != "" {
 		result["url"] = task.VideoURL

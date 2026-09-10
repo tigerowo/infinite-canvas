@@ -53,6 +53,7 @@ description: settings 表中 public 和 private 配置结构说明
 | `defaultVideoModel` | string | 默认视频模型，从 `availableModels` 中选择；为空或失效时优先选择 `seedance`、`video` 模型 |
 | `defaultTextModel` | string | 默认文本模型，从 `availableModels` 中选择；为空或失效时优先选择非图片/视频模型 |
 | `systemPrompt` | string | 系统提示词 |
+| `apiKeyMode` | string | 云端渠道密钥模式：`admin` 使用后台渠道 Key，`user` 使用当前用户按渠道填写的 Key |
 | `allowCustomChannel` | boolean | 是否允许用户在配置弹窗中切换为本地直连渠道，默认允许 |
 
 `modelCosts` 每项字段：

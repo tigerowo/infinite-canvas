@@ -1,0 +1,13 @@
+@theme inline {
+    --color-stone-50: var(--color-neutral-50);
+    --color-stone-100: var(--color-neutral-100);
+    --color-stone-200: var(--color-neutral-200);
+    --color-stone-300: var(--color-neutral-300);
+    --color-stone-400: var(--color-neutral-400);
+    --color-stone-500: var(--color-neutral-500);
+    --color-stone-600: var(--color-neutral-600);
+    --color-stone-700: var(--color-neutral-700);
+    --color-stone-800: var(--color-neutral-800);
+    --color-stone-900: var(--color-neutral-900);
+    --color-stone-950: var(--color-neutral-950);
+}

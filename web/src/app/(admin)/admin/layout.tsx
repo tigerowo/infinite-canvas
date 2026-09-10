@@ -1,11 +1,11 @@
 "use client";
 
-import { AuditOutlined, FileTextOutlined, HomeOutlined, LogoutOutlined, PictureOutlined, SettingOutlined, ToolOutlined, TransactionOutlined, UserOutlined } from "@ant-design/icons";
-import { Button, Flex, Layout, Menu, Typography, theme } from "antd";
+import { MenuOutlined, AuditOutlined, FileTextOutlined, HomeOutlined, LogoutOutlined, PictureOutlined, SettingOutlined, ToolOutlined, TransactionOutlined, UserOutlined } from "@ant-design/icons";
+import { Button, Drawer, Flex, Layout, Menu, Typography, theme } from "antd";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { adminLayoutStyle } from "@/lib/app-theme";
@@ -22,6 +22,7 @@ const adminMenus = [
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
+    const [mobileNavOpen, setMobileNavOpen] = useState(false);
     const { token: antToken } = theme.useToken();
     const router = useRouter();
     const pathname = usePathname();
@@ -65,9 +66,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         );
     }
 
-    return (
-        <Layout hasSider style={{ height: "100vh", overflow: "hidden", background: antToken.colorBgLayout }}>
-            <Layout.Sider width={adminLayoutStyle.siderWidth} style={{ height: "100vh", overflow: "hidden", background: antToken.colorBgContainer, borderRight: `1px solid ${antToken.colorBorder}` }}>
+    const navigation = <>
                 <Flex align="center" gap={12} style={{ height: adminLayoutStyle.brandHeight, padding: "0 20px", borderBottom: `1px solid ${antToken.colorBorderSecondary}` }}>
                     <img src="/logo.png" alt="" width={30} height={30} style={{ objectFit: "contain" }} />
                     <Typography.Text strong style={{ fontSize: 18, letterSpacing: 0 }}>
@@ -76,6 +75,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                 </Flex>
                 <Menu
                     mode="inline"
+                    onClick={() => setMobileNavOpen(false)}
                     selectedKeys={[activeKey]}
                     style={adminLayoutStyle.menu}
                     items={adminMenus.map((item) => ({
@@ -96,14 +96,24 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                         退出登录
                     </Button>
                 </Flex>
+    </>;
+
+    return (
+        <Layout hasSider style={{ height: "100vh", overflow: "hidden", background: antToken.colorBgLayout }}>
+            <Layout.Sider className="!hidden lg:!block" width={adminLayoutStyle.siderWidth} style={{ height: "100vh", overflow: "hidden", background: antToken.colorBgContainer, borderRight: `1px solid ${antToken.colorBorder}` }}>
+                {navigation}
             </Layout.Sider>
-            <Layout style={{ background: antToken.colorBgLayout }}>
+            <Drawer title="后台导航" open={mobileNavOpen} placement="left" onClose={() => setMobileNavOpen(false)} styles={{ body: { padding: 0, position: "relative" } }} size={280}>{navigation}</Drawer>
+            <Layout style={{ minWidth: 0, background: antToken.colorBgLayout }}>
                 <Layout.Header
                     style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: adminLayoutStyle.headerHeight, padding: "0 24px", background: antToken.colorBgContainer, borderBottom: `1px solid ${antToken.colorBorder}` }}
                 >
-                    <Typography.Title level={5} style={{ margin: 0 }}>
+                    <Flex align="center" gap={8} style={{ minWidth: 0 }}>
+                    <Button aria-label="打开后台导航" icon={<MenuOutlined />} className="!h-11 !w-11 lg:!hidden" onClick={() => setMobileNavOpen(true)} />
+                    <Typography.Title level={5} style={{ margin: 0, whiteSpace: "nowrap" }}>
                         {pageTitle}
                     </Typography.Title>
+                    </Flex>
                     <Flex align="center" gap={4}>
                         <UserStatusActions showConfig={false} />
                     </Flex>

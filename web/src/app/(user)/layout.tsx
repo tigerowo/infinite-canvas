@@ -7,7 +7,7 @@ import { AppTopNav } from "@/components/layout/app-top-nav";
 import { fetchUserConfig } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 
-const protectedPrefixes = ["/asset-library"];
+const protectedPrefixes = ["/asset-library", "/assets", "/prompts", "/canvas"];
 
 export default function UserLayout({ children }: { children: ReactNode }) {
     const pathname = usePathname();
@@ -19,7 +19,7 @@ export default function UserLayout({ children }: { children: ReactNode }) {
 
     useEffect(() => {
         if (!isReady || !isProtectedPage || user) return;
-        router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
+        router.replace(`/login?redirect=${encodeURIComponent(pathname + window.location.search)}`);
     }, [isProtectedPage, isReady, pathname, router, user]);
 
     useEffect(() => {

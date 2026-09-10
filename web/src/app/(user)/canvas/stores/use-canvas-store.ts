@@ -255,7 +255,7 @@ export const useCanvasStore = create<CanvasStore>()(
                     agentConfig: options?.agentConfig || null,
                     autoTitlePending: true,
                     pendingAgentRequest: options?.pendingAgentRequest,
-                    backgroundMode: "lines",
+                    backgroundMode: "dots",
                     showImageInfo: false,
                     viewport: initialViewport,
                     sidePanel: DEFAULT_CANVAS_SIDE_PANEL,

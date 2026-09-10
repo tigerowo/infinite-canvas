@@ -4,14 +4,20 @@ import { CheckCircleOutlined, DeleteOutlined, FormatPainterOutlined, LoadingOutl
 import { json } from "@codemirror/lang-json";
 import { App, Button, Card, Col, Drawer, Flex, Form, Input, InputNumber, Modal, Row, Segmented, Select, Space, Switch, Table, Tabs, Tag, Typography } from "antd";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { EditorView } from "@uiw/react-codemirror";
 
 import { ChannelModelSelectorModal } from "@/components/channel-model-selector-modal";
+import { AdminModelManagementPanel } from "@/components/admin-model-management-panel";
 import { modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
 import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
-import { ModelPolicyPanel } from "@/extensions/model-capabilities/policy-panel";
+import { modelMatchesCapability } from "@/stores/use-config-store";
+import { ModelPolicyPanel, type ModelPolicyPanelHandle } from "@/extensions/model-capabilities/policy-panel";
+import { StorageAccessPanel, StorageAccessFields, storageAccessProviderKey, type StorageAccessPanelHandle, type StorageAccessProviderOption } from "@/extensions/storage-access/panel";
+import { remapStorageDrafts } from "@/extensions/storage-access/draft";
+import { nanoid } from "nanoid";
+import { useModelPolicy } from "@/extensions/model-capabilities/policy";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const jsonEditorTheme = EditorView.theme({
@@ -41,13 +47,14 @@ const emptySettings: AdminSettings = {
             systemPrompts: { image: "", video: "", text: "", workflow: "", workflowAgent: "" },
             allowCustomChannel: true,
             allowUserRemoteChannel: false,
+            apiKeyMode: "admin",
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
         storage: { mode: "local_indexeddb", allowUserProvider: false },
     },
-    private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
+    private: { channels: [], newapi: { baseUrl: "" }, promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
-const emptyChannel: AdminModelChannel = { id: "", protocol: "newapi", name: "", baseUrl: modelChannelDefaultBaseUrls.newapi, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
+const emptyChannel: AdminModelChannel = { id: "", protocol: "newapi", name: "", baseUrl: "", apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "" };
 
@@ -71,13 +78,22 @@ export default function AdminSettingsPage() {
     const [testingModels, setTestingModels] = useState<string[]>([]);
     const [testResults, setTestResults] = useState<Record<string, { status: "success" | "error"; duration?: string; message: string }>>({});
     const [isModelSelectorOpen, setIsModelSelectorOpen] = useState(false);
+    const [isFetchingChannelModels, setIsFetchingChannelModels] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [privateSectionsMounted, setPrivateSectionsMounted] = useState(false);
+    const modelPolicyRef = useRef<ModelPolicyPanelHandle>(null);
+    const storageAccessRef = useRef<StorageAccessPanelHandle>(null);
     const [measuringProviderIndex, setMeasuringProviderIndex] = useState<number | null>(null);
     const [modelCosts, setModelCosts] = useState<AdminModelCost[]>([]);
     const [knownModels, setKnownModels] = useState<string[]>([]);
     const publicModels = Form.useWatch(["public", "modelChannel", "availableModels"], form) || [];
+    const modelPolicy = useModelPolicy((state) => state.policy);
+    const publicImageModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "image"))), [publicModels, modelPolicy]);
+    const publicVideoModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "video"))), [publicModels, modelPolicy]);
+    const publicTextModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "text"))), [publicModels, modelPolicy]);
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
+    const storageProviderOptions = useMemo<StorageAccessProviderOption[]>(() => storageProviders.map((provider: AdminStorageProvider, draftIndex: number) => ({ ...provider, clientKey: provider.clientKey || storageAccessProviderKey(provider), draftIndex })), [storageProviders]);
     const channelProtocol = Form.useWatch("protocol", channelForm);
     const channelApiKeyUrl = channelProtocol ? modelChannelApiKeyUrls[channelProtocol] : undefined;
     const channelModels = useMemo(() => collectChannelModels(channels), [channels]);
@@ -99,6 +115,9 @@ export default function AdminSettingsPage() {
                 public: JSON.stringify(data.public, null, 2),
                 private: JSON.stringify(data.private, null, 2),
             });
+            if (privateSectionsMounted) {
+                await Promise.all([modelPolicyRef.current?.reload(), storageAccessRef.current?.reload()]);
+            }
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取设置失败");
         } finally {
@@ -111,6 +130,7 @@ export default function AdminSettingsPage() {
     }, [token]);
 
     const changeTab = (nextTab: SettingsTabKey) => {
+        if (nextTab === "private") setPrivateSectionsMounted(true);
         setActiveTab(nextTab);
     };
 
@@ -120,10 +140,24 @@ export default function AdminSettingsPage() {
         if (!values) {
             return;
         }
-        setIsSaving(true);
+        const normalizedValues = normalizeSettings(values);
+        form.setFieldsValue(normalizedValues);
+        setChannels(normalizedValues.private.channels);
+        setModelCosts(normalizedValues.public.modelChannel.modelCosts);
+        rememberKnownModels(normalizedValues);
         try {
-            const saved = normalizeSettings(await saveAdminSettings(token, values));
+            await modelPolicyRef.current?.validateDraft();
+            await storageAccessRef.current?.validateDraft();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "扩展设置校验失败");
+            return;
+        }
+        setIsSaving(true);
+        let baseSaved = false;
+        try {
+            const saved = normalizeSettings(await saveAdminSettings(token, stripStorageDraftKeys(normalizedValues)));
             const merged = mergeChannelApiKeys(values.private.channels, saved);
+            merged.private.storage.providers = remapStorageDrafts(merged.private.storage.providers, normalizedValues.private.storage.providers);
             form.setFieldsValue(merged);
             setChannels(merged.private.channels);
             setModelCosts(merged.public.modelChannel.modelCosts);
@@ -132,9 +166,15 @@ export default function AdminSettingsPage() {
                 public: JSON.stringify(merged.public, null, 2),
                 private: JSON.stringify(merged.private, null, 2),
             });
+            baseSaved = true;
+            const savedStorageProviders = merged.private.storage.providers.map((provider, draftIndex) => ({ ...provider, clientKey: provider.clientKey || storageAccessProviderKey(provider), draftIndex }));
+            await Promise.all([
+                modelPolicyRef.current?.saveDraft(),
+                storageAccessRef.current?.saveDraft(savedStorageProviders),
+            ]);
             message.success("已保存");
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存失败");
+            message.error(baseSaved ? `基础设置已保存，但扩展设置保存失败：${error instanceof Error ? error.message : "请重试"}` : error instanceof Error ? error.message : "保存失败");
         } finally {
             setIsSaving(false);
         }
@@ -177,7 +217,7 @@ export default function AdminSettingsPage() {
     const openChannelDrawer = (index: number | null) => {
         setEditingChannelIndex(index);
         setIsChannelDrawerOpen(true);
-        const channel = index === null ? emptyChannel : normalizeChannel(channels[index]);
+        const channel = index === null ? { ...emptyChannel } : normalizeChannel(channels[index]);
         channelForm.setFieldsValue(channel);
         rememberModels(channel.models);
     };
@@ -189,12 +229,17 @@ export default function AdminSettingsPage() {
     };
 
     const saveChannel = async () => {
-        const channel = normalizeChannel(await channelForm.validateFields());
+        const rawChannel = await channelForm.validateFields();
+        const previousChannel = editingChannelIndex === null ? undefined : channels[editingChannelIndex];
+        const channel = normalizeChannel({
+            ...rawChannel,
+            apiKey: rawChannel.apiKey?.trim() ? rawChannel.apiKey : previousChannel?.apiKey || "",
+        });
         rememberModels(channel.models);
         const nextChannels = [...channels];
         if (editingChannelIndex === null) nextChannels.push(channel);
         else nextChannels[editingChannelIndex] = channel;
-        await persistChannels(nextChannels);
+        updateChannelDraft(nextChannels);
         closeChannelDrawer();
     };
 
@@ -210,6 +255,36 @@ export default function AdminSettingsPage() {
             return;
         }
         return fetchChannelModels(token, { index: editingChannelIndex ?? undefined, channel: normalizeChannel(channel) });
+    };
+
+    const fetchModelsForChannel = async (index: number) => {
+        if (!token) throw new Error("请先登录管理员账号");
+        const channel = normalizeChannel(channels[index]);
+        if (!channel.baseUrl) throw new Error("请先填写接口地址");
+        return fetchChannelModels(token, { index, channel });
+    };
+
+    const updateChannelModels = (index: number, models: string[]) => {
+        const nextChannels = channels.map((channel, channelIndex) => channelIndex === index ? { ...channel, models: uniqueModels(models) } : channel);
+        updateChannelDraft(nextChannels);
+    };
+
+    const fetchModelsIntoChannelDraft = async () => {
+        setIsFetchingChannelModels(true);
+        try {
+            const models = await fetchChannelModelList();
+            if (!models) return;
+            const current = channelForm.getFieldValue("models") || [];
+            const merged = uniqueModels([...current, ...models]);
+            channelForm.setFieldValue("models", merged);
+            rememberModels(models);
+            if (!models.length) message.warning("上游未返回模型列表，请手动填写模型名称");
+            else message.success(`已获取 ${models.length} 个模型，并加入当前渠道草稿`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "读取模型失败");
+        } finally {
+            setIsFetchingChannelModels(false);
+        }
     };
 
     const openChannelModelSelector = () => setIsModelSelectorOpen(true);
@@ -276,8 +351,7 @@ export default function AdminSettingsPage() {
     const testChannel = testChannelIndex === null ? null : normalizeChannel(channels[testChannelIndex]);
     const testModels = (testChannel?.models || []).filter((model) => model.toLowerCase().includes(testKeyword.trim().toLowerCase()));
 
-    async function persistChannels(nextChannels: AdminModelChannel[]) {
-        if (!token) return;
+    function updateChannelDraft(nextChannels: AdminModelChannel[]) {
         const values = normalizeSettings(form.getFieldsValue(true) as AdminSettings);
         const nextChannelModels = collectChannelModels(nextChannels);
         const nextSettings = normalizeSettings({
@@ -285,17 +359,14 @@ export default function AdminSettingsPage() {
             public: { ...values.public, modelChannel: { ...values.public.modelChannel, availableModels: filterModels(values.public.modelChannel.availableModels, nextChannelModels) } },
             private: { ...values.private, channels: nextChannels },
         });
-        const saved = normalizeSettings(await saveAdminSettings(token, nextSettings));
-        const merged = mergeChannelApiKeys(nextChannels, saved);
-        setChannels(merged.private.channels);
-        setModelCosts(merged.public.modelChannel.modelCosts);
-        rememberKnownModels(merged);
-        form.setFieldsValue(merged);
+        setChannels(nextSettings.private.channels);
+        setModelCosts(nextSettings.public.modelChannel.modelCosts);
+        rememberKnownModels(nextSettings);
+        form.setFieldsValue(nextSettings);
         setJsonText({
-            public: JSON.stringify(merged.public, null, 2),
-            private: JSON.stringify(merged.private, null, 2),
+            public: JSON.stringify(nextSettings.public, null, 2),
+            private: JSON.stringify(nextSettings.private, null, 2),
         });
-        message.success("已保存");
     }
 
     async function measureStorageProviderAt(index: number) {
@@ -305,8 +376,15 @@ export default function AdminSettingsPage() {
         try {
             const result = await measureAdminStorageProvider(token, { index, provider });
             const next = normalizeSettings(await fetchAdminSettings(token));
-            form.setFieldsValue(next);
-            setJsonText({ public: JSON.stringify(next.public, null, 2), private: JSON.stringify(next.private, null, 2) });
+            const measured = next.private.storage.providers.find((item) => item.id === provider.id);
+            const current = form.getFieldValue(["private", "storage", "providers"]) as AdminStorageProvider[];
+            const currentIndex = current.findIndex((item) => storageAccessProviderKey(item) === storageAccessProviderKey(provider));
+            if (measured && currentIndex >= 0) {
+                for (const key of ["capacityBytes", "capacityCheckedAt", "capacityExceeded"] as const) {
+                    form.setFieldValue(["private", "storage", "providers", currentIndex, key], measured[key]);
+                }
+                if (result.overLimit) form.setFieldValue(["private", "storage", "providers", currentIndex, "enabled"], false);
+            }
             message.success(`容量统计完成：${formatStorageBytes(result.bytes)}${result.overLimit ? "，已达到上限并禁用" : ""}`);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "容量统计失败");
@@ -316,9 +394,9 @@ export default function AdminSettingsPage() {
     }
 
     return (
+        <StorageAccessPanel ref={storageAccessRef} providers={storageProviderOptions} enabled={privateSectionsMounted && editorMode.private === "visual"}>
         <main className="p-3 md:p-6">
             <Flex vertical gap={16}>
-                <ModelPolicyPanel />
                 <Card variant="borderless">
                     <Flex justify="space-between" align="center" gap={16} wrap>
                         <Tabs
@@ -340,6 +418,11 @@ export default function AdminSettingsPage() {
                     </Flex>
                 </Card>
 
+                {privateSectionsMounted ? (
+                    <div hidden={activeTab !== "private" || activeMode !== "visual"}>
+                        <ModelPolicyPanel ref={modelPolicyRef} channels={channels} />
+                    </div>
+                ) : null}
                 <Card variant="borderless">
                     <Flex justify="space-between" align="center" gap={16} wrap style={{ marginBottom: 16 }}>
                         <Segmented
@@ -379,22 +462,22 @@ export default function AdminSettingsPage() {
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultModel"]} label="默认模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch allowClear placeholder="自动选择" options={publicTextModelOptions} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultImageModel"]} label="默认图片模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch allowClear placeholder="自动选择" options={publicImageModelOptions} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultVideoModel"]} label="默认视频模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch allowClear placeholder="自动选择" options={publicVideoModelOptions} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultTextModel"]} label="默认文本模型">
-                                            <Select showSearch allowClear options={publicModels.map((item) => ({ label: item, value: item }))} />
+                                            <Select showSearch allowClear placeholder="自动选择" options={publicTextModelOptions} />
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
@@ -440,6 +523,11 @@ export default function AdminSettingsPage() {
                                             <Switch />
                                         </Form.Item>
                                     </Col>
+                                    <Col xs={24} md={12}>
+                                        <Form.Item name={["public", "modelChannel", "apiKeyMode"]} label="云端渠道 API Key 使用方式" extra="统一管理员 Key：到下方“渠道管理”编辑渠道，在 API Key 字段填写；用户自己的 Key：保存后，用户在前端配置弹窗的“云端渠道”区域填写。">
+                                            <Select options={[{ label: "统一使用管理员 Key", value: "admin" }, { label: "允许用户使用自己的 Key", value: "user" }]} />
+                                        </Form.Item>
+                                    </Col>
                                     <Col span={24}>
                                         <Form.Item name={["public", "auth", "allowRegister"]} label="是否允许用户注册" extra="关闭后隐藏注册入口，注册接口也会拒绝新用户创建" valuePropName="checked">
                                             <Switch />
@@ -449,6 +537,8 @@ export default function AdminSettingsPage() {
                                         <Typography.Title level={5}>模型算力点</Typography.Title>
                                         <Table
                                             rowKey="model"
+                                            scroll={{ x: 480 }}
+                                            tableLayout="fixed"
                                             pagination={false}
                                             size="small"
                                             dataSource={publicModels.map((model) => ({ model, credits: modelCostCredits(modelCosts, model) }))}
@@ -523,7 +613,7 @@ export default function AdminSettingsPage() {
                                         </Row>
                                     </Flex>
                                 </Card>
-                                <Card size="small" title="提示词定时同步">
+                                    <Card size="small" title="提示词定时同步">
                                     <Row gutter={16} align="middle">
                                         <Col xs={24} md={8}>
                                             <Form.Item name={["private", "promptSync", "enabled"]} label="开启定时同步" valuePropName="checked">
@@ -561,11 +651,11 @@ export default function AdminSettingsPage() {
                                         </Col>
                                     </Row>
                                 </Card>
-                                <Card size="small" title="数据存储">
+                                <Card size="small" title="云存储与访问">
                                     <Row gutter={16}>
                                         <Col xs={24} md={8}>
-                                            <Form.Item label="存储模式" extra="自动检测：当配置并启用任意对象存储时，系统自动开启云端同步。">
-                                                <Input disabled value="自动识别 (动态切换)" />
+                                            <Form.Item label="上传位置" extra="在下方选定默认位置；切换只影响新上传，原有文件继续使用原存储。">
+                                                <Input disabled value="使用选定的默认存储" />
                                             </Form.Item>
                                         </Col>
                                         <Col xs={24} md={8}>
@@ -597,18 +687,18 @@ export default function AdminSettingsPage() {
                                     <Form.List name={["private", "storage", "providers"]}>
                                         {(fields, { add, remove }) => (
                                             <Flex vertical gap={12}>
-                                                <Button icon={<PlusOutlined />} onClick={() => add(newAdminStorageProvider("s3", storageProviders))}>
-                                                    新增 S3/R2 配置
+                                                <Button icon={<PlusOutlined />} onClick={() => add({ ...newAdminStorageProvider("s3", storageProviders), name: "火山 TOS", region: "", endpoint: "" })}>
+                                                    添加火山 TOS
                                                 </Button>
-                                                <Button icon={<PlusOutlined />} onClick={() => add(newAdminStorageProvider("webdav", storageProviders))}>
-                                                    新增 WebDAV 配置
+                                                <Button icon={<PlusOutlined />} onClick={() => add({ ...newAdminStorageProvider("s3", storageProviders), name: "七牛云", region: "", endpoint: "" })}>
+                                                    添加七牛云
                                                 </Button>
                                                 {fields.map((field) => {
                                                     const provider = storageProviders[field.name] || emptyS3StorageProvider;
                                                     const isWebDAV = provider.type === "webdav";
                                                     const weightField = (
-                                                        <Col xs={24} md={3}>
-                                                            <Form.Item name={[field.name, "weight"]} label="权重">
+                                                        <Col span={0}>
+                                                            <Form.Item name={[field.name, "weight"]} hidden>
                                                                 <InputNumber min={1} className="!w-full" />
                                                             </Form.Item>
                                                         </Col>
@@ -617,40 +707,41 @@ export default function AdminSettingsPage() {
                                                         <Card
                                                             key={field.key}
                                                             size="small"
-                                                            title={isWebDAV ? "WebDAV" : "S3/R2"}
+                                                            title={provider.name || (isWebDAV ? "历史 WebDAV 配置" : "对象存储")}
                                                             extra={
                                                                 <Flex gap={8}>
-                                                                    <Button size="small" loading={measuringProviderIndex === field.name} onClick={() => void measureStorageProviderAt(field.name)}>
+                                                                    <Button disabled={!provider.id} loading={measuringProviderIndex === field.name} onClick={() => void measureStorageProviderAt(field.name)}>
                                                                         统计容量
                                                                     </Button>
-                                                                    <Button danger size="small" icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
+                                                                    <Button danger aria-label={`删除${provider.name || "存储配置"}`} icon={<DeleteOutlined />} onClick={() => remove(field.name)} />
                                                                 </Flex>
                                                             }
                                                         >
                                                             <Form.Item name={[field.name, "type"]} hidden>
                                                                 <Input />
                                                             </Form.Item>
+                                                            <Form.Item name={[field.name, "clientKey"]} hidden><Input /></Form.Item>
                                                             <Row gutter={12}>
                                                                 <Col xs={24} md={6}>
                                                                     <Form.Item name={[field.name, "name"]} label="名称">
-                                                                        <Input placeholder={isWebDAV ? "WebDAV" : "Cloudflare R2"} />
+                                                                        <Input placeholder={isWebDAV ? "WebDAV" : "火山 TOS / 七牛云"} />
                                                                     </Form.Item>
                                                                 </Col>
                                                                 <Col xs={24} md={isWebDAV ? 8 : 6}>
-                                                                    <Form.Item name={[field.name, "endpoint"]} label={isWebDAV ? "WebDAV 地址" : "Endpoint"}>
-                                                                        <Input placeholder={isWebDAV ? "https://dav.example.com/webdav" : "https://<account>.r2.cloudflarestorage.com"} />
+                                                                            <Form.Item name={[field.name, "endpoint"]} label={isWebDAV ? "WebDAV 地址" : "S3 Endpoint"} extra={!isWebDAV ? "填写对应地域的 S3 兼容地址，不含 Bucket" : undefined}>
+                                                                                <Input placeholder={isWebDAV ? "https://dav.example.com/webdav" : "https://服务商的地域端点"} />
                                                                     </Form.Item>
                                                                 </Col>
                                                                 {!isWebDAV && (
                                                                     <>
                                                                         <Col xs={24} md={4}>
-                                                                            <Form.Item name={[field.name, "region"]} label="Region">
-                                                                                <Input placeholder="auto" />
+                                                                                <Form.Item name={[field.name, "region"]} label="Region" extra="与存储桶所在地域保持一致">
+                                                                                    <Input placeholder="服务商提供的 Region" />
                                                                             </Form.Item>
                                                                         </Col>
                                                                         <Col xs={24} md={4}>
-                                                                            <Form.Item name={[field.name, "bucket"]} label="Bucket">
-                                                                                <Input />
+                                                                                <Form.Item name={[field.name, "bucket"]} label="Bucket" extra="填写存储桶名称">
+                                                                                    <Input placeholder="例如 wxsh6" />
                                                                             </Form.Item>
                                                                         </Col>
                                                                     </>
@@ -704,8 +795,8 @@ export default function AdminSettingsPage() {
                                                                             </Form.Item>
                                                                         </Col>
                                                                         <Col xs={24} md={6}>
-                                                                            <Form.Item name={[field.name, "publicBaseUrl"]} label="公开访问域名">
-                                                                                <Input placeholder="可选，不填则走后端代理读取" />
+                                                                            <Form.Item name={[field.name, "publicBaseUrl"]} label="公开访问域名" extra="私有桶留空；CDN 填写在本卡片的文件访问设置中。">
+                                                                                <Input placeholder="私有桶无需填写" />
                                                                             </Form.Item>
                                                                         </Col>
                                                                         <Col xs={24} md={3}>
@@ -732,6 +823,7 @@ export default function AdminSettingsPage() {
                                                                     </Form.Item>
                                                                 </Col>
                                                             </Row>
+                                                            {!isWebDAV ? <StorageAccessFields provider={provider} /> : null}
                                                         </Card>
                                                     );
                                                 })}
@@ -744,15 +836,18 @@ export default function AdminSettingsPage() {
                                 </Button>
                                 <Table
                                     rowKey="_rowKey"
+                                    scroll={{ x: 960 }}
+                                    tableLayout="fixed"
                                     pagination={false}
                                     dataSource={channelTableData}
                                     columns={[
-                                        { title: "名称", dataIndex: "name", render: (value) => value || "未命名渠道" },
+                                        { title: "名称", dataIndex: "name", width: 160, ellipsis: true, render: (value) => value || "未命名渠道" },
                                         { title: "协议", dataIndex: "protocol", width: 96, render: (value) => <Tag>{value || "openai"}</Tag> },
                                         { title: "状态", dataIndex: "enabled", width: 96, render: (value) => <Tag color={value ? "success" : "default"}>{value ? "已启用" : "已停用"}</Tag> },
                                         {
                                             title: "模型",
                                             dataIndex: "models",
+                                            width: 220,
                                             render: (value: string[]) => (
                                                 <Typography.Text ellipsis style={{ maxWidth: 360 }}>
                                                     {modelSummary(value || [])}
@@ -764,6 +859,7 @@ export default function AdminSettingsPage() {
                                         {
                                             title: "操作",
                                             key: "actions",
+                                            fixed: "right",
                                             width: 220,
                                             render: (_, item) => (
                                                 <Space size={4}>
@@ -780,13 +876,19 @@ export default function AdminSettingsPage() {
                                                         onClick={() => {
                                                             const nextChannels = [...channels];
                                                             nextChannels.splice(item._index, 1);
-                                                            void persistChannels(nextChannels);
+                                                            updateChannelDraft(nextChannels);
                                                         }}
                                                     />
                                                 </Space>
                                             ),
                                         },
                                     ]}
+                                />
+                                <AdminModelManagementPanel
+                                    channels={channels}
+                                    knownModels={knownModels}
+                                    onFetchModels={fetchModelsForChannel}
+                                    onUpdateChannelModels={updateChannelModels}
                                 />
                             </Flex>
                         </Form>
@@ -813,7 +915,7 @@ export default function AdminSettingsPage() {
                         <Space>
                             <Button onClick={closeChannelDrawer}>取消</Button>
                             <Button type="primary" onClick={() => void saveChannel()}>
-                                保存
+                                完成
                             </Button>
                         </Space>
                     }
@@ -831,7 +933,7 @@ export default function AdminSettingsPage() {
                                     <Select
                                         options={modelChannelProtocolOptions}
                                         onChange={(protocol: AdminModelChannel["protocol"]) => {
-                                            channelForm.setFieldValue("baseUrl", modelChannelDefaultBaseUrls[protocol]);
+                                            channelForm.setFieldValue("baseUrl", protocol === "newapi" ? "" : modelChannelDefaultBaseUrls[protocol]);
                                         }}
                                     />
                                 </Form.Item>
@@ -872,8 +974,8 @@ export default function AdminSettingsPage() {
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
-                                <Form.Item name="apiKey" label="API Key" rules={editingChannelIndex === null ? [{ required: true, message: "请输入 API Key" }] : []}>
-                                    <Input.Password placeholder={editingChannelIndex === null ? "" : "留空则沿用已保存的 API Key"} />
+                                <Form.Item name="apiKey" label="管理员 API Key" extra="统一管理员 Key 模式会使用这里保存的密钥；编辑已有渠道时留空表示沿用原密钥。" rules={editingChannelIndex === null ? [{ required: true, message: "请输入管理员 API Key" }] : []}>
+                                    <Input.Password placeholder={editingChannelIndex === null ? "填写该渠道的管理员 API Key" : "留空则沿用已保存的 API Key"} />
                                 </Form.Item>
                             </Col>
                             <Col span={24}>
@@ -882,6 +984,9 @@ export default function AdminSettingsPage() {
                                         <Form.Item name="models" noStyle>
                                             <Select mode="tags" maxTagCount="responsive" tokenSeparators={[",", "\n"]} options={knownModels.map((model) => ({ label: model, value: model }))} />
                                         </Form.Item>
+                                        <Button loading={isFetchingChannelModels} onClick={() => void fetchModelsIntoChannelDraft()}>
+                                            拉取上游模型
+                                        </Button>
                                         <Button onClick={() => openChannelModelSelector()}>选择模型</Button>
                                     </Space.Compact>
                                 </Form.Item>
@@ -929,7 +1034,7 @@ export default function AdminSettingsPage() {
                         <Table
                             rowKey="model"
                             pagination={false}
-                            scroll={{ y: 420 }}
+                            scroll={{ x: 640, y: 420 }}
                             dataSource={testModels.map((model) => ({ model }))}
                             rowSelection={{
                                 selectedRowKeys: selectedTestModels,
@@ -972,6 +1077,7 @@ export default function AdminSettingsPage() {
                 </Modal>
             </Flex>
         </main>
+        </StorageAccessPanel>
     );
 }
 
@@ -986,14 +1092,20 @@ function normalizeSettings(settings: Partial<AdminSettings> = {}): AdminSettings
 }
 
 function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}): AdminSettings["public"] {
+    const availableModels = uniqueModels(setting.modelChannel?.availableModels || []);
     return {
         ...emptySettings.public,
         modelChannel: {
             ...emptySettings.public.modelChannel,
             ...(setting.modelChannel || {}),
-            availableModels: setting.modelChannel?.availableModels || [],
+            apiKeyMode: setting.modelChannel?.apiKeyMode === "user" ? "user" : "admin",
+            availableModels,
             modelCosts: normalizeModelCosts(setting.modelChannel?.modelCosts || []),
             channels: setting.modelChannel?.channels || [],
+            defaultModel: normalizeDefaultModel(setting.modelChannel?.defaultModel, availableModels, "text"),
+            defaultImageModel: normalizeDefaultModel(setting.modelChannel?.defaultImageModel, availableModels, "image"),
+            defaultVideoModel: normalizeDefaultModel(setting.modelChannel?.defaultVideoModel, availableModels, "video"),
+            defaultTextModel: normalizeDefaultModel(setting.modelChannel?.defaultTextModel, availableModels, "text"),
             systemPrompts: {
                 ...emptySettings.public.modelChannel.systemPrompts,
                 image: setting.modelChannel?.systemPrompts?.image || setting.modelChannel?.systemPrompt || "",
@@ -1023,6 +1135,7 @@ function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChanne
 function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}): AdminSettings["private"] {
     return {
         channels: (setting.channels || []).map(normalizeChannel),
+        newapi: { baseUrl: normalizeNewAPIBaseURL(setting.newapi?.baseUrl || "") },
         promptSync: {
             enabled: setting.promptSync?.enabled !== false,
             cron: setting.promptSync?.cron || "0 0 * * *",
@@ -1056,11 +1169,25 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
     };
 }
 
+function normalizeNewAPIBaseURL(value: string) {
+    const trimmed = value.trim().replace(/\/+$/, "");
+    return trimmed.replace(/\/v1$/i, "");
+}
+
+function normalizeDefaultModel(value: string | undefined, availableModels: string[], capability?: "image" | "video" | "text") {
+    const model = (value || "").trim();
+    if (!model || model === "all" || model === "全部") return "";
+    if (!availableModels.includes(model)) return "";
+    return capability && !modelMatchesCapability(model, capability) ? "" : model;
+}
+
 function normalizeStorageProvider(item: Partial<AdminStorageProvider> = {}): AdminStorageProvider {
+    const { clientKey, ...persisted } = item;
     const type = item.type === "webdav" ? "webdav" : "s3";
     return {
         ...(type === "webdav" ? emptyWebDAVStorageProvider : emptyS3StorageProvider),
-        ...item,
+        ...persisted,
+        clientKey: clientKey || item.id || `draft:${nanoid()}`,
         id: item.id || "",
         type,
         region: type === "s3" ? item.region || "auto" : "",
@@ -1076,6 +1203,7 @@ function newAdminStorageProvider(type: AdminStorageProvider["type"], providers: 
     const template = type === "webdav" ? emptyWebDAVStorageProvider : emptyS3StorageProvider;
     return {
         ...template,
+        clientKey: `draft:${nanoid()}`,
         enabled: !providers.some((provider) => provider.enabled && provider.type !== type),
     };
 }
@@ -1128,6 +1256,23 @@ function collectKnownModels(settings: AdminSettings) {
 
 function uniqueModels(models: string[]) {
     return Array.from(new Set(models.filter(Boolean)));
+}
+
+function stripStorageDraftKeys(settings: AdminSettings): AdminSettings {
+    return {
+        ...settings,
+        private: {
+            ...settings.private,
+            storage: {
+                ...settings.private.storage,
+                providers: settings.private.storage.providers.map(({ clientKey: _clientKey, ...provider }) => provider),
+            },
+        },
+    };
+}
+
+function modelOptions(models: string[]) {
+    return [{ label: "自动选择", value: "" }, ...uniqueModels(models).map((model) => ({ label: model, value: model }))];
 }
 
 function filterModels(models: string[], options: string[]) {

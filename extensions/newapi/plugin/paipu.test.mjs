@@ -134,3 +134,37 @@ test('Canvas v1 multi-image contract transforms explicitly and rejects unsupport
   assert.throws(() => submit(requestBody, 'unsupported-model'), /not implemented/);
   assert.throws(() => submit({ ...requestBody, metadata: { canvas_video: { version: 2, media } } }), /Invalid Canvas/);
 });
+
+test('MD multipart image requests become JSON with documented duration and ratio', () => {
+  const files = [{ field: 'input_reference', ref: 'file-md', mimeType: 'image/png', filename: 'reference.png' }];
+  for (const seconds of [5, 10, 15]) {
+    const decoded = p.protocols.openai_video.decodeRequest({ model: 'md-alias', body: {
+      kind: 'multipart', fields: { model: ['md-alias'], prompt: ['test'], seconds: [String(seconds)], size: ['1280x720'] }, files,
+    } });
+    const sent = p.buildSubmitRequest({ ...ctx, ...decoded, upstreamModel: 'lec-md-seedance-2-0-900-720p', files });
+    assert.equal(sent.headers['Content-Type'], 'application/json');
+    assert.equal(sent.bodyType, undefined);
+    assert.deepEqual(sent.body, {
+      model: 'lec-md-seedance-2-0-900-720p', prompt: 'test', duration: seconds, aspect_ratio: '16:9',
+      images: [{ __fileRef: 'file-md', encoding: 'dataUrl', mimeType: 'image/png', maxBytes: 20 * 1024 * 1024 }],
+    });
+  }
+});
+
+test('MD validates all five ratios and rejects unsupported or conflicting parameters', () => {
+  const submit = (fields = {}) => p.buildSubmitRequest({ ...ctx, upstreamModel: 'lec-md-seedance-2-0-900-720p',
+    requestBody: { model: 'md-alias', prompt: 'test', ...fields } });
+  for (const [size, ratio] of [['1280x720','16:9'],['720x1280','9:16'],['720x720','1:1'],['960x720','4:3'],['720x960','3:4']]) {
+    assert.equal(submit({ size }).body.aspect_ratio, ratio);
+    assert.equal(submit({ size }).body.duration, 15);
+  }
+  assert.equal(submit({ duration: 10 }).body.duration, 10);
+  assert.throws(() => submit({ seconds: 6 }), /5, 10 or 15/);
+  assert.throws(() => submit({ seconds: 5, duration: 15 }), /conflicting/);
+  assert.throws(() => submit({ size: '1920x1080' }), /720p/);
+  assert.throws(() => submit({ aspect_ratio: '21:9' }), /aspect ratio/);
+  assert.throws(() => submit({ images: Array(10).fill('https://example.org/a.png') }), /at most 9/);
+  assert.throws(() => submit({ metadata: { canvas_video: { version: 1, media: [{ type: 'video', role: 'reference', url: 'https://example.org/a.mp4' }] } } }), /reference images only/);
+  const media = [{ type: 'image', role: 'reference', url: 'https://example.org/a.png' }];
+  assert.deepEqual(submit({ metadata: { canvas_video: { version: 1, media } } }).body.images, media.map(x => x.url));
+});

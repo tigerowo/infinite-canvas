@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { Camera, ChevronDown, ChevronUp, X } from "lucide-react";
+import { type ReactNode } from "react";
+import { SettingsPopover } from "@/extensions/glass-ui/settings-popover";
+import { Camera, ChevronDown, ChevronUp } from "lucide-react";
 import { Button, Switch, Tooltip } from "antd";
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
@@ -38,10 +38,6 @@ const LENS_IDS = LENS_PROFILES.map((item) => item.id);
 
 export function CanvasCameraControl({ value, onChange, buttonClassName }: CanvasCameraControlProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
-    const buttonRef = useRef<HTMLSpanElement>(null);
-    const panelRef = useRef<HTMLDivElement>(null);
-    const [open, setOpen] = useState(false);
-    const [buttonRect, setButtonRect] = useState<DOMRect | null>(null);
     const cameraControl = value || DEFAULT_CAMERA_CONTROL;
     const camera = CAMERA_PROFILES.find((item) => item.id === cameraControl.camera) || CAMERA_PROFILES[0];
     const lens = LENS_PROFILES.find((item) => item.id === cameraControl.lens) || LENS_PROFILES[0];
@@ -49,106 +45,30 @@ export function CanvasCameraControl({ value, onChange, buttonClassName }: Canvas
     const apertureMeta = APERTURE_META[cameraControl.aperture];
     const updateCameraControl = (patch: Partial<CameraControlOptions>) => onChange({ ...cameraControl, ...patch });
 
-    useEffect(() => {
-        if (!open) return;
-
-        const trigger = buttonRef.current;
-        const node = trigger?.closest<HTMLElement>("[data-node-id]");
-        const canvasLayer = node?.parentElement;
-        if (!trigger || !node || !canvasLayer) return;
-
-        const syncPosition = () => {
-            const next = trigger.getBoundingClientRect();
-            setButtonRect((current) =>
-                current &&
-                current.left === next.left &&
-                current.top === next.top &&
-                current.width === next.width &&
-                current.height === next.height
-                    ? current
-                    : next,
-            );
-        };
-
-        const closeOnOutsidePointer = (event: PointerEvent) => {
-            const target = event.target;
-            if (!(target instanceof Node) || buttonRef.current?.contains(target) || panelRef.current?.contains(target)) return;
-            setOpen(false);
-        };
-
-        const observer = new MutationObserver(syncPosition);
-        observer.observe(node, { attributes: true, attributeFilter: ["style"] });
-        observer.observe(canvasLayer, { attributes: true, attributeFilter: ["style"] });
-
-        syncPosition();
-        window.addEventListener("resize", syncPosition);
-        window.addEventListener("scroll", syncPosition, true);
-        window.addEventListener("pointerdown", closeOnOutsidePointer, true);
-
-        return () => {
-            observer.disconnect();
-            window.removeEventListener("resize", syncPosition);
-            window.removeEventListener("scroll", syncPosition, true);
-            window.removeEventListener("pointerdown", closeOnOutsidePointer, true);
-        };
-    }, [open]);
-
-    const panelStyle = buttonRect
-        ? {
-            position: "fixed",
-            zIndex: 1200,
-            width: 900,
-            left: buttonRect.left + buttonRect.width / 2,
-            bottom: window.innerHeight - buttonRect.top + 8,
-            transform: "translateX(-50%) scale(0.75)",
-            transformOrigin: "center bottom",
-            overflowY: "auto",
-            background: theme.toolbar.panel,
-            border: "1px solid " + theme.toolbar.border,
-            borderRadius: 18,
-            boxShadow: "0 18px 54px rgba(28, 25, 23, 0.16)",
-            color: theme.node.text,
-        } as const
-        : undefined;
-
     return (
-        <>
-            <span ref={buttonRef} className="inline-flex min-w-0" onMouseDown={(event) => event.stopPropagation()} onPointerDown={(event) => event.stopPropagation()}>
+        <SettingsPopover
+            title="摄像机"
+            width={900}
+            placement="top"
+            trigger={
                 <Button
                     icon={<Camera className="size-4" />}
-                    className={buttonClassName || "!h-10 !min-w-[92px] !justify-start !rounded-full !px-3"}
+                    className={buttonClassName || "!h-11 !min-w-[92px] !justify-start !rounded-full !px-3"}
                     style={{
+                        minHeight: 44,
                         background: value?.enabled ? theme.toolbar.activeBg : theme.node.fill,
                         borderColor: value?.enabled ? theme.node.activeStroke : theme.node.stroke,
                         color: value?.enabled ? theme.toolbar.activeText : theme.node.text,
                     }}
-                    aria-expanded={open}
-                    onClick={() => setOpen((current) => !current)}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onMouseDown={(event) => event.stopPropagation()}
                 >
                     摄像机
                 </Button>
-            </span>
-
-            {open && buttonRect && panelStyle
-                ? createPortal(
-                      <div
-                          ref={panelRef}
-                          style={panelStyle}
-                          onPointerDown={(event) => event.stopPropagation()}
-                          onMouseDown={(event) => event.stopPropagation()}
-                          onClick={(event) => event.stopPropagation()}
-                          onWheel={(event) => event.stopPropagation()}
-                      >
-                          <div className="flex items-center justify-between border-b px-6 py-4" style={{ borderColor: theme.toolbar.border }}>
-                              <h2 className="text-base font-semibold">摄像机</h2>
-                              <button type="button" className="grid size-8 place-items-center rounded-lg transition hover:opacity-70" style={{ color: theme.node.muted }} aria-label="关闭" onClick={() => setOpen(false)}>
-                                  <X className="size-5" />
-                              </button>
-                          </div>
-
-                          <div className="px-6 py-5">
-                              <div className="overflow-x-auto">
-                                  <div className="grid min-w-[840px] grid-cols-4">
+            }
+        >
+                          <div className="px-4 py-5 sm:px-6">
+                              <div className="grid grid-cols-2 gap-y-4 sm:grid-cols-4 sm:gap-y-0">
                                       <SettingColumn
                                           theme={theme}
                                           label="相机"
@@ -208,7 +128,6 @@ export function CanvasCameraControl({ value, onChange, buttonClassName }: Canvas
                                           onPrevious={cameraControl.aperture === APERTURES[0] ? undefined : () => updateCameraControl({ aperture: cycleValue(APERTURES, cameraControl.aperture, -1) })}
                                           onNext={cameraControl.aperture === APERTURES[APERTURES.length - 1] ? undefined : () => updateCameraControl({ aperture: cycleValue(APERTURES, cameraControl.aperture, 1) })}
                                       />
-                                  </div>
                               </div>
 
                               <div className="mt-6 flex items-center justify-end gap-2">
@@ -216,14 +135,9 @@ export function CanvasCameraControl({ value, onChange, buttonClassName }: Canvas
                                   <Switch size="small" checked={cameraControl.enabled} aria-label="摄像机控制" onChange={(enabled) => updateCameraControl({ enabled })} />
                               </div>
                           </div>
-                      </div>,
-                      document.body,
-                  )
-                : null}
-        </>
+        </SettingsPopover>
     );
 }
-
 type SettingColumnProps = {
     theme: CanvasTheme;
     separator?: boolean;

@@ -11,6 +11,7 @@ import { PromptDetailDialog } from "@/components/prompts/prompt-detail-dialog";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
+import { promptPreview } from "@/extensions/glass-ui/prompt-preview";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
@@ -145,7 +146,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onWidthCh
                 style={{ width, background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 data-canvas-no-zoom
             >
-                <div className="flex items-center gap-5 px-4 pt-3.5">
+                <div role="tablist" aria-label="画布侧栏视图" className="flex items-center gap-5 px-4 pt-3.5">
                     <PanelTabButton label="画布" active={tab === "canvas"} theme={theme} onClick={() => setTab("canvas")} />
                     <PanelTabButton label="资产" active={tab === "assets"} theme={theme} onClick={() => setTab("assets")} />
                     <PanelTabButton label="提示词库" active={tab === "prompts"} theme={theme} onClick={() => setTab("prompts")} />
@@ -167,7 +168,7 @@ export function CanvasSidePanel({ nodes, selectedNodeIds, open, width, onWidthCh
 
 function PanelTabButton({ label, active, theme, onClick }: { label: string; active: boolean; theme: CanvasTheme; onClick: () => void }) {
     return (
-        <button type="button" onClick={onClick} className="relative pb-1.5 text-sm font-semibold transition-opacity" style={{ color: theme.node.text, opacity: active ? 1 : 0.45 }}>
+        <button type="button" role="tab" aria-selected={active} onClick={onClick} className="relative pb-1.5 text-sm font-semibold transition-opacity" style={{ color: theme.node.text, opacity: active ? 1 : 0.45 }}>
             {label}
             {active ? <motion.span layoutId="sidePanelTabIndicator" className="absolute inset-x-0 -bottom-px h-0.5 rounded-full" style={{ background: theme.toolbar.activeText }} transition={{ type: "spring", stiffness: 500, damping: 34 }} /> : null}
         </button>
@@ -391,14 +392,26 @@ function libraryPayload(asset: AssetLibraryItem): InsertAssetPayload {
 const CanvasPromptsTab = memo(function CanvasPromptsTab({ theme, onInsert }: { theme: CanvasTheme; onInsert: (payload: InsertAssetPayload) => void }) {
     const copyText = useCopyText();
     const [keyword, setKeyword] = useState("");
+    const [debouncedKeyword, setDebouncedKeyword] = useState("");
     const [expanded, setExpanded] = useState<Record<string, boolean>>({ system: true });
     const [detail, setDetail] = useState<Prompt | null>(null);
+    useEffect(() => {
+        const timer = window.setTimeout(() => setDebouncedKeyword(keyword.trim()), 220);
+        return () => window.clearTimeout(timer);
+    }, [keyword]);
     const categoryQuery = useQuery({
         queryKey: ["canvas-side-prompt-categories"],
         queryFn: () => fetchPrompts({ page: 1, pageSize: 1 }),
         retry: false,
     });
     const categories = useMemo(() => ["system", ...(categoryQuery.data?.categories.filter((category) => category !== "system") || [])], [categoryQuery.data?.categories]);
+    const searchQuery = useQuery({
+        queryKey: ["canvas-side-prompt-search", debouncedKeyword],
+        queryFn: () => fetchPrompts({ keyword: debouncedKeyword, page: 1, pageSize: 50 }),
+        enabled: debouncedKeyword.length >= 2,
+        staleTime: PROMPT_CACHE_TIME,
+        retry: false,
+    });
 
     return (
         <div className="flex h-full flex-col">
@@ -406,11 +419,19 @@ const CanvasPromptsTab = memo(function CanvasPromptsTab({ theme, onInsert }: { t
                 <Input size="small" allowClear prefix={<Search className="size-3.5 text-stone-400" />} placeholder="搜索提示词" value={keyword} onChange={(event) => setKeyword(event.target.value)} />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-                {categoryQuery.isLoading ? <div className="flex justify-center pt-16"><Spin size="small" /></div> : (
+                {debouncedKeyword.length >= 2 ? (
+                    searchQuery.isLoading ? <div className="flex justify-center pt-16"><Spin size="small" /></div> : searchQuery.isError ? (
+                        <button type="button" onClick={() => void searchQuery.refetch()} className="block w-full py-4 text-center text-xs text-red-500 opacity-80 transition hover:opacity-100">搜索失败，点击重试</button>
+                    ) : searchQuery.data?.items.length ? (
+                        <div className="space-y-1.5 px-1 pb-2 pt-1">
+                            {searchQuery.data.items.map((item) => <PromptRow key={item.id} item={item} theme={theme} onView={() => setDetail(item)} onInsert={() => onInsert({ kind: "text", content: item.prompt, title: item.title })} />)}
+                        </div>
+                    ) : <div className="py-8 text-center text-xs opacity-50">没有找到匹配的提示词</div>
+                ) : categoryQuery.isLoading ? <div className="flex justify-center pt-16"><Spin size="small" /></div> : (
                     <div className="space-y-2">
                         {categories.map((category) => {
-                            const opened = Boolean(expanded[category]) || Boolean(keyword.trim());
-                            return <PromptGroup key={category} category={category} keyword={keyword} open={opened} theme={theme} onToggle={() => setExpanded((current) => ({ ...current, [category]: !current[category] }))} onView={setDetail} onInsert={onInsert} />;
+                            const opened = Boolean(expanded[category]);
+                            return <PromptGroup key={category} category={category} keyword="" open={opened} theme={theme} onToggle={() => setExpanded((current) => ({ ...current, [category]: !current[category] }))} onView={setDetail} onInsert={onInsert} />;
                         })}
                     </div>
                 )}
@@ -480,7 +501,7 @@ function PromptRow({ item, theme, onView, onInsert }: { item: Prompt; theme: Can
             {item.coverUrl ? <img src={item.coverUrl} alt="" className="size-10 shrink-0 rounded-md object-cover" loading="lazy" /> : <span className="grid size-10 shrink-0 place-items-center rounded-md" style={{ background: theme.node.panel }}><FileText className="size-4 opacity-50" /></span>}
             <button type="button" onClick={onView} className="min-w-0 flex-1 text-left">
                 <span className="block truncate text-sm font-medium leading-snug">{item.title}</span>
-                <span className="mt-0.5 block truncate text-xs leading-snug opacity-50">{item.prompt}</span>
+                <span className="mt-0.5 block line-clamp-2 text-xs leading-snug opacity-50" title="点击查看完整提示词">{promptPreview(item.prompt)}</span>
             </button>
             <div className="flex shrink-0 flex-col items-center gap-0.5">
                 <button type="button" onClick={onView} className="grid size-6 place-items-center rounded-md opacity-60 transition hover:bg-black/10 hover:opacity-100 dark:hover:bg-white/10" aria-label="查看详情"><Eye className="size-3.5" /></button>

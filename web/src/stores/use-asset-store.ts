@@ -9,6 +9,7 @@ import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/im
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
 import { fetchUserAssetData, syncUserAssetData } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
+import { durableMediaSnapshot, mapMedia } from "@/extensions/media-reliability/snapshot";
 
 export type AssetKind = "text" | "image" | "video" | "audio";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -56,7 +57,7 @@ async function resolveStoredAsset(asset: Asset): Promise<Asset> {
     if (asset.data.storageKey)
         return {
             ...asset,
-            coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,
+            coverUrl: await resolveImageUrl(asset.data.storageKey, asset.coverUrl),
             data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
         };
     if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
@@ -69,10 +70,10 @@ const assetStorage: PersistStorage<AssetStore> = {
         const value = await localForageStorage.getItem(name);
         if (!value) return null;
         const parsed = JSON.parse(value) as StorageValue<AssetStore>;
-        parsed.state.assets = await Promise.all(parsed.state.assets.map(resolveStoredAsset));
+        parsed.state.assets = await mapMedia(parsed.state.assets, (asset) => resolveStoredAsset(asset).catch(() => durableMediaSnapshot(asset)));
         return parsed;
     },
-    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(value)),
+    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(durableMediaSnapshot(value))),
     removeItem: (name) => localForageStorage.removeItem(name),
 };
 
@@ -179,11 +180,8 @@ export const useAssetStore = create<AssetStore>()(
                 isHydratingAccountAssets = true;
                 try {
                     const remote = await fetchUserAssetData<AssetSnapshot>(token);
-                    const remoteAssets = await Promise.all(
-                        (Array.isArray(remote?.assets) ? remote.assets : []).map((asset) =>
-                            asset.kind === "image" && asset.data.storageKey?.startsWith("image:") ? resolveStoredAsset(asset) : asset,
-                        ),
-                    );
+                    const remoteAssets = await mapMedia(Array.isArray(remote?.assets) ? remote.assets : [], (asset) => resolveStoredAsset(asset).catch(() => durableMediaSnapshot(asset)));
+                    if (activeAssetSyncToken !== token || useUserStore.getState().token !== token) return;
                     if (syncEnabled) {
                         set({ assets: remoteAssets });
                     } else {
@@ -193,15 +191,17 @@ export const useAssetStore = create<AssetStore>()(
                         }
                     }
                 } finally {
-                    isHydratingAccountAssets = false;
+                    if (activeAssetSyncToken === token) isHydratingAccountAssets = false;
                 }
             },
             syncAccountAssets: async (token) => {
                 if (!token || !accountAssetSyncEnabled) return;
-                await syncUserAssetData(token, { assets: get().assets });
+                await syncUserAssetData(token, { assets: durableMediaSnapshot(get().assets) });
             },
             stopAccountAssetSync: () => {
                 activeAssetSyncToken = "";
+                accountAssetSyncEnabled = false;
+                isHydratingAccountAssets = false;
                 if (syncTimer) window.clearTimeout(syncTimer);
                 syncTimer = null;
             },

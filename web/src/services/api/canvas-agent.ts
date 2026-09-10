@@ -1,4 +1,5 @@
 import { mimoTextModels } from "@/lib/mimo-tts";
+import { reasoningFields } from "@/extensions/model-capabilities/reasoning";
 import { imageToDataUrl } from "@/services/image-storage";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, isGeminiConfig } from "@/lib/gemini";
 import { aiApiUrl, aiHeaders, refreshRemoteUser } from "@/services/api/image";
@@ -96,14 +97,12 @@ class CanvasAgentRequestError extends Error {
     }
 }
 
-type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean };
+type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textReasoningEffort?: import("@/extensions/model-capabilities/reasoning").ReasoningEffort };
 
 function applyCanvasAgentReasoning(body: Record<string, unknown>, config: CanvasAgentAiConfig, mode: "chat" | "responses" | "gemini") {
-    if (!config.textReasoningEnabled) return;
-    if (mode === "responses") body.reasoning = { effort: "high" };
-    else if (mode === "gemini") body.generationConfig = { ...((body.generationConfig as Record<string, unknown> | undefined) || {}), thinkingConfig: config.model.toLowerCase().includes("2.5") ? { thinkingBudget: -1 } : { thinkingLevel: "high" } };
-    else if (channelProtocolForConfig(config) === "mimo") body.thinking = { type: "enabled" };
-    else body.reasoning_effort = "high";
+    const fields = reasoningFields(config.model, channelProtocolForConfig(config), mode, config.textReasoningEffort, config.textReasoningEnabled);
+    if (fields.generationConfig) fields.generationConfig = { ...(body.generationConfig as object || {}), ...(fields.generationConfig as object) };
+    Object.assign(body, fields);
 }
 
 export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput): Promise<CanvasAgentModelTurn> {

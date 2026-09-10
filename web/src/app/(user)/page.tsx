@@ -1,12 +1,17 @@
 "use client";
 
 import { ArrowRight } from "lucide-react";
-import { type ChangeEvent, useEffect, useRef, useState } from "react";
-import { App, Button, Image, Tag } from "antd";
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import { App, Button, Tag } from "antd";
 import { nanoid } from "nanoid";
 import { useRouter } from "next/navigation";
 
 import { fetchPrompts, type Prompt } from "@/services/api/prompts";
+import { promptPreview } from "@/extensions/glass-ui/prompt-preview";
+import { PromptDetailDialog } from "@/components/prompts/prompt-detail-dialog";
+import { PromptCoverImage } from "@/components/prompts/prompt-cover-image";
+import { useCopyText } from "@/hooks/use-copy-text";
+import glassStyles from "@/extensions/glass-ui/glass-ui.module.css";
 import { cn } from "@/lib/utils";
 import { uploadAssetMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
@@ -14,6 +19,7 @@ import { useEffectiveConfig } from "@/stores/use-config-store";
 import { AssetPickerModal } from "./canvas/components/asset-picker-modal";
 import { CanvasAssistantComposer } from "./canvas/components/canvas-assistant-composer";
 import { useCanvasStore } from "./canvas/stores/use-canvas-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { canvasResourceLabel } from "./canvas/utils/canvas-resource-references";
 import { HomeBannerCarousel, type HomeBanner } from "./home-banner-carousel";
 import { filterHomeBanners } from "@/extensions/home-banners/config";
@@ -57,17 +63,21 @@ function toPendingAgentAsset(payload: InsertAssetPayload, label: string): Pendin
 export default function IndexPage() {
     const { message } = App.useApp();
     const router = useRouter();
+    const user = useUserStore((state) => state.user);
+    const isUserReady = useUserStore((state) => state.isReady);
     const effectiveConfig = useEffectiveConfig();
     const createProject = useCanvasStore((state) => state.createProject);
     const hydrated = useCanvasStore((state) => state.hydrated);
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
-    const [previewIndex, setPreviewIndex] = useState(0);
-    const [previewOpen, setPreviewOpen] = useState(false);
+    const [promptShowcaseLoading, setPromptShowcaseLoading] = useState(false);
+    const [promptShowcaseError, setPromptShowcaseError] = useState(false);
+    const [selectedPrompt, setSelectedPrompt] = useState<Prompt | null>(null);
     const [prompt, setPrompt] = useState("");
     const [pendingAssets, setPendingAssets] = useState<PendingAgentAsset[]>([]);
     const [selectedSkills, setSelectedSkills] = useState<CanvasAgentSkillSelection[]>([]);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [submitting, setSubmitting] = useState(false);
+    const copyText = useCopyText();
     const [agentConfig, setAgentConfig] = useState<CanvasAgentConfig>(() => ({
         textApiMode: "chat",
         autoGenerateMedia: false,
@@ -79,11 +89,28 @@ export default function IndexPage() {
     const uploadInputRef = useRef<HTMLInputElement>(null);
     const pendingAssetCountsRef = useRef<Record<InsertAssetPayload["kind"], number>>({ text: 0, image: 0, video: 0, audio: 0 });
 
+    const refreshPromptShowcase = useCallback(async () => {
+        if (!isUserReady || !user) {
+            setPromptShowcase([]);
+            setPromptShowcaseLoading(false);
+            return;
+        }
+        setPromptShowcaseLoading(true);
+        setPromptShowcaseError(false);
+        try {
+            const data = await fetchPrompts({ pageSize: 12 });
+            setPromptShowcase(data.items);
+        } catch (error) {
+            setPromptShowcaseError(true);
+            message.error(error instanceof Error ? error.message : "获取提示词失败");
+        } finally {
+            setPromptShowcaseLoading(false);
+        }
+    }, [isUserReady, message, user]);
+
     useEffect(() => {
-        void fetchPrompts({ pageSize: 12 })
-            .then((data) => setPromptShowcase(data.items))
-            .catch((error) => message.error(error instanceof Error ? error.message : "获取提示词失败"));
-    }, [message]);
+        void refreshPromptShowcase();
+    }, [refreshPromptShowcase]);
 
     const addPendingAsset = (payload: InsertAssetPayload) => {
         const asset = toPendingAgentAsset(payload, canvasResourceLabel(payload.kind, pendingAssetCountsRef.current[payload.kind]++));
@@ -115,6 +142,15 @@ export default function IndexPage() {
     };
 
     const submit = (nextPrompt = prompt, referenceIds = pendingAssets.map((asset) => asset.nodeId)) => {
+        if (!isUserReady) {
+            message.info("登录状态正在检查，请稍后再试");
+            return;
+        }
+        if (!user) {
+            message.warning("请先登录");
+            router.push(`/login?redirect=${encodeURIComponent("/")}`);
+            return;
+        }
         const text = nextPrompt.trim();
         if (!text || submitting) return;
         if (!hydrated) {
@@ -140,9 +176,9 @@ export default function IndexPage() {
     };
 
     return (
-        <main className="relative h-full overflow-x-hidden overflow-y-auto bg-background bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] text-stone-950 dark:bg-[radial-gradient(rgba(245,245,244,.18)_1px,transparent_1px)] dark:text-stone-100">
+        <main className="relative h-full overflow-x-hidden overflow-y-auto bg-background text-stone-950 before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(circle_at_18%_8%,rgba(56,189,248,.12),transparent_30%),radial-gradient(circle_at_82%_24%,rgba(167,139,250,.10),transparent_28%)] before:content-[''] dark:text-stone-100">
             <section className="relative mx-auto min-h-[calc(100vh-4rem)] max-w-7xl px-6">
-                <section className="relative flex min-h-[620px] flex-col items-center justify-center py-10 sm:py-14">
+                <section className={`${glassStyles.homeHero} relative flex min-h-[620px] flex-col items-center justify-center py-10 sm:py-14`}>
                     {SHOW_HOME_BANNERS ? <HomeBannerCarousel banners={HOME_BANNERS} /> : null}
                     <div className="mt-12 w-full max-w-[820px]">
                         <CanvasAssistantComposer
@@ -165,13 +201,13 @@ export default function IndexPage() {
                     <input ref={uploadInputRef} hidden type="file" accept="image/*,video/*,audio/*" onChange={onUploadInputChange} />
                 </section>
 
-                <section className="relative mx-auto mb-20 max-w-6xl border-t border-stone-200 pt-12 dark:border-stone-800">
+                {isUserReady && user ? <section className="relative mx-auto mb-20 max-w-6xl border-t border-stone-200/60 pt-12 dark:border-stone-800/60">
                     <div className="mb-8 grid gap-4 md:grid-cols-[1fr_auto_1fr] md:items-start">
                         <div />
                         <div className="max-w-2xl text-center">
                             <div className="flex flex-wrap items-center justify-center gap-3">
                                 <h2 className="text-3xl font-semibold text-stone-950 dark:text-stone-100">沉淀每一次好结果</h2>
-                                <Button type="primary" size="middle" href="https://prompts.tdeh.top/" target="_blank" className="-translate-y-[6px]">提示词仓库</Button>
+                                <Button type="primary" size="middle" href="https://prompts.tdeh.top/" target="_blank" rel="noreferrer" className="-translate-y-[6px]">提示词仓库</Button>
                             </div>
                             <p className="mt-3 text-base leading-7 text-stone-500 dark:text-stone-400">收藏稳定出图的提示词、参考风格和结果图片，让下一次创作从已有经验开始。</p>
                         </div>
@@ -179,37 +215,54 @@ export default function IndexPage() {
                             提示词库
                         </Button>
                     </div>
-                    <div className="grid auto-rows-[210px] gap-4 md:grid-cols-4">
+                    {promptShowcaseLoading ? (
+                        <div className="grid auto-rows-[210px] gap-4 md:grid-cols-4" aria-label="正在加载提示词">
+                            {Array.from({ length: 4 }, (_, index) => <div key={index} className="animate-pulse motion-reduce:animate-none rounded-3xl border border-stone-200/60 bg-stone-200/40 dark:border-stone-800/60 dark:bg-stone-900/50" />)}
+                        </div>
+                    ) : promptShowcaseError ? (
+                        <div role="status" className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-amber-300/60 bg-amber-50/70 px-6 py-12 text-center text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100">
+                            <span>提示词暂时加载失败，你可以重试。</span>
+                            <Button onClick={() => void refreshPromptShowcase()}>重新加载</Button>
+                        </div>
+                    ) : promptShowcase.length ? <div className="grid auto-rows-[210px] gap-4 md:grid-cols-4">
                         {promptShowcase.map((item, index) => (
                             <button
                                 key={item.id}
                                 type="button"
-                                onClick={() => {
-                                    setPreviewIndex(index);
-                                    setPreviewOpen(true);
-                                }}
+                                onClick={() => setSelectedPrompt(item)}
                                 className={cn(
-                                    "group relative cursor-pointer overflow-hidden border border-stone-200 bg-stone-100 text-left dark:border-stone-800 dark:bg-stone-900",
+                                    glassStyles.showcaseCard,
+                                    "group relative cursor-pointer overflow-hidden text-left",
                                     index === 0 && "md:col-span-2 md:row-span-2",
                                     index === 3 && "md:col-span-2",
                                 )}
                             >
-                                <img src={item.coverUrl} alt={item.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
-                                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/35 to-transparent p-4 text-white">
+                                <PromptCoverImage
+                                    src={item.coverUrl}
+                                    alt={item.title}
+                                    className="h-full w-full object-cover"
+                                    imageClassName="transition duration-500 group-hover:scale-[1.03] motion-reduce:transition-none motion-reduce:transform-none"
+                                />
+                                <div className={`${glassStyles.showcaseOverlay} absolute inset-x-0 bottom-0 p-4 text-white`}>
                                     <div className="mb-2 flex flex-wrap gap-1.5">
-                                        {item.tags.slice(0, 2).map((tag) => (
+                                        {Array.from(new Set(item.tags.filter(Boolean))).slice(0, 2).map((tag) => (
                                             <Tag key={tag} variant="filled" className="m-0 bg-white/15 text-[11px] text-white backdrop-blur">
                                                 {tag}
                                             </Tag>
                                         ))}
                                     </div>
                                     <h3 className="text-sm font-medium">{item.title}</h3>
-                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-white/75">{item.prompt}</p>
+                                    <p className="mt-1 line-clamp-2 text-xs leading-5 text-white/75" title="点击查看完整提示词">{promptPreview(item.prompt)}</p>
                                 </div>
                             </button>
                         ))}
-                    </div>
-                </section>
+                    </div> : (
+                        <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-stone-300/80 px-6 py-12 text-center dark:border-stone-700">
+                            <p className="text-sm text-stone-500 dark:text-stone-400">还没有可展示的提示词</p>
+                            <Button href="/prompts">打开提示词库</Button>
+                        </div>
+                    )}
+                </section> : null}
             </section>
             <AssetPickerModal
                 open={assetPickerOpen}
@@ -220,18 +273,7 @@ export default function IndexPage() {
                 }}
                 onClose={() => setAssetPickerOpen(false)}
             />
-            <Image.PreviewGroup
-                items={promptShowcase.map((item) => ({
-                    src: item.coverUrl,
-                    alt: item.title,
-                }))}
-                preview={{
-                    open: previewOpen,
-                    current: previewIndex,
-                    onOpenChange: setPreviewOpen,
-                    onChange: setPreviewIndex,
-                }}
-            />
+            <PromptDetailDialog prompt={selectedPrompt} onClose={() => setSelectedPrompt(null)} onCopy={(value) => copyText(value, "提示词已复制")} />
         </main>
     );
 }

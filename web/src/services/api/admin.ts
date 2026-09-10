@@ -210,6 +210,7 @@ export type AdminPublicModelChannelSettings = {
     };
     allowCustomChannel: boolean;
     allowUserRemoteChannel: boolean;
+    apiKeyMode: "admin" | "user";
 };
 
 export type AdminModelCost = {
@@ -244,6 +245,8 @@ export type AdminPublicSettings = {
 };
 
 export type AdminStorageProvider = {
+    /** Browser-only identity for an unsaved provider draft; stripped before persistence. */
+    clientKey?: string;
     id: string;
     name: string;
     type: "s3" | "webdav";
@@ -266,6 +269,7 @@ export type AdminStorageProvider = {
 
 export type AdminPrivateSettings = {
     channels: AdminModelChannel[];
+    newapi: { baseUrl: string };
     promptSync: {
         enabled: boolean;
         cron: string;

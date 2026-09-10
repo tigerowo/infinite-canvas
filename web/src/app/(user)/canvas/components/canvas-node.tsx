@@ -1,7 +1,9 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { PanelResizeHandle } from "@/extensions/glass-ui/panel-resize-handle";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import dynamic from "next/dynamic";
 import { ChevronRight, Image as ImageIcon, Maximize2, Music2, Pause, Play, RefreshCw, Star, Video } from "lucide-react";
 
@@ -40,10 +42,10 @@ type CanvasNodeProps = {
     batchOpening?: boolean;
     batchRecovering?: boolean;
     batchMotion?: { x: number; y: number; index: number };
-    onMouseDown: (event: React.MouseEvent, nodeId: string) => void;
+    onMouseDown: (event: React.PointerEvent, nodeId: string) => void;
     onHoverStart: (nodeId: string) => void;
     onHoverEnd: (nodeId: string) => void;
-    onConnectStart: (event: React.MouseEvent, nodeId: string, handleType: "source" | "target") => void;
+    onConnectStart: (event: React.PointerEvent, nodeId: string, handleType: "source" | "target") => void;
     onResize: (nodeId: string, width: number, height: number, position?: Position) => void;
     onContentChange: (nodeId: string, content: string) => void;
     onTitleChange: (nodeId: string, title: string) => void;
@@ -52,8 +54,11 @@ type CanvasNodeProps = {
     onRetry?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
     onSelectReference?: (nodeId: string) => void;
+    onClosePanel?: () => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
 };
+
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 type NodeContentRendererProps = {
     node: CanvasNodeData;
@@ -75,7 +80,7 @@ type NodeContentRendererProps = {
     onViewImage?: (node: CanvasNodeData) => void;
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
-    onMoveStart?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+    onMoveStart?: (event: React.PointerEvent<HTMLButtonElement>) => void;
 };
 
 export const CanvasNode = React.memo(function CanvasNode({
@@ -113,12 +118,17 @@ export const CanvasNode = React.memo(function CanvasNode({
     onRetry,
     onViewImage,
     onSelectReference,
+    onClosePanel,
     onContextMenu,
 }: CanvasNodeProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [hovered, setHovered] = useState(false);
     const [isEditingContent, setIsEditingContent] = useState(false);
     const [isEditingTitle, setIsEditingTitle] = useState(false);
+    const nodeRef = useRef<HTMLDivElement>(null);
+    const panelRef = useRef<HTMLDivElement>(null);
+    const renderPanelRef = useRef(renderPanel);
+    const [panelPosition, setPanelPosition] = useState({ left: 12, top: 12, visible: false });
     const [titleDraft, setTitleDraft] = useState(data.title || "");
     const isGroup = data.type === CanvasNodeType.Group;
     const hasImageContent = isCanvasImageNodeType(data.type) && Boolean(data.metadata?.content);
@@ -127,7 +137,67 @@ export const CanvasNode = React.memo(function CanvasNode({
     const isBatchRoot = isCanvasImageNodeType(data.type) && Boolean(data.metadata?.isBatchRoot) && batchCount > 1;
     const isBatchChild = isCanvasImageNodeType(data.type) && Boolean(data.metadata?.batchRootId);
     const isActive = isConnectionTarget || isSelected || isFocusRelated;
-    const imageBorderColor = isActive ? selectionBlue : isRelated && !isBatchChild ? theme.node.muted : "transparent";
+    const imageBorderColor = isActive ? selectionBlue : hovered || (isRelated && !isBatchChild) ? theme.node.muted : theme.node.stroke;
+
+    const updatePanelPosition = useCallback(() => {
+        if (!showPanel || isGroup || !renderPanelRef.current || !nodeRef.current) {
+            setPanelPosition((current) => current.visible ? { ...current, visible: false } : current);
+            return;
+        }
+        const nodeRect = nodeRef.current.getBoundingClientRect();
+        const panelRect = panelRef.current?.getBoundingClientRect();
+        const panelWidth = panelRect?.width || (isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? 622 : 500);
+        const panelHeight = panelRect?.height || 240;
+        const margin = 12;
+        const gap = 16;
+        const maxLeft = Math.max(margin, window.innerWidth - panelWidth - margin);
+        const left = Math.min(Math.max(margin, nodeRect.left + (nodeRect.width - panelWidth) / 2), maxLeft);
+        const below = nodeRect.bottom + gap;
+        const above = nodeRect.top - panelHeight - gap;
+        const candidateTop = below + panelHeight <= window.innerHeight - margin || above < margin ? below : above;
+        const maxTop = Math.max(margin, window.innerHeight - panelHeight - margin);
+        const top = Math.min(Math.max(margin, candidateTop), maxTop);
+        setPanelPosition((current) => current.visible && current.left === left && current.top === top ? current : { left, top, visible: true });
+    }, [data.type, data.height, data.position.x, data.position.y, data.width, isGroup, scale, showPanel]);
+
+    useIsomorphicLayoutEffect(() => {
+        updatePanelPosition();
+    }, [updatePanelPosition]);
+
+    useEffect(() => {
+        renderPanelRef.current = renderPanel;
+        updatePanelPosition();
+    }, [renderPanel, updatePanelPosition]);
+
+    useEffect(() => {
+        if (!showPanel || isGroup || !renderPanelRef.current) return;
+        let frame = 0;
+        const schedule = () => {
+            cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(updatePanelPosition);
+        };
+        window.addEventListener("resize", schedule);
+        window.addEventListener("scroll", schedule, true);
+        window.visualViewport?.addEventListener("resize", schedule);
+        window.visualViewport?.addEventListener("scroll", schedule);
+        const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(schedule) : null;
+        if (nodeRef.current) observer?.observe(nodeRef.current);
+        if (panelRef.current) observer?.observe(panelRef.current);
+        const movementObserver = new MutationObserver(schedule);
+        for (let ancestor = nodeRef.current?.parentElement; ancestor && ancestor !== document.body; ancestor = ancestor.parentElement) {
+            movementObserver.observe(ancestor, { attributes: true, attributeFilter: ["style", "class"] });
+        }
+        schedule();
+        return () => {
+            cancelAnimationFrame(frame);
+            window.removeEventListener("resize", schedule);
+            window.removeEventListener("scroll", schedule, true);
+            window.visualViewport?.removeEventListener("resize", schedule);
+            window.visualViewport?.removeEventListener("scroll", schedule);
+            observer?.disconnect();
+            movementObserver.disconnect();
+        };
+    }, [isGroup, showPanel, updatePanelPosition]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const titleInputRef = useRef<HTMLInputElement>(null);
     const resizeRef = useRef({
@@ -202,7 +272,7 @@ export const CanvasNode = React.memo(function CanvasNode({
     }, [isEditingContent]);
 
     const handleResizeMove = useCallback(
-        (event: MouseEvent) => {
+        (event: PointerEvent) => {
             if (!resizeRef.current.isResizing) return;
 
             const dx = (event.clientX - resizeRef.current.startX) / scale;
@@ -244,11 +314,12 @@ export const CanvasNode = React.memo(function CanvasNode({
 
     const handleResizeUp = useCallback(() => {
         resizeRef.current.isResizing = false;
-        window.removeEventListener("mousemove", handleResizeMove);
-        window.removeEventListener("mouseup", handleResizeUp);
+        window.removeEventListener("pointermove", handleResizeMove);
+        window.removeEventListener("pointerup", handleResizeUp);
+        window.removeEventListener("pointercancel", handleResizeUp);
     }, [handleResizeMove]);
 
-    const handleResizeMouseDown = (event: React.MouseEvent, corner: ResizeCorner) => {
+    const handleResizeMouseDown = (event: React.PointerEvent, corner: ResizeCorner) => {
         event.stopPropagation();
         event.preventDefault();
         resizeRef.current = {
@@ -263,19 +334,24 @@ export const CanvasNode = React.memo(function CanvasNode({
             keepRatio: (isCanvasImageNodeType(data.type) && !data.metadata?.freeResize) || data.type === CanvasNodeType.Video,
             ratio: (data.metadata?.naturalWidth || data.width) / (data.metadata?.naturalHeight || data.height || 1),
         };
-        window.addEventListener("mousemove", handleResizeMove);
-        window.addEventListener("mouseup", handleResizeUp);
+        event.currentTarget.setPointerCapture(event.pointerId);
+        window.addEventListener("pointermove", handleResizeMove);
+        window.addEventListener("pointerup", handleResizeUp);
+        window.addEventListener("pointercancel", handleResizeUp);
     };
 
     useEffect(() => {
         return () => {
-            window.removeEventListener("mousemove", handleResizeMove);
-            window.removeEventListener("mouseup", handleResizeUp);
+            window.removeEventListener("pointermove", handleResizeMove);
+            window.removeEventListener("pointerup", handleResizeUp);
+            window.removeEventListener("pointercancel", handleResizeUp);
         };
     }, [handleResizeMove, handleResizeUp]);
 
     return (
+        <>
         <div
+            ref={nodeRef}
             data-node-id={data.id}
             className={`node-element absolute flex select-none flex-col transition-shadow duration-200 ${isGroup ? "z-[5]" : isSelected ? "z-50" : "z-10"} ${referenceSelectionState === "available" ? "cursor-pointer" : referenceSelectionState ? "cursor-not-allowed" : ""}`}
             style={{
@@ -293,7 +369,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 setHovered(false);
                 onHoverEnd(data.id);
             }}
-            onMouseDownCapture={(event) => {
+            onPointerDownCapture={(event) => {
                 if (!referenceSelectionState) return;
                 event.preventDefault();
                 event.stopPropagation();
@@ -346,6 +422,16 @@ export const CanvasNode = React.memo(function CanvasNode({
                     {groupChildCount} 个节点
                 </div>
             ) : null}
+            {!referenceSelectionState && (data.metadata?.archivePending || data.metadata?.archiveError) ? (
+                <div
+                    className="absolute bottom-[-24px] left-3 max-w-[calc(100%-24px)] truncate text-xs"
+                    style={{ color: data.metadata.archiveError ? "#f59e0b" : theme.node.muted }}
+                    title={data.metadata.archiveError || undefined}
+                    role="status"
+                >
+                    {data.metadata.archivePending ? "正在保存到云端" : "云端保存失败"}
+                </div>
+            ) : null}
 
             <div
                 className={`relative h-full w-full overflow-visible border ${isGroup ? "rounded-xl" : "rounded-3xl border-2"}`}
@@ -354,7 +440,14 @@ export const CanvasNode = React.memo(function CanvasNode({
                     borderColor: isGroup ? isGroupDropTarget || isActive ? selectionBlue : theme.node.stroke : hasImageContent ? imageBorderColor : isActive ? selectionBlue : isRelated ? theme.node.muted : theme.node.stroke,
                     boxShadow: isGroupDropTarget ? `0 0 0 2px ${selectionBlue}66` : isGroup && isSelected ? `0 0 0 1px ${selectionBlue}55` : isActive ? `0 0 0 1px ${selectionBlue}55` : isRelated && !isBatchChild ? `0 0 0 1px ${theme.node.muted}55, 0 18px 48px rgba(0,0,0,.14)` : undefined,
                 }}
-                onMouseDown={(event) => onMouseDown(event, data.id)}
+                onPointerDown={(event) => {
+                    const target = event.target instanceof Element ? event.target : null;
+                    if (target?.closest("button,input,textarea,select,label,a,audio,video,[role='button'],[role='combobox'],[role='radio'],[role='switch'],[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-handle='true']")) {
+                        event.stopPropagation();
+                        return;
+                    }
+                    onMouseDown(event, data.id);
+                }}
                 onDoubleClick={(event) => {
                     if (referenceSelectionState) {
                         event.preventDefault();
@@ -440,8 +533,39 @@ export const CanvasNode = React.memo(function CanvasNode({
                 </>
             ) : null}
 
-            {!referenceSelectionState && showPanel && !isGroup && renderPanel ? <div className={"absolute left-1/2 top-full z-[70] max-w-[calc(100vw-24px)] -translate-x-1/2 pt-4 " + (isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? "w-[622px]" : "w-[500px]")}>{renderPanel(data)}</div> : null}
         </div>
+        {!referenceSelectionState && showPanel && !isGroup && renderPanel && typeof document !== "undefined" ? createPortal(
+            <div
+                ref={panelRef}
+                data-canvas-no-zoom
+                data-resizable-panel
+                className="pointer-events-auto fixed z-[1000] max-w-[calc(100vw-24px)] resize overflow-auto overscroll-contain"
+                style={{
+                    left: panelPosition.left,
+                    top: panelPosition.top,
+                    width: `min(${isCanvasImageNodeType(data.type) || data.type === CanvasNodeType.Video || data.type === CanvasNodeType.Audio ? 622 : 500}px, calc(100vw - 24px))`,
+                    minWidth: "280px",
+                    maxWidth: "calc(100vw - 24px)",
+                    minHeight: "160px",
+                    maxHeight: "calc(100dvh - 24px)",
+                    resize: "both",
+                    visibility: panelPosition.visible ? "visible" : "hidden",
+                }}
+                onPointerDown={(event) => event.stopPropagation()}
+                onWheel={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                    if (event.key !== "Escape") return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onClosePanel?.();
+                }}
+            >
+                {renderPanel(data)}
+                <PanelResizeHandle />
+            </div>,
+            document.body,
+        ) : null}
+        </>
     );
 });
 
@@ -864,7 +988,7 @@ function BatchFrame({ batchCount, batchExpanded, batchOpening, batchRecovering, 
         </div>
     );
 }
-function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDown: (event: React.MouseEvent, corner: ResizeCorner) => void }) {
+function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDown: (event: React.PointerEvent, corner: ResizeCorner) => void }) {
     const positionClass = {
         "top-left": "-left-[14px] -top-[14px] cursor-nwse-resize",
         "top-right": "-right-[14px] -top-[14px] cursor-nesw-resize",
@@ -872,17 +996,18 @@ function ResizeHandle({ corner, onMouseDown }: { corner: ResizeCorner; onMouseDo
         "bottom-right": "-bottom-[14px] -right-[14px] cursor-nwse-resize",
     }[corner];
 
-    return <div className={`absolute z-50 size-7 ${positionClass}`} onMouseDown={(event) => onMouseDown(event, corner)} />;
+    return <div data-canvas-handle="true" className={`absolute z-50 size-11 touch-none ${positionClass}`} onPointerDown={(event) => onMouseDown(event, corner)} />;
 }
 
-function ConnectionHandleDot({ side, visible, onMouseDown }: { side: "left" | "right"; visible: boolean; onMouseDown: (event: React.MouseEvent) => void }) {
+function ConnectionHandleDot({ side, visible, onMouseDown }: { side: "left" | "right"; visible: boolean; onMouseDown: (event: React.PointerEvent) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
 
     return (
         <div
             className={`absolute top-1/2 z-30 flex size-12 -translate-y-1/2 cursor-crosshair items-center justify-center transition-opacity duration-150 ${side === "left" ? "-left-6" : "-right-6"
                 } ${visible ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0"}`}
-            onMouseDown={onMouseDown}
+            data-canvas-handle="true"
+            onPointerDown={onMouseDown}
         >
             <div className="size-3 rounded-full border-2 transition-all hover:scale-125" style={{ background: theme.node.panel, borderColor: theme.node.muted }} />
         </div>

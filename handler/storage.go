@@ -130,6 +130,15 @@ func DeleteDirectFileRecord(w http.ResponseWriter, r *http.Request, id string) {
 
 // FileContent 获取文件内容。
 func FileContent(w http.ResponseWriter, r *http.Request, id string) {
+	object, err := service.StorageObjectInfo(id)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	if err := service.CanReadStorageObject(r.Context(), object); err != nil {
+		FailWithStatus(w, http.StatusForbidden, "无权读取该文件，请确认登录状态")
+		return
+	}
 	download, err := service.DownloadStorageObject(id, r.Header.Get("Range"))
 	if err != nil {
 		FailError(w, err)
@@ -137,7 +146,7 @@ func FileContent(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	defer download.Stream.Close()
 	w.Header().Set("Content-Type", download.Object.MimeType)
-	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Header().Set("Cache-Control", "private, no-store")
 	if download.AcceptRanges {
 		w.Header().Set("Accept-Ranges", "bytes")
 	}
@@ -153,11 +162,27 @@ func FileContent(w http.ResponseWriter, r *http.Request, id string) {
 	_, _ = io.Copy(w, download.Stream)
 }
 
+// SignedFileURL issues a short-lived, object-scoped URL for private S3 media.
+func SignedFileURL(w http.ResponseWriter, r *http.Request, id string) {
+	result, err := service.SignedStorageObjectURLForUser(r.Context(), id)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	OK(w, result)
+}
+
 // FileInfo 获取文件元数据。
 func FileInfo(w http.ResponseWriter, r *http.Request, id string) {
+	w.Header().Set("Cache-Control", "private, no-store")
 	object, err := service.StorageObjectInfo(id)
 	if err != nil {
 		FailError(w, err)
+		return
+	}
+	if err := service.CanReadStorageObject(r.Context(), object); err != nil {
+		FailWithStatus(w, http.StatusForbidden, "无权读取该文件，请确认登录状态")
 		return
 	}
 	OK(w, object)

@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { filterModelsByCapability, normalizeLocalChannels, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { selectableModelOptions, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -22,15 +22,9 @@ type ModelPickerProps = {
 export function ModelPicker({ config, value, channelId, capability, onChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
     const pickerId = useId();
     const [open, setOpen] = useState(false);
-    const channelOptions = useMemo(() => {
-        const channels =
-            config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models }));
-        const models = channels.flatMap((channel) => (channel.models ?? []).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, model })));
-        if (!capability) return models;
-        return models.filter((item) => filterModelsByCapability([item.model], capability, item.protocol || "").length > 0);
-    }, [capability, config]);
+    const outsideFocus = useRef(false);
+    const outsideTarget = useRef<HTMLElement | null>(null);
+    const channelOptions = useMemo(() => selectableModelOptions(config, capability), [capability, config]);
     const currentOption = useMemo(() => {
         if (!value) return undefined;
         return channelOptions.find((item) => item.model === value && item.channelId === channelId) || channelOptions.find((item) => item.model === value);
@@ -38,6 +32,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     const options = channelOptions;
     const current = value || "";
     const currentValue = current && currentOption ? currentOption.key : "";
+    const displayLabel = current || (options.length ? placeholder : "暂无模型");
 
     useEffect(() => {
         if (value && currentOption?.channelId && channelId !== currentOption.channelId) onChange(value, currentOption.channelId);
@@ -50,6 +45,26 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
         window.addEventListener("model-picker-open", closeOtherPicker);
         return () => window.removeEventListener("model-picker-open", closeOtherPicker);
     }, [pickerId]);
+
+    useEffect(() => {
+        if (!open) return;
+        outsideFocus.current = false;
+        outsideTarget.current = null;
+        const dismiss = (event: PointerEvent) => {
+            if (event.composedPath().some((node) => node instanceof HTMLElement && node.dataset.modelPicker === pickerId)) return;
+            outsideFocus.current = true;
+            setOpen(false);
+            // Select temporarily disables pointer events outside its modal layer.
+            // Locate the intended editor geometrically when the event targets body.
+            outsideTarget.current = (event.target instanceof HTMLElement ? event.target.closest<HTMLElement>("input,textarea,[contenteditable='true']") : null)
+                || Array.from(document.querySelectorAll<HTMLElement>("input,textarea,[contenteditable='true']")).find((element) => {
+                    const box = element.getBoundingClientRect();
+                    return box.width > 0 && box.height > 0 && event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom;
+                }) || null;
+        };
+        document.addEventListener("pointerdown", dismiss, true);
+        return () => document.removeEventListener("pointerdown", dismiss, true);
+    }, [open, pickerId]);
 
     return (
         <Select
@@ -69,6 +84,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             }}
         >
             <SelectTrigger
+                data-model-picker={pickerId}
                 className={cn(
                     "canvas-composer-model-picker h-8 w-fit max-w-full gap-2 rounded-full border border-input bg-transparent px-3 text-sm font-normal shadow-sm transition-colors",
                     fullWidth ? "w-full min-w-0 justify-start" : "min-w-[9rem] justify-start",
@@ -77,20 +93,30 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={current || placeholder}
+                title={displayLabel}
+                aria-label={`${({ image: "图片", video: "视频", text: "文本", audio: "音频" } as const)[capability || "text"]}模型`}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{current || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{displayLabel}</span>
             </SelectTrigger>
             <SelectContent
+                data-model-picker={pickerId}
+                onCloseAutoFocus={(event) => {
+                    if (!outsideFocus.current) return;
+                    event.preventDefault();
+                    const target = outsideTarget.current;
+                    if (target) requestAnimationFrame(() => target.isConnected && target.focus());
+                }}
                 data-canvas-no-zoom
-                className="z-[1200] w-80 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
+                className="canvas-model-picker-content z-[1200] w-[min(15rem,calc(100vw-24px))] max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
                 side="bottom"
                 sideOffset={6}
                 onPointerDown={(event) => event.stopPropagation()}
                 onMouseDown={(event) => event.stopPropagation()}
+                onEscapeKeyDown={(event) => event.stopPropagation()}
+                onKeyDown={(event) => { if (event.key === "Escape") event.stopPropagation(); }}
             >
                 {options.length ? (
                     options.map((option) => (
@@ -100,7 +126,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
                     ))
                 ) : (
                     <SelectItem value="__empty__" disabled>
-                        {config.channelMode === "remote" ? "暂无可用模型" : "请先到配置里拉取模型列表"}
+                        暂无模型
                     </SelectItem>
                 )}
             </SelectContent>
@@ -113,7 +139,7 @@ function ModelLabel({ model, channelName }: { model: string; channelName?: strin
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
             <span className="truncate">{model}</span>
-            {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
+            {channelName ? <span className="ml-auto max-w-20 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
         </span>
     );
 }

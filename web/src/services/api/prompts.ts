@@ -1,4 +1,5 @@
 import { apiGet, compactApiParams } from "@/services/api/request";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type Prompt = {
     id: string;
@@ -32,6 +33,7 @@ export async function fetchPrompts({ keyword = "", tag = [], category = ALL_PROM
             ...(page ? { page } : {}),
             ...(pageSize ? { pageSize } : {}),
         }),
+        useUserStore.getState().token,
     );
 }
 

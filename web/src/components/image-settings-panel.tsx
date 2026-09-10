@@ -5,6 +5,8 @@ import { ConfigProvider, Switch } from "antd";
 
 import { type CanvasTheme } from "@/lib/canvas-theme";
 import type { AiConfig } from "@/stores/use-config-store";
+import styles from "@/extensions/glass-ui/glass-ui.module.css";
+import { isNewAPIConfig } from "@/extensions/newapi/config";
 
 const qualityOptions = [
     { value: "auto", label: "自动" },
@@ -52,6 +54,7 @@ type ImageSettingsPanelProps = {
 
 export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = true, showSize = true, showCount = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", maxCount = 15, quickCount = 10 }: ImageSettingsPanelProps) {
     const [snapDimensionToStep, setSnapDimensionToStep] = useState(true);
+    const chatImages = isNewAPIConfig(config) && config.apiMode === "chat";
     const quality = config.quality || "auto";
     const count = Math.max(1, Math.min(maxCount, Math.floor(Math.abs(Number(config.count)) || 1)));
     const activeSize = config.size || "auto";
@@ -80,7 +83,7 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                 }}
             >
                 {showTitle ? <div className="text-lg font-semibold">图像设置</div> : null}
-                <div className="space-y-2.5">
+                {!chatImages ? <div className="space-y-2.5">
                     <SettingTitle color={theme.node.muted}>质量</SettingTitle>
                     <div className="grid grid-cols-4 gap-2.5">
                         {qualityOptions.map((item) => (
@@ -89,8 +92,8 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                             </OptionPill>
                         ))}
                     </div>
-                </div>
-                {showSize ? (
+                </div> : null}
+                {showSize && !chatImages ? (
                     <>
                         <div className="space-y-2.5">
                             <div className="flex items-center justify-between gap-3">
@@ -105,9 +108,9 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                 </div>
                             </div>
                             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2.5">
-                                <DimensionInput prefix="W" value={dimensions.width} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
+                                <DimensionInput prefix="W" value={dimensions.width} selected={!selectedAspect} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("width", value)} />
                                 <span className="text-lg opacity-45">↔</span>
-                                <DimensionInput prefix="H" value={dimensions.height} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
+                                <DimensionInput prefix="H" value={dimensions.height} selected={!selectedAspect} disabled={activeSize === "auto"} theme={theme} alignToStep={snapDimensionToStep} onChange={(value) => updateDimension("height", value)} />
                             </div>
                         </div>
                         <div className="space-y-2.5">
@@ -117,8 +120,9 @@ export function ImageSettingsPanel({ config, onConfigChange, theme, showTitle = 
                                     <button
                                         key={item.value}
                                         type="button"
-                                        className="flex h-[72px] cursor-pointer flex-col items-center justify-center gap-1.5 rounded-xl border bg-transparent text-sm transition hover:opacity-80"
-                                        style={{ borderColor: selectedAspect?.value === item.value ? theme.node.text : theme.node.stroke, background: "transparent", color: theme.node.text }}
+                                        className={`${styles.option} flex h-[72px] cursor-pointer flex-col items-center justify-center gap-1.5 text-sm`}
+                                        aria-pressed={selectedAspect?.value === item.value}
+                                        style={{ color: theme.node.text }}
                                         onMouseDown={(event) => event.stopPropagation()}
                                         onClick={() => selectAspect(item.value)}
                                     >
@@ -171,19 +175,13 @@ export function imageSizeLabel(size: string) {
 
 function OptionPill({ selected, theme, onClick, children }: { selected: boolean; theme: CanvasTheme; onClick: () => void; children: ReactNode }) {
     return (
-        <button
-            type="button"
-            className="h-9 cursor-pointer rounded-full border px-2 text-sm transition hover:opacity-80"
-            style={{ background: "transparent", borderColor: selected ? theme.node.text : theme.node.stroke, color: theme.node.text }}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={onClick}
-        >
+        <button type="button" className={`${styles.option} cursor-pointer rounded-full border px-2 text-sm`} aria-pressed={selected} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()} onClick={onClick}>
             {children}
         </button>
     );
 }
 
-function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange }: { prefix: string; value: number; disabled: boolean; theme: CanvasTheme; alignToStep: boolean; onChange: (value: number | null) => void }) {
+function DimensionInput({ prefix, value, selected, disabled, theme, alignToStep, onChange }: { prefix: string; value: number; selected: boolean; disabled: boolean; theme: CanvasTheme; alignToStep: boolean; onChange: (value: number | null) => void }) {
     const commit = (input: HTMLInputElement) => {
         const next = alignDimension(Math.max(1, Math.floor(Number(input.value) || value || 1024)), alignToStep);
         input.value = String(next);
@@ -191,13 +189,14 @@ function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange 
     };
 
     return (
-        <label className="flex h-9 overflow-hidden rounded-xl text-sm" style={{ background: theme.node.fill, color: theme.node.text, opacity: disabled ? 0.55 : 1 }}>
+        <label className={`${styles.field} flex h-11 overflow-hidden rounded-xl text-sm`} data-selected={selected} style={{ color: theme.node.text, opacity: disabled ? 0.55 : 1 }}>
             <span className="grid w-9 place-items-center" style={{ color: theme.node.muted }}>
                 {prefix}
             </span>
             <input
                 type="number"
                 min={1}
+                aria-label={prefix === "W" ? "自定义宽度" : "自定义高度"}
                 disabled={disabled}
                 className="min-w-0 flex-1 bg-transparent px-2 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                 defaultValue={value || ""}
@@ -214,7 +213,7 @@ function DimensionInput({ prefix, value, disabled, theme, alignToStep, onChange 
 
 function CountInput({ value, max, theme, onChange }: { value: number; max: number; theme: CanvasTheme; onChange: (value: number | null) => void }) {
     return (
-        <label className="col-span-2 flex h-9 overflow-hidden rounded-full border text-sm" style={{ borderColor: theme.node.stroke, color: theme.node.text }}>
+        <label className={`${styles.field} col-span-2 flex h-11 overflow-hidden rounded-full text-sm`} style={{ color: theme.node.text }}>
             <input
                 type="number"
                 min={1}

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "../extensions/glass-ui/neutral-theme.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -80,6 +81,15 @@
     --sidebar-accent-foreground: oklch(0.205 0 0);
     --sidebar-border: oklch(0.922 0 0);
     --sidebar-ring: oklch(0.708 0 0);
+    --glass-surface: rgba(255, 255, 255, 0.58);
+    --glass-surface-strong: rgba(255, 255, 255, 0.78);
+    --glass-border: rgba(115, 115, 115, 0.22);
+    --glass-highlight: rgba(255, 255, 255, 0.72);
+    --glass-shadow: 0 20px 60px rgba(25, 25, 25, 0.1);
+    --glass-blur: 18px;
+    --glass-control: rgba(255, 255, 255, 0.48);
+    --glass-active: rgba(10, 132, 255, 0.12);
+    --glass-accent: #0878ce;
 }
 
 .dark {
@@ -114,6 +124,15 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.556 0 0);
+    --glass-surface: rgba(28, 28, 28, 0.62);
+    --glass-surface-strong: rgba(28, 28, 28, 0.8);
+    --glass-border: rgba(212, 212, 212, 0.2);
+    --glass-highlight: rgba(255, 255, 255, 0.1);
+    --glass-shadow: 0 20px 60px rgba(0, 0, 0, 0.24);
+    --glass-blur: 18px;
+    --glass-control: rgba(255, 255, 255, 0.08);
+    --glass-active: rgba(100, 181, 246, 0.18);
+    --glass-accent: #7cc7ff;
 }
 
 @layer base {
@@ -140,32 +159,28 @@
 }
 
 @layer utilities {
-    .ai-title-aurora {
-        background: linear-gradient(90deg, #111827 0%, #111827 36%, #6b7280 54%, #111827 72%, #111827 100%);
-        background-size: 220% 100%;
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-        animation: ai-title-aurora 7s ease-in-out infinite;
+    .glass-surface {
+        background:
+            linear-gradient(135deg, var(--glass-highlight), transparent 42%),
+            var(--glass-surface);
+        border-color: var(--glass-border);
+        box-shadow:
+            var(--glass-shadow),
+            inset 0 1px 0 var(--glass-highlight);
+        -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+        backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
     }
 
-    .dark .ai-title-aurora {
-        background: linear-gradient(90deg, #fafaf9 0%, #fafaf9 36%, #a8a29e 54%, #fafaf9 72%, #fafaf9 100%);
-        background-size: 220% 100%;
-        -webkit-background-clip: text;
-        background-clip: text;
-    }
-
-    @keyframes ai-title-aurora {
-        0%,
-        100% {
-            background-position: 0% 50%;
-            filter: drop-shadow(0 0 0 rgba(0, 0, 0, 0));
-        }
-        50% {
-            background-position: 100% 50%;
-            filter: drop-shadow(0 12px 28px rgba(28, 25, 23, 0.08));
-        }
+    .glass-surface-strong {
+        background:
+            linear-gradient(135deg, var(--glass-highlight), transparent 48%),
+            var(--glass-surface-strong);
+        border-color: var(--glass-border);
+        box-shadow:
+            var(--glass-shadow),
+            inset 0 1px 0 var(--glass-highlight);
+        -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.04);
+        backdrop-filter: blur(var(--glass-blur)) saturate(1.04);
     }
 
     .hide-scrollbar {
@@ -179,22 +194,28 @@
 
     .prompt-filter-tag.ant-tag-checkable {
         margin: 0;
-        border: 1px solid transparent;
-        border-radius: 6px;
-        padding: 5px 10px;
+        display: inline-flex;
+        min-height: 40px;
+        align-items: center;
+        border: 1px solid rgba(120, 113, 108, 0.24);
+        border-radius: 999px;
+        padding: 0 14px;
         color: #57534e;
         font-size: 14px;
         line-height: 1;
         transition:
-            background 0.15s ease,
-            border-color 0.15s ease,
-            box-shadow 0.15s ease,
-            color 0.15s ease;
+            transform 0.18s ease,
+            background 0.18s ease,
+            border-color 0.18s ease,
+            box-shadow 0.18s ease,
+            color 0.18s ease;
     }
 
     .prompt-filter-tag.ant-tag-checkable:hover {
         background: rgba(28, 25, 23, 0.06);
+        border-color: rgba(120, 113, 108, 0.48);
         color: #1c1917;
+        transform: translateY(-1px);
     }
 
     .prompt-filter-tag.ant-tag-checkable.is-active,
@@ -211,7 +232,14 @@
 
     .dark .prompt-filter-tag.ant-tag-checkable:hover {
         background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.35);
         color: #ffffff;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .prompt-filter-tag.ant-tag-checkable {
+            transition: none;
+        }
     }
 
     .dark .prompt-filter-tag.ant-tag-checkable.is-active,
@@ -372,7 +400,7 @@
 
         .canvas-composer-tools .canvas-composer-model-picker {
             width: auto;
-            min-width: 9rem;
+            min-width: 8rem;
             justify-content: flex-start;
             gap: 0.5rem;
             padding-inline: 0.75rem;
@@ -397,30 +425,6 @@
     .dark .canvas-control-select.ant-select-focused .ant-select-selector,
     .dark .canvas-control-number.ant-input-number-focused {
         border-color: #78716c !important;
-    }
-
-    .canvas-image-settings-popover .ant-popover-inner {
-        border-radius: 18px;
-        box-shadow: 0 18px 54px rgba(28, 25, 23, 0.16);
-        padding: 18px;
-    }
-
-    .canvas-image-settings-popover .ant-popover-inner-content {
-        max-height: calc(100vh - 96px);
-        overflow-y: auto;
-    }
-
-    .canvas-image-settings-popover .ant-segmented {
-        border-radius: 999px;
-        padding: 3px;
-    }
-
-    .canvas-image-settings-popover .ant-segmented-item {
-        border-radius: 999px;
-    }
-
-    .dark .canvas-image-settings-popover .ant-popover-inner {
-        box-shadow: 0 18px 54px rgba(0, 0, 0, 0.45);
     }
 
     .canvas-node-info-modal .ant-modal-header {
@@ -462,6 +466,17 @@
             opacity: 0;
             transform: translate(var(--batch-from-x), var(--batch-from-y)) rotate(var(--batch-from-rotate)) scale(0.72);
         }
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
     }
 }
 

@@ -20,9 +20,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsSigner "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 	"github.com/tigerowo/infinite-canvas/extensions/s3compat"
+	"github.com/tigerowo/infinite-canvas/extensions/storageaccess"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 	"gorm.io/gorm"
@@ -45,6 +48,13 @@ type DirectStorageObjectInput struct {
 }
 
 // DownloadedStorageObject 下载存储对象结果。
+type SignedStorageObjectURL struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expiresAt"`
+	MimeType  string `json:"mimeType"`
+	Bytes     int64  `json:"bytes"`
+}
+
 type DownloadedStorageObject struct {
 	Object        model.StorageObject
 	Stream        io.ReadCloser
@@ -82,7 +92,7 @@ var (
 // HasAdminStorageProvider 检查管理员是否配置了有效的对象存储。
 func HasAdminStorageProvider(storage model.PrivateStorageSetting) bool {
 	for _, provider := range storage.Providers {
-		if provider.Enabled && storageProviderConfigured(provider) {
+		if provider.Type == model.StorageProviderTypeS3 && provider.Enabled && storageProviderConfigured(provider) {
 			return true
 		}
 	}
@@ -114,7 +124,7 @@ func HasActiveCloudStorage(ctx context.Context) (bool, error) {
 			config, found, err := repository.GetUserConfig(user.ID)
 			if err == nil && found {
 				for _, provider := range userStorageProvidersForOwner(config.StorageProvider, user.ID) {
-					if provider.Enabled && storageProviderConfigured(provider) {
+					if provider.Type == model.StorageProviderTypeS3 && provider.Enabled && storageProviderConfigured(provider) {
 						return true, nil
 					}
 				}
@@ -146,6 +156,60 @@ func PublicStorageConfig() (model.PublicStorageSetting, error) {
 // StorageObjectInfo 获取存储对象元数据。
 func StorageObjectInfo(id string) (model.StorageObject, error) {
 	return repository.GetStorageObject(id)
+}
+
+// CanReadStorageObject enforces access to private S3 objects before either
+// signing or proxying them. Public objects and legacy WebDAV objects retain
+// their existing read behavior.
+func CanReadStorageObject(ctx context.Context, object model.StorageObject) error {
+	provider, ok := StorageProviderForObject(object)
+	if object.DeletedAt != "" {
+		return errors.New("对象已删除")
+	}
+	if (ok && provider.Type == model.StorageProviderTypeWebDAV) || (object.PublicURL != "" && (!ok || provider.PublicBaseURL != "")) {
+		return nil
+	}
+	return requireStorageObjectOwner(ctx, object)
+}
+
+func requireStorageObjectOwner(ctx context.Context, object model.StorageObject) error {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" || user.Role == model.UserRoleGuest {
+		return errors.New("请先登录")
+	}
+	if object.DeletedAt != "" || (object.CreatedBy != user.ID && user.Role != model.UserRoleAdmin) {
+		return errors.New("无权读取该对象")
+	}
+	return nil
+}
+
+func SignedStorageObjectURLForUser(ctx context.Context, id string) (SignedStorageObjectURL, error) {
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" || user.Role == model.UserRoleGuest {
+		return SignedStorageObjectURL{}, errors.New("请先登录")
+	}
+	object, err := repository.GetStorageObject(id)
+	if err != nil {
+		return SignedStorageObjectURL{}, err
+	}
+	if err := requireStorageObjectOwner(ctx, object); err != nil {
+		return SignedStorageObjectURL{}, err
+	}
+	provider, ok := StorageProviderForObject(object)
+	if !ok || provider.Type != model.StorageProviderTypeS3 || provider.PublicBaseURL != "" || !storageProviderConfigured(provider) {
+		return SignedStorageObjectURL{}, errors.New("该对象没有可用的私有 S3 存储配置")
+	}
+	const lifetime = 5 * time.Minute
+	if cdnURL, expires, used, err := storageaccess.CDNURL(provider, object.ObjectKey, time.Now()); err != nil {
+		return SignedStorageObjectURL{}, errors.New("读取私有 CDN 配置失败")
+	} else if used {
+		return SignedStorageObjectURL{URL: cdnURL, ExpiresAt: expires.Format(time.RFC3339), MimeType: object.MimeType, Bytes: object.Bytes}, nil
+	}
+	urlValue, err := presignS3GetURL(provider, object.ObjectKey, lifetime)
+	if err != nil {
+		return SignedStorageObjectURL{}, err
+	}
+	return SignedStorageObjectURL{URL: urlValue, ExpiresAt: time.Now().UTC().Add(lifetime).Format(time.RFC3339), MimeType: object.MimeType, Bytes: object.Bytes}, nil
 }
 
 // SaveCurrentUserStorageProvider 保存用户配置的存储提供商。
@@ -215,6 +279,9 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 		provider, err = selectStorageProvider(storage)
 		if err != nil {
 			return UploadedStorageObject{}, errors.New("服务端对象存储未启用")
+		}
+		if provider.Type != model.StorageProviderTypeS3 || !storageProviderConfigured(provider) {
+			return UploadedStorageObject{}, errors.New("服务端必须配置完整的 OSS/S3 存储")
 		}
 	}
 	objectID := uuid.NewString()
@@ -597,20 +664,24 @@ func parseStorageByteRange(value string, size int64) (storageByteRange, bool) {
 	return storageByteRange{offset: start, length: end - start + 1}, true
 }
 
-// selectStorageProvider 按权重选择一个启用的存储提供商。
+// Explicit defaults never fail over to another provider. Legacy installs use list order.
 func selectStorageProvider(storage model.PrivateStorageSetting) (model.StorageProvider, error) {
-	var candidates []model.StorageProvider
+	defaultID, err := storageaccess.DefaultUploadID()
+	if err != nil {
+		return model.StorageProvider{}, err
+	}
 	for _, provider := range storage.Providers {
-		if provider.Enabled && storageProviderConfigured(provider) {
-			for i := 0; i < provider.Weight; i++ {
-				candidates = append(candidates, provider)
-			}
+		if defaultID != "" && provider.ID != defaultID {
+			continue
+		}
+		if provider.Type == model.StorageProviderTypeS3 && provider.Enabled && !provider.CapacityExceeded && storageProviderConfigured(provider) {
+			return provider, nil
 		}
 	}
-	if len(candidates) == 0 {
-		return model.StorageProvider{}, errors.New("没有可用对象存储配置")
+	if defaultID != "" {
+		return model.StorageProvider{}, errors.New("默认上传位置不可用，请检查是否启用、容量及连接配置")
 	}
-	return candidates[int(time.Now().UnixNano())%len(candidates)], nil
+	return model.StorageProvider{}, errors.New("没有可用对象存储配置")
 }
 
 func storageProviderConfigured(provider model.StorageProvider) bool {
@@ -781,6 +852,40 @@ func newS3RequestWithQuery(method string, provider model.StorageProvider, object
 	}
 	signS3Request(request, provider)
 	return request, nil
+}
+
+func presignS3GetURL(provider model.StorageProvider, objectKey string, lifetime time.Duration) (string, error) {
+	if provider.Type != model.StorageProviderTypeS3 {
+		return "", errors.New("仅支持 S3 存储签名")
+	}
+	if lifetime <= 0 || lifetime > 5*time.Minute {
+		return "", errors.New("签名 URL 有效期无效")
+	}
+	if provider.AccessKeyID == "" || provider.SecretAccessKey == "" || provider.Bucket == "" || provider.Endpoint == "" || objectKey == "" {
+		return "", errors.New("S3 签名配置不完整")
+	}
+	endpoint, err := s3compat.ObjectURL(provider.Endpoint, provider.Bucket, objectKey)
+	if err != nil {
+		return "", err
+	}
+	region := provider.Region
+	if region == "" {
+		region = "auto"
+	}
+	request, err := http.NewRequest(http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return "", err
+	}
+	query := request.URL.Query()
+	query.Set("X-Amz-Expires", strconv.FormatInt(int64(lifetime/time.Second), 10))
+	request.URL.RawQuery = query.Encode()
+	signer := awsSigner.NewSigner(func(options *awsSigner.SignerOptions) { options.DisableURIPathEscaping = true })
+	credentialsValue := aws.Credentials{AccessKeyID: provider.AccessKeyID, SecretAccessKey: provider.SecretAccessKey}
+	signedURL, _, err := signer.PresignHTTP(context.Background(), credentialsValue, request, "UNSIGNED-PAYLOAD", "s3", region, time.Now().UTC())
+	if err != nil {
+		return "", err
+	}
+	return signedURL, nil
 }
 
 func signS3Request(request *http.Request, provider model.StorageProvider) {

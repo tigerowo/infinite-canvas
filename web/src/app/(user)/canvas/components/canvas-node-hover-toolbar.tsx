@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { App, Modal, Segmented, Tooltip } from "antd";
 import { Download, Ellipsis, FolderPlus, Image as ImageIcon, Info, MessageSquare, Minus, Music2, Plus, RefreshCw, Scissors, Settings2, Trash2, Upload, Video } from "lucide-react";
 
@@ -94,6 +94,28 @@ export function CanvasNodeHoverToolbar({
     const isPanorama = isPanoramaNodeType(node?.type);
     const quickToolsStorageKey = isPanorama ? PANORAMA_QUICK_TOOLS_STORAGE_KEY : IMAGE_QUICK_TOOLS_STORAGE_KEY;
     const { ids: quickImageToolIds, showLabels: showImageToolLabels } = quickToolsConfigs[quickToolsStorageKey];
+    const toolbarRef = useRef<HTMLDivElement>(null);
+    const theme = canvasThemes[useThemeStore((state) => state.theme)];
+
+    useLayoutEffect(() => {
+        const toolbar = toolbarRef.current;
+        const parent = toolbar?.parentElement;
+        if (!node || !toolbar || !parent) return;
+        const position = () => {
+            const header = parent.querySelector<HTMLElement>("[data-canvas-top-bar]");
+            const margin = 12;
+            const minTop = (header?.offsetHeight || 0) + margin;
+            const x = viewport.x + (node.position.x + node.width / 2) * viewport.k - toolbar.offsetWidth / 2;
+            const y = viewport.y + node.position.y * viewport.k - 14 - toolbar.offsetHeight;
+            toolbar.style.left = `${Math.max(margin, Math.min(x, parent.clientWidth - toolbar.offsetWidth - margin))}px`;
+            toolbar.style.top = `${Math.max(minTop, Math.min(y, parent.clientHeight - toolbar.offsetHeight - margin))}px`;
+        };
+        position();
+        const observer = new ResizeObserver(position);
+        observer.observe(toolbar);
+        observer.observe(parent);
+        return () => observer.disconnect();
+    }, [node, viewport, quickImageToolIds, showImageToolLabels]);
 
     useEffect(() => {
         const readQuickToolsConfig = (storageKey: string, defaultIds: ImageQuickToolId[]) => {
@@ -124,8 +146,6 @@ export function CanvasNodeHoverToolbar({
 
     if (!node) return null;
 
-    const left = viewport.x + (node.position.x + node.width / 2) * viewport.k;
-    const top = viewport.y + node.position.y * viewport.k - 14;
     const isImage = isCanvasImageNodeType(node.type);
     const isVideo = node.type === CanvasNodeType.Video;
     const isAudio = node.type === CanvasNodeType.Audio;
@@ -223,8 +243,10 @@ export function CanvasNodeHoverToolbar({
     return (
         <>
             <div
-                className="absolute z-[70] flex flex-wrap -translate-x-1/2 -translate-y-full items-center justify-center gap-x-2 overflow-visible rounded-xl border border-white/10 bg-[#242424] px-2 text-[13px] text-[#f3f3f3] shadow-[0_8px_28px_rgba(0,0,0,.28)]"
-                style={{ left, top, maxWidth: "min(800px, calc(100vw - 32px))" }}
+                ref={toolbarRef}
+                data-canvas-hover-tools
+                className="absolute z-[70] flex w-max flex-wrap items-center justify-center gap-x-2 overflow-y-auto rounded-xl border px-2 text-[13px] shadow-[0_8px_28px_rgba(0,0,0,.28)]"
+                style={{ maxWidth: "min(800px, calc(100% - 24px))", maxHeight: "calc(100% - 88px)", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
                 onMouseEnter={() => onKeep(node.id)}
                 onMouseLeave={() => {
                     if (!imageToolSettingsOpen) onLeave();

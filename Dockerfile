@@ -3,7 +3,7 @@ FROM oven/bun:1.3.14 AS web-build
 
 WORKDIR /app/web
 COPY web/package.json web/bun.lock ./
-RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile --cache-dir=/root/.bun/install/cache
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --frozen-lockfile --network-concurrency=1 --cache-dir=/root/.bun/install/cache
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY web ./
@@ -46,4 +46,5 @@ RUN mkdir -p /app/data/prompts
 
 EXPOSE 3000
 # 先启动内部 Go API，再由 Next.js 提供页面并代理 /api/*。
+ENTRYPOINT []
 CMD ["/app/docker-entrypoint.sh"]

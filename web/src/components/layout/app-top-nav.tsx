@@ -21,7 +21,7 @@ export function AppTopNav() {
     return (
         <>
             {!hideHeader ? (
-                <header className="sticky top-0 z-20 h-16 shrink-0 border-b border-stone-200 bg-background/90 backdrop-blur-xl dark:border-stone-800">
+                <header className="glass-surface sticky top-0 z-20 h-16 shrink-0 border-b">
                     <div className="mx-auto flex h-full max-w-7xl items-stretch justify-between gap-5 px-6">
                         <div className="flex min-w-0 items-center">
                             <Link href="/" className="flex h-full shrink-0 items-center gap-2 text-sm font-semibold leading-none tracking-tight text-stone-950 transition hover:text-stone-600 dark:text-stone-100 dark:hover:text-stone-300">
@@ -29,9 +29,9 @@ export function AppTopNav() {
                                 <span className="text-base font-medium">微鑫画布</span>
                             </Link>
 
-                            <button
-                                type="button"
-                                className="ml-3 inline-flex size-8 shrink-0 items-center justify-center text-stone-600 transition hover:text-stone-950 md:hidden dark:text-stone-300 dark:hover:text-white"
+                                <button
+                                    type="button"
+                                    className="ml-3 inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-stone-600 transition hover:bg-black/5 hover:text-stone-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-stone-500/50 md:hidden dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white"
                                 onClick={() => setMobileNavOpen(true)}
                                 aria-label="打开导航菜单"
                                 title="导航菜单"
@@ -47,12 +47,13 @@ export function AppTopNav() {
                                         <Link
                                             key={tool.slug}
                                             href={`/${tool.slug}`}
-                                            className={cn(
-                                                "relative flex h-16 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px",
+                                                className={cn(
+                                                "relative flex h-16 shrink-0 items-center gap-2 text-sm leading-6 transition after:absolute after:inset-x-0 after:bottom-0 after:h-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-stone-500/50",
                                                 active
                                                     ? "font-medium text-stone-950 after:bg-stone-950 dark:text-stone-100 dark:after:bg-stone-100"
                                                     : "text-stone-500 after:bg-transparent hover:text-stone-950 dark:text-stone-400 dark:hover:text-stone-100",
                                             )}
+                                            aria-current={active ? "page" : undefined}
                                         >
                                             <Icon className="size-4" />
                                             <span className="truncate">{tool.label}</span>

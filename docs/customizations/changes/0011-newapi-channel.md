@@ -80,7 +80,7 @@ LEC 的字段转换归 paipu 插件。软件不根据 LEC 模型名构造请求�
 
 `type` 为 `image/video/audio`，`role` 为 `reference/first_frame/last_frame`；首尾帧仅为图片。顺序保留。具体插件必须对角色和数量做校验。没有对应转换的插件必须报错，不应忽略扩展字段。
 
-启用方法：管理后台“模型与素材传输”内填写软件渠道 ID、公开模型 ID，启用 Canvas v1 并保存。渠道 ID 取自渠道配置 JSON 的 `id`，不是 NewAPI 站内渠道编号。策略键为 `<软件渠道ID>::<小写模型ID>`；更换软件渠道 ID 或模型别名后必须重新核对。相同软件渠道 ID 若改指向另一网关，应先移除扩展授权，确认新插件支持后再启用。普通用户不能修改全局策略。
+启用方法：管理员先在私有配置的渠道中导入并保存模型，再在“高级：NewAPI 视频请求格式”表格中为对应模型选择“Canvas v1”。页面会使用已保存的微鑫画布渠道 ID 和模型 ID 生成策略键 `<软件渠道ID>::<小写模型ID>`，不再要求手填 ID。更换软件渠道 ID、模型别名、网关或插件后必须重新核对。普通用户不能修改全局策略。
 
 策略保存于已有 `ext_model_policy.value.newapiVideoProfiles`，默认无扩展；无新表、无上游表字段。回退不删策略或素材。已有后台接口和缓存刷新机制沿用 EXT-0009。
 
@@ -88,13 +88,13 @@ LEC 的字段转换归 paipu 插件。软件不根据 LEC 模型名构造请求�
 
 ## Paipu 插件交付及迁移
 
-- 正式源码：[paipu.js](../../../extensions/newapi/plugin/paipu.js)，版本 `1.1.0`；回归：[paipu.test.mjs](../../../extensions/newapi/plugin/paipu.test.mjs)。工作区根目录原 `paipu.js`、`paipu.test.mjs` 同步为相同内容，仓库副本用于版本管理。
+- 正式源码：[paipu.js](../../../extensions/newapi/plugin/paipu.js)；回归：[paipu.test.mjs](../../../extensions/newapi/plugin/paipu.test.mjs)。本记录原交付版本为 `1.1.0`，后续已在 [EXT-0028](0028-model-picker-chat-layout.md) 升至 `1.1.1` 并增加 MD 转换；上传时以仓库正式路径为准，工作区根目录的历史副本不保证同步。
 - NewAPI 核心代码未修改。参考源码固定于 `bee45b58a3c0b77e8dc81e6b5aeb4474aa9058d1`；其 `docs/plugin-api` 仍标为未发布。使用者需确认实际安装具备该 JS 插件 API，不能只凭 `latest` 标签判断。
 - 先在 NewAPI 导入/更新 paipu 插件并配置上游，然后将软件对应渠道切为 NewAPI。多参考图还需为该渠道和模型开启 Canvas v1。不要在仍使用旧透传插件时直接切换。
-- 此版只对**映射后的上游 ID** `lec-seed-2-0-900` 实现 LEC 转换。公开模型别名可以不同，但 NewAPI 的模型映射必须指向该真实上游 ID；不能映射成任意字符串却期望命中同一适配器。
+- 原 `1.1.0` 只对**映射后的上游 ID** `lec-seed-2-0-900` 实现 LEC 转换。公开模型别名可以不同，但 NewAPI 的模型映射必须指向该真实上游 ID；不能映射成任意字符串却期望命中同一适配器。当前 MD 支持范围见 EXT-0028。
 - LEC 转换输出 `model,prompt,aspect_ratio,images?`；单文件通过 NewAPI 宿主 `FilePlaceholder` 转完整 Data URL，多图扩展转换为 `images`。最多九张，比例 16:9/9:16，720p，按历史规格只允许 15 秒；不支持首尾帧角色、参考视频、参考音频。
-- 上述 LEC 限制来自先前接入记录；本次供应商文档未取得可核验正文，尚需真实部署前核对当前规格，不能视为在线规格验证。插件拒绝其他时长，避免静默舍弃时长并错误预估用量。
-- 插件模型表中的其他 34 个 ID 保留原处理；模型表不是“全部完成 Canvas v1 适配”的声明。其他上游收到 Canvas v1 会明确报不支持，新增适配只需修改插件。`lec-md-seedance-2-0-900-720p` 不在本次已实现的转换范围。
+- 本记录实施时上述 LEC 限制来自先前接入记录；EXT-0028 后续通过 Chrome 核对了当前 Seed、MD 和 MiniMax 官方文档。线上生成仍需独立验收。
+- 原 `1.1.0` 的其他 34 个 ID 保留原处理；当前 `1.1.1` 增加 MD 后其余 33 个 ID 仍保留原处理。模型表不是“全部完成 Canvas v1 适配”的声明；未实现转换的上游收到 Canvas v1 会明确报不支持。
 - 插件查询用供应商任务 ID，向客户端渲染网关 ID；签名视频链接的无凭证下载及过期回退沿用原逻辑。插件不执行网络 IO，文件读取、请求、轮询和计费由 NewAPI 宿主处理。
 
 ## 文件与接入点

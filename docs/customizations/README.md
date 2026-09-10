@@ -7,6 +7,9 @@
 - [开发规则](rules.md)：功能目录、最小接入、配置、样式、数据及同步原则。
 - [修改记录索引](changes.md)：当前已实施变更及其上游文件影响。
 - [单项修改模板](change-template.md)：每项功能建立独立记录，随同实现提交。
+- [界面、存储、逻辑与性能修复文档](ux-storage-simplification-design.md)：全部用户标注、12 项补充问题、全站配色范围、修复目标与验收条件，业务修复尚未实施。
+- [软件发往 NewAPI 的接口文档](newapi-interface-contract.md)：上游插件对接用，按文本、图片、视频、音频列出实际 HTTP 端点、参数、素材格式和返回要求。
+- [界面、逻辑与性能排查](ux-logic-performance-audit.md)：补充问题、全站配色范围、优先级与验证限制，尚未修复。
 - [NewAPI 执行计划](newapi-channel-plan.md)及[正式记录](changes/0011-newapi-channel.md)：默认通道、通用请求、插件交付、迁移和验证边界。
 - [后端扩展目录](../../extensions/README.md)。
 - [前端扩展目录](../../web/src/extensions/README.md)。

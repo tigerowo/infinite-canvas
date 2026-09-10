@@ -32,7 +32,7 @@ import { fetchSystemAgentSkillFile } from "@/services/api/agent-skills";
 import { publicImageURL } from "@/extensions/public-media/references";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
-import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
+import { resolveModelForCapability, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
 import { useCodexAgent } from "../agent/use-codex-agent";
@@ -113,6 +113,7 @@ export function CanvasAssistantPanel({
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const effectiveConfig = useEffectiveConfig();
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
+    const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
     const { message: appMessage } = App.useApp();
     const mode = agentConfig.mode || "api";
@@ -424,19 +425,21 @@ export function CanvasAssistantPanel({
 
         const requestConfig = {
             ...effectiveConfig,
-            model: effectiveConfig.textModel || effectiveConfig.model,
+            model: resolveModelForCapability(effectiveConfig, effectiveConfig.textModel, "text"),
             apiMode: agentConfig.textApiMode,
             textReasoningEnabled: agentConfig.textReasoningEnabled === true,
+            textReasoningEffort: agentConfig.textReasoningEffort,
             activeChannelId: effectiveConfig.textChannelId || effectiveConfig.activeChannelId,
             textChannelId: effectiveConfig.textChannelId,
         };
         const jsonToolFallbackKey = [requestConfig.apiMode || "chat", requestConfig.textChannelId || requestConfig.activeChannelId || requestConfig.baseUrl, requestConfig.model].join("|");
         if (mode === "api" && !isAiConfigReady(requestConfig, requestConfig.model)) {
             updateMessage(session.id, assistantId, {
-                text: "全局文本模型尚未配置完成。请先从应用原有的全局配置入口选择文本模型和渠道，然后再继续。",
+                text: "当前没有可用的文本模型，请先配置文本模型和渠道。",
                 status: "error",
                 activity: undefined,
             });
+            openConfigDialog();
             return;
         }
 
@@ -555,7 +558,7 @@ export function CanvasAssistantPanel({
             initial={{ width: 0, opacity: 0 }}
             animate={{ width: closing ? 0 : width + 1, opacity: closing ? 0 : 1 }}
             transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
-            style={{ overflow: "clip", pointerEvents: closing ? "none" : undefined }}
+            style={{ maxWidth: "100vw", overflow: "clip", pointerEvents: closing ? "none" : undefined }}
         >
             <motion.aside
                 data-canvas-agent-panel
@@ -563,15 +566,15 @@ export function CanvasAssistantPanel({
                 initial={{ x: 48 }}
                 animate={{ x: closing ? 28 : 0 }}
                 transition={{ duration: resizing ? 0 : PANEL_MOTION_SECONDS, ease: [0.22, 1, 0.36, 1] }}
-                style={{ width, background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+                style={{ width, maxWidth: "100vw", background: theme.node.panel, borderColor: theme.node.stroke, color: theme.node.text }}
             >
                 <button type="button" className="absolute inset-y-0 left-0 z-40 w-4 -translate-x-1/2 cursor-col-resize" onMouseDown={(event) => { event.preventDefault(); startResize(); }} aria-label="调整右侧面板宽度" />
                 <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3" style={{ borderColor: theme.node.stroke }}>
                     <div className="flex items-center gap-2 text-sm font-medium">
                         <Bot className="size-4" />
-                        {view === "history" ? "历史记录" : mode === "codex" ? "Codex" : "创作 Agent"}
-                        <Tooltip title={mode === "codex" ? "切换回创作 Agent" : "切换到 Codex"}>
-                            <Button size="small" className="!h-7 !rounded-md !px-2.5 !shadow-none" style={{ font: "inherit", color: theme.node.text, background: "transparent", borderColor: theme.node.stroke }} icon={<ArrowLeftRight className="size-3.5" />} disabled={isRunning} onClick={switchMode}>{mode === "codex" ? "创作 Agent" : "Codex"}</Button>
+                        {view === "history" ? "历史记录" : mode === "codex" ? "Codex" : "文本对话"}
+                        <Tooltip title={mode === "codex" ? "切换到文本对话" : "切换到 Codex（需要本地连接）"}>
+                            <Button type="text" shape="circle" className="!size-11 !min-w-11 !shadow-none" style={{ font: "inherit", color: theme.node.text }} icon={<ArrowLeftRight className="size-4" />} aria-label={mode === "codex" ? "切换到文本对话" : "切换到 Codex"} disabled={isRunning} onClick={switchMode} />
                         </Tooltip>
                     </div>
                     <div className="flex items-center gap-1">
