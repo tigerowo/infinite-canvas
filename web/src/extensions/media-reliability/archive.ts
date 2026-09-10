@@ -2,6 +2,7 @@ import localforage from "localforage";
 import { uploadRemoteImageToServer, resolveImageUrl } from "@/services/image-storage";
 import { uploadRemoteMediaToServer, resolveMediaUrl } from "@/services/file-storage";
 import { assertMediaSession, mediaSession } from "./cache";
+import { rememberMediaIdentity, resolveMediaIdentity, withMediaLock } from "./identity";
 
 type ArchiveKind = "image" | "video";
 type ArchiveRecord = { status: "pending" | "saved" | "failed"; storageKey?: string; error?: string };
@@ -23,10 +24,17 @@ export async function archiveGeneratedMedia(kind: ArchiveKind, id: string, url: 
     if (storageKey.startsWith("server:")) return { url, storageKey };
     const session = mediaSession();
     if (!session.token || !session.userId) return { url, storageKey };
+    const identity = await resolveMediaIdentity({ storageKey, url });
+    assertMediaSession(session);
+    if (identity.startsWith("server:") && !identity.startsWith("server:webdav:")) {
+        const resolved = kind === "image" ? await resolveImageUrl(identity) : await resolveMediaUrl(identity);
+        assertMediaSession(session);
+        return { url: resolved, storageKey: identity };
+    }
     const key = `${session.userId}:${kind}:${id}`;
     const existing = jobs.get(key);
     if (existing) return existing;
-    const run = limited(async () => {
+    const run = limited(() => withMediaLock(`archive:${kind}:${id}`, async () => {
         assertMediaSession(session);
         const prior = await records.getItem<ArchiveRecord>(key);
         assertMediaSession(session);
@@ -45,6 +53,8 @@ export async function archiveGeneratedMedia(kind: ArchiveKind, id: string, url: 
                 : await uploadRemoteMediaToServer(source, `generated-${id}.mp4`, true);
             assertMediaSession(session);
             await records.setItem(key, { status: "saved", storageKey: saved.storageKey } satisfies ArchiveRecord);
+            await rememberMediaIdentity(storageKey || url, saved.storageKey);
+            await rememberMediaIdentity(url, saved.storageKey);
             return saved;
         } catch (cause) {
             assertMediaSession(session);
@@ -52,7 +62,7 @@ export async function archiveGeneratedMedia(kind: ArchiveKind, id: string, url: 
             await records.setItem(key, { status: "failed", error } satisfies ArchiveRecord);
             return { url, storageKey, archiveError: error };
         }
-    });
+    }));
     jobs.set(key, run);
     try { return await run; }
     finally { if (jobs.get(key) === run) jobs.delete(key); }

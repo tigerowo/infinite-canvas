@@ -1,0 +1,4 @@
+/* The embedded director ships as a compiled bundle; keep customization separate. */
+.app-shell > .top-bar > .top-bar-actions > button[aria-label="打开 GitHub"] {
+    display: none;
+}

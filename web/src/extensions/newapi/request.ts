@@ -44,7 +44,7 @@ export async function createNewAPIVideoRequest(config: AiConfig, model: string, 
     model = model.trim();
     if (!model) throw new Error("模型名称不能为空，请先选择可用的视频模型");
     const seconds = Number(config.videoSeconds);
-    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 15) throw new Error("视频时长必须是 1 到 15 之间的整数秒");
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 30) throw new Error("视频时长必须是 1 到 30 之间的整数秒");
     const size = newAPIVideoSize(config.size, config.vquality);
     const policy = await loadModelPolicy();
     const profileKey = `${channelIdForActiveModel(config)}::${model.trim().toLowerCase()}`;

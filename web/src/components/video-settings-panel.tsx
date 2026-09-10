@@ -170,7 +170,7 @@ export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, s
                                         {value}s
                                     </OptionPill>
                                 ))}
-                                {cogVideoX3 ? null : <NumberInput value={seconds} selected={!secondOptions.includes(Number(seconds))} min={1} max={autodl ? 30 : 15} theme={theme} onBlur={autodl ? (value) => onConfigChange("videoSeconds", normalizeAutoDLDuration(value, workflow)) : undefined} onChange={(value) => onConfigChange("videoSeconds", value)} />}
+                                {cogVideoX3 ? null : <NumberInput value={seconds} selected={!secondOptions.includes(Number(seconds))} min={1} max={30} theme={theme} onBlur={autodl ? (value) => onConfigChange("videoSeconds", normalizeAutoDLDuration(value, workflow)) : undefined} onChange={(value) => onConfigChange("videoSeconds", value)} />}
                             </div>
                         </SettingGroup>
                         {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}

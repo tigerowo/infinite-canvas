@@ -3,11 +3,12 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
-import { deleteAnonymousStorageFile, uploadAnonymousStorageFile } from "@/services/anonymous-storage";
-import { autoSyncToCloud, clearAutoSyncCache, canUseGlobalStorage, getProxyUrl, loadStorageConfig, clearStorageConfigCache, loadUserStorageProvider, toProviderPayload, type UserWebDAVStorageProvider } from "@/services/image-storage";
+import { uploadAnonymousStorageFile } from "@/services/anonymous-storage";
+import { autoSyncToCloud, canUseGlobalStorage, getProxyUrl, loadStorageConfig, clearStorageConfigCache, loadUserStorageProvider, toProviderPayload, type UserWebDAVStorageProvider } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
 import { isSignedMediaURL, privateMediaURL } from "@/extensions/storage-access/signed-url";
 import { assertMediaSession, clearMediaMapsOnSessionChange, mediaSession, scopedMediaStore } from "@/extensions/media-reliability/cache";
+import { canReleaseMediaCache, importRemoteMedia, rememberMediaIdentity } from "@/extensions/media-reliability/identity";
 export { clearStorageConfigCache };
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
@@ -18,11 +19,12 @@ clearMediaMapsOnSessionChange(objectUrls);
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file", syncId?: string, globalOnly = false): Promise<UploadedFile> {
     const session = mediaSession();
-    const blob = typeof input === "string" ? await (await fetch(input)).blob() : input;
-    assertMediaSession(session);
-    const uploaded = await autoSyncToCloud(syncId || blob, () => uploadMediaBlobToServer(blob, input instanceof File ? input.name : prefix, globalOnly));
+    let blob: Blob | undefined = typeof input === "string" ? undefined : input;
+    const read = async () => { blob ||= await downloadRemoteMedia(input as string); assertMediaSession(session); return blob; };
+    const uploaded = await autoSyncToCloud(syncId || input, async () => uploadMediaBlobToServer(await read(), input instanceof File ? input.name : prefix, globalOnly));
     assertMediaSession(session);
     if (uploaded) return uploaded;
+    blob = await read();
     const storageKey = `${prefix}:${nanoid()}`;
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
@@ -60,9 +62,16 @@ export async function downloadRemoteMedia(url: string) {
 
 export async function uploadRemoteMediaToServer(url: string, filename: string, globalOnly = false): Promise<UploadedFile> {
     const session = mediaSession();
+    if (globalOnly && session.token && /^https?:\/\//.test(url)) {
+        const saved = await importRemoteMedia(url, filename);
+        return { ...saved, url: await resolveMediaUrl(saved.storageKey) };
+    }
     const blob = await downloadRemoteMedia(url);
     assertMediaSession(session);
-    return uploadMediaBlobToServer(blob, filename, globalOnly);
+    const saved = await uploadMediaBlobToServer(blob, filename, globalOnly);
+    assertMediaSession(session);
+    await rememberMediaIdentity(url, saved.storageKey);
+    return saved;
 }
 
 async function uploadMediaBlobToServer(blob: Blob, filename: string, globalOnly = false): Promise<UploadedFile> {
@@ -169,49 +178,10 @@ export async function setMediaBlob(storageKey: string, blob: Blob) {
     return url;
 }
 
-async function deleteServerMedia(storageKey: string) {
-    const id = storageKey.slice("server:".length);
-    if (!id) return;
-    const token = useUserStore.getState().token;
-    const provider = loadUserStorageProvider();
-    if (storageKey.startsWith("server:webdav:") && provider?.type !== "webdav") return;
-    if (provider?.type === "webdav") {
-        const direct = await import("@/services/webdav-direct-storage");
-        if (await direct.deletePersistedDirectWebDAV(provider, storageKey)) {
-            clearAutoSyncCache(storageKey);
-            const url = objectUrls.get(storageKey);
-            if (url) URL.revokeObjectURL(url);
-            objectUrls.delete(storageKey);
-            await store.removeItem(storageKey);
-            return;
-        }
-    }
-    if (!token) {
-        if (!provider) return;
-        await deleteAnonymousStorageFile(id, toProviderPayload(provider));
-        clearAutoSyncCache(storageKey);
-        const url = objectUrls.get(storageKey);
-        if (url) URL.revokeObjectURL(url);
-        objectUrls.delete(storageKey);
-        await store.removeItem(storageKey);
-        return;
-    }
-    const response = await fetch(`/api/v1/files/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(provider ? { provider: toProviderPayload(provider) } : {}),
-    });
-    const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string } | null;
-    if (!response.ok || payload?.code !== 0) throw new Error(payload?.msg || "删除服务端视频失败");
-    const url = objectUrls.get(storageKey);
-    if (url) URL.revokeObjectURL(url);
-    objectUrls.delete(storageKey);
-    await store.removeItem(storageKey);
-    clearAutoSyncCache(storageKey);
-}
-
 export async function deleteStoredMedia(keys: Iterable<string>) {
+    const session = mediaSession();
     const { useAssetStore } = await import("@/stores/use-asset-store");
+    assertMediaSession(session);
     const assetKeys = new Set(
         useAssetStore
             .getState()
@@ -220,16 +190,12 @@ export async function deleteStoredMedia(keys: Iterable<string>) {
     );
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
-            if (assetKeys.has(key)) return;
-            if (key.startsWith("server:")) {
-                await deleteServerMedia(key);
-                return;
-            }
+            assertMediaSession(session);
+            if (!canReleaseMediaCache(key) || assetKeys.has(key)) return;
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
             await store.removeItem(key);
-            clearAutoSyncCache(key);
         }),
     );
 }
@@ -239,7 +205,7 @@ export async function cleanupUnusedMedia(usedData: unknown) {
     const usedKeys = collectMediaStorageKeys(usedData);
     const unused: string[] = [];
     await store.iterate((_value, key) => {
-        if (!usedKeys.has(key)) unused.push(key);
+        if (canReleaseMediaCache(key) && !usedKeys.has(key)) unused.push(key);
     });
     await Promise.all(unused.map(async (key) => {
         assertMediaSession(session);

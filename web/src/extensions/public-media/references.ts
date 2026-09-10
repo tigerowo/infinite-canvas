@@ -1,13 +1,20 @@
-import { getProxyUrl, resolveImageUrl } from "@/services/image-storage";
+import { getProxyUrl, resolveImageUrl, imageToDataUrl } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { useUserStore } from "@/stores/use-user-store";
 import { loadModelPolicy } from "@/extensions/model-capabilities/policy";
+import { assertMediaSession, mediaSession } from "@/extensions/media-reliability/cache";
+import { rememberMediaIdentity, resolveMediaIdentity, withMediaLock } from "@/extensions/media-reliability/identity";
 
 type Reference = { storageKey?: string; url?: string; dataUrl?: string; name?: string; type?: string };
 type PublicReference = { url: string; expiresAt: string; mimeType: string; storageKey?: string };
 const pending = new Map<string, Promise<PublicReference>>();
 const uploaded = new Map<string, string>();
 const knownURLs = new Map<string, PublicReference>();
+const signedObjects = new Map<string, PublicReference>();
+useUserStore.subscribe((state, previous) => {
+    if (state.token === previous.token && state.user?.id === previous.user?.id) return;
+    pending.clear(); uploaded.clear(); knownURLs.clear(); signedObjects.clear();
+});
 
 export function isPublicHTTPS(value: string) {
     try {
@@ -37,31 +44,35 @@ async function requestData<T>(url: string, init: RequestInit): Promise<T> {
 }
 
 export async function publicReferenceURL(reference: Reference, kind: "image" | "media" = "image"): Promise<string> {
-    const { token, user } = useUserStore.getState();
-    if (!token) throw new Error("请先登录，素材需要上传 S3 后才能用于模型请求");
+    const session = mediaSession();
+    if (!session.token || !session.userId) throw new Error("请先登录，素材需要上传 S3 后才能用于模型请求");
     const policy = await loadModelPolicy().catch(() => ({ imageTransfer: "url" as const, overrides: {} }));
+    assertMediaSession(session);
     if (kind === "image" && policy.imageTransfer === "base64") {
-        if (reference.dataUrl?.startsWith("data:")) return reference.dataUrl;
-        const local = await resolveImageUrl(reference.storageKey, reference.url || "");
-        if (!local) throw new Error("找不到参考图片，请重新上传");
-        const response = await fetch(getProxyUrl(local));
-        if (!response.ok) throw new Error(`参考图片读取失败：${response.status}`);
-        const blob = await response.blob();
-        const bytes = new Uint8Array(await blob.arrayBuffer());
-        let binary = "";
-        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-        return `data:${blob.type || reference.type || "image/png"};base64,${btoa(binary)}`;
+        const result = await imageToDataUrl(reference);
+        assertMediaSession(session);
+        return result;
     }
     const source = reference.url || reference.dataUrl || "";
     const known = knownURLs.get(source);
-    if (known && Date.parse(known.expiresAt) > Date.now() + 300_000) return source;
+    const resolvedKey = await resolveMediaIdentity(reference);
+    assertMediaSession(session);
+    if (known && (!resolvedKey || known.storageKey === resolvedKey) && Date.parse(known.expiresAt) > Date.now() + 300_000) return source;
     const digest = reference.storageKey || Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source)))).map((n) => n.toString(16).padStart(2, "0")).join("");
-    const key = `${user?.id || token}:${kind}:${digest}`;
+    assertMediaSession(session);
+    const key = `${session.userId}:${session.token}:${resolvedKey || digest}`;
     let task = pending.get(key);
     if (!task) {
-        task = (async () => {
-            const headers = { Authorization: `Bearer ${token}` };
-            let storageKey = uploaded.get(key) || reference.storageKey || known?.storageKey || "";
+        task = withMediaLock(reference.storageKey || source, async () => {
+            assertMediaSession(session);
+            const headers = { Authorization: `Bearer ${session.token}` };
+            let storageKey = uploaded.get(key) || await resolveMediaIdentity(reference) || known?.storageKey || "";
+            assertMediaSession(session);
+            if (!storageKey.startsWith("server:") && /^https?:\/\//.test(source)) {
+                const resolved = await requestData<{ storageKey?: string }>("/api/extensions/media-archive/resolve", { method: "POST", headers: { ...headers, "Content-Type": "application/json" }, body: JSON.stringify({ url: source }) });
+                assertMediaSession(session);
+                storageKey = resolved.storageKey || storageKey;
+            }
             if (!storageKey.startsWith("server:") || storageKey.startsWith("server:webdav:")) {
                 const local = kind === "image"
                     ? await resolveImageUrl(reference.storageKey, source)
@@ -70,22 +81,35 @@ export async function publicReferenceURL(reference: Reference, kind: "image" | "
                 const response = await fetch(getProxyUrl(local));
                 if (!response.ok) throw new Error(`参考素材读取失败：${response.status}`);
                 const blob = await response.blob();
+                assertMediaSession(session);
                 if (!blob.size || (!blob.type.startsWith("image/") && !blob.type.startsWith("video/") && !blob.type.startsWith("audio/"))) throw new Error("参考素材必须是有效的图片、视频或音频");
                 const form = new FormData();
                 form.append("file", blob, reference.name || "reference");
                 const result = await requestData<{ storageKey: string }>("/api/v1/files", { method: "POST", headers, body: form });
+                assertMediaSession(session);
                 storageKey = result.storageKey;
                 remember(uploaded, key, storageKey);
             }
+            await rememberMediaIdentity(reference.storageKey || source, storageKey);
+            await rememberMediaIdentity(source, storageKey);
+            assertMediaSession(session);
+            const cached = signedObjects.get(storageKey);
+            if (cached && Date.parse(cached.expiresAt) > Date.now() + 300_000) return cached;
             const result = await requestData<PublicReference>(`/api/extensions/public-media/files/${encodeURIComponent(storageKey.slice(7))}/url`, { headers });
+            assertMediaSession(session);
             if (!isPublicHTTPS(result.url)) throw new Error("S3 返回了非公网 HTTPS 地址，请检查 Endpoint");
+            await rememberMediaIdentity(result.url, storageKey);
+            assertMediaSession(session);
             remember(knownURLs, result.url, { ...result, storageKey });
-            return result;
-        })();
+            remember(signedObjects, storageKey, { ...result, storageKey });
+            return { ...result, storageKey };
+        });
         pending.set(key, task);
-        void task.finally(() => pending.delete(key)).catch(() => {});
+        void task.finally(() => { if (pending.get(key) === task) pending.delete(key); }).catch(() => {});
     }
-    return (await task).url;
+    const result = await task;
+    assertMediaSession(session);
+    return result.url;
 }
 
 export const publicImageURL = (reference: Reference) => publicReferenceURL(reference, "image");

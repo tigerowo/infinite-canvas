@@ -69,9 +69,29 @@ test("NewAPI video rejects an empty model before sending a request", async () =>
     axios.defaults.adapter = async () => { calls++; throw new Error("unexpected request"); };
     try {
         await assert.rejects(createVideoGenerationTask({ ...cfg, model: " ", videoModel: "" }, "test"), /模型名称不能为空/);
-        await assert.rejects(createVideoGenerationTask({ ...config("video-model"), videoSeconds: "16" }, "test"), /1 到 15/);
+        await assert.rejects(createVideoGenerationTask({ ...config("video-model"), videoSeconds: "31" }, "test"), /1 到 30/);
         assert.equal(calls, 0);
     } finally { axios.defaults.adapter = adapter; }
+});
+
+test("NewAPI preserves custom durations through 30 seconds in JSON and multipart", async () => {
+    const cfg = config("custom-video");
+    for (const seconds of ["1", "16", "30"]) {
+        const requestConfig = { ...cfg, videoSeconds: seconds };
+        const json = await createNewAPIVideoRequest(requestConfig, cfg.model, "test", noReferences);
+        assert.ok(!(json instanceof FormData));
+        assert.equal(json.seconds, seconds);
+        const multipart = await createNewAPIVideoRequest(requestConfig, cfg.model, "test", { ...noReferences, references: [image] });
+        assert.ok(multipart instanceof FormData);
+        assert.equal(multipart.get("seconds"), seconds);
+    }
+    for (const seconds of ["0", "31", "1.5", "invalid"]) {
+        await assert.rejects(createNewAPIVideoRequest({ ...cfg, videoSeconds: seconds }, cfg.model, "test", noReferences), /1 到 30/);
+    }
+    useModelPolicy.setState({ policy: { imageTransfer: "base64", overrides: {}, newapiVideoProfiles: { "gateway::custom-video": "canvas-v1" } } });
+    const extended = await createNewAPIVideoRequest({ ...cfg, videoSeconds: "30" }, cfg.model, "test", { ...noReferences, references: [image], lastFrame: image });
+    assert.ok(!(extended instanceof FormData) && "metadata" in extended);
+    assert.equal(extended.seconds, "30");
 });
 
 test("canvas preprocessing keeps local NewAPI images usable without login", async () => {

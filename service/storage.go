@@ -24,6 +24,7 @@ import (
 	awsSigner "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"github.com/tigerowo/infinite-canvas/extensions/mediaidentity"
 	"github.com/tigerowo/infinite-canvas/extensions/s3compat"
 	"github.com/tigerowo/infinite-canvas/extensions/storageaccess"
 	"github.com/tigerowo/infinite-canvas/model"
@@ -284,18 +285,28 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 			return UploadedStorageObject{}, errors.New("服务端必须配置完整的 OSS/S3 存储")
 		}
 	}
-	objectID := uuid.NewString()
-	ext := path.Ext(filename)
-	if ext == "" {
-		ext = extensionForContentType(contentType)
-	}
 	userID := "anonymous"
 	if user, ok := UserFromContext(ctx); ok && user.ID != "" {
 		userID = user.ID
 	}
-	nowTime := time.Now()
-	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/"+nowTime.Format("2006/01/02")+"/"+objectID+ext, "/")
 	sum := sha256.Sum256(data)
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	objectID := mediaidentity.Digest(userID, provider.ID, provider.Endpoint, provider.Bucket, provider.PathPrefix, contentType, hex.EncodeToString(sum[:]))
+	if userID == "anonymous" {
+		objectID = uuid.NewString()
+	}
+	unlock := mediaidentity.Lock(objectID)
+	defer unlock()
+	if prior, err := repository.GetStorageObject(objectID); err == nil {
+		if prior.DeletedAt != "" {
+			return UploadedStorageObject{}, errors.New("该文件已删除")
+		}
+		return uploadedStorageObject(prior), nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return UploadedStorageObject{}, err
+	}
+	// Stable path also recovers an OSS success followed by a failed database save.
+	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/ext-media/"+objectID+extensionForContentType(contentType), "/")
 	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
 		return UploadedStorageObject{}, err
 	}
@@ -307,11 +318,15 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
 	}
-	url := "/api/files/" + objectID + "/content"
-	if publicURL != "" {
-		url = publicURL
+	return uploadedStorageObject(object), nil
+}
+
+func uploadedStorageObject(object model.StorageObject) UploadedStorageObject {
+	u := "/api/files/" + object.ID + "/content"
+	if object.PublicURL != "" {
+		u = object.PublicURL
 	}
-	return UploadedStorageObject{ID: objectID, URL: url, StorageKey: "server:" + objectID, Bytes: int64(len(data)), MimeType: contentType}, nil
+	return UploadedStorageObject{ID: object.ID, URL: u, StorageKey: "server:" + object.ID, Bytes: object.Bytes, MimeType: object.MimeType}
 }
 
 // RegisterDirectStorageObject 登记浏览器已直传至用户 WebDAV 的对象。

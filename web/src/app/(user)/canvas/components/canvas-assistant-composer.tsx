@@ -115,7 +115,6 @@ export function CanvasAssistantComposer({
                         {canConfigure ? <SettingsPopover title="工具设置" placement="topLeft" trigger={<Button type="text" shape="circle" className="!size-8 !min-w-8" icon={<Settings2 className="size-4" />} aria-label="工具设置" title="工具设置" />}>
                         <div className="flex flex-col gap-3">
                         <p className="text-xs leading-5 opacity-65">在对话中说明要生成图片还是视频，Agent 会调用下方对应模型。</p>
-                        {onSkillSelect && onSkillRemove ? <CanvasAgentSkillPopover selectedSkills={selectedSkills} onSelect={onSkillSelect} onDeleteSelected={onSkillRemove} /> : null}
                         <div className="text-sm font-medium">图片生成</div>
                         <ModelPicker config={effectiveConfig} capability="image" value={effectiveConfig.imageModel} channelId={effectiveConfig.imageChannelId} fullWidth onChange={(model, channelId) => { updateConfig("imageModel", model); if (channelId) updateConfig("imageChannelId", channelId); }} />
                         <CanvasImageSettingsPopover
@@ -149,6 +148,7 @@ export function CanvasAssistantComposer({
                         <p className="text-xs leading-5 opacity-65">{agentConfig.autoGenerateMedia ? "Agent 创建媒体节点后立即提交生成，使用对应模型额度。" : "先创建待生成节点，检查后在画布点击“生成”。"}</p>
                         </div>
                         </SettingsPopover> : null}
+                        {canConfigure && onSkillSelect && onSkillRemove ? <CanvasAgentSkillPopover selectedSkills={selectedSkills} onSelect={onSkillSelect} onDeleteSelected={onSkillRemove} /> : null}
                         {canConfigure ? (!codexControls ? <ModelPicker
                             config={effectiveConfig}
                             value={effectiveConfig.textModel}

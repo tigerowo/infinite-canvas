@@ -1,6 +1,7 @@
 package router
 
 import (
+	"github.com/tigerowo/infinite-canvas/extensions/mediaarchive"
 	"github.com/tigerowo/infinite-canvas/extensions/modelcapabilities"
 	"github.com/tigerowo/infinite-canvas/extensions/publicmedia"
 	"github.com/tigerowo/infinite-canvas/extensions/storageaccess"
@@ -57,6 +58,9 @@ func New() *gin.Engine {
 		handler.SignedFileURL(c.Writer, c.Request, c.Param("id"))
 	})
 	publicmedia.Register(api.Group("/extensions/public-media", middleware.UserAuth))
+	if err := mediaarchive.Register(api.Group("/extensions/media-archive", middleware.UserAuth)); err != nil {
+		panic(err)
+	}
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
 	v1.POST("/images/edits", gin.WrapF(handler.AIImagesEdits))
 	v1.POST("/responses", gin.WrapF(handler.AIResponses))

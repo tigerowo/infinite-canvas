@@ -75,22 +75,27 @@ await page.goto((process.env.EXT_MEDIA_RELIABILITY_TEST_URL || 'http://127.0.0.1
 console.log(JSON.stringify({url:page.url(),buttons:await page.getByRole('button').allTextContents(),comboboxes:await page.getByRole('combobox').evaluateAll(xs=>xs.map(x=>({text:x.textContent,label:x.getAttribute('aria-label')}))),editable:await page.locator('[contenteditable],textarea').evaluateAll(xs=>xs.map(x=>({tag:x.tagName,role:x.getAttribute('role'),placeholder:x.getAttribute('placeholder')}))),errors},null,2));
 await page.screenshot({path:artifact('huabu-repair-ui.png'),fullPage:true});
 if(!process.argv[2]) {
- await page.getByRole('button',{name:'工具设置',exact:true}).click();
+ const skillButton=page.getByRole('button',{name:'Skill',exact:true});
+ const settingsButton=page.getByRole('button',{name:'工具设置',exact:true});
+ const skillBox=await skillButton.boundingBox(), settingsBox=await settingsButton.boundingBox();
+ assert.ok(skillBox.x>=settingsBox.x+settingsBox.width && Math.abs(skillBox.y-settingsBox.y)<8,'Skill must sit beside settings');
  await page.getByRole('button',{name:'Skill',exact:true}).click();
  const search=page.getByPlaceholder('搜索 Skill');
  await search.waitFor();
  const popup=page.getByRole('tooltip').filter({has:search});
  const parent=page.getByRole('dialog',{name:'工具设置'});
- const layers=await Promise.all([popup.evaluate(el=>Number(getComputedStyle(el.closest('.ant-popover')).zIndex)),parent.evaluate(el=>Number(getComputedStyle(el).zIndex))]);
- assert.ok(layers[0]>layers[1],`Skill must be above settings: ${layers}`);
+ assert.equal(await parent.count(),0);
  await search.fill('联调');
  assert.equal(await search.evaluate(el=>el===document.activeElement),true);
  await page.getByRole('button',{name:'联调 Skill 用于测试弹层选择'}).click();
  await search.waitFor({state:'hidden'});
- assert.equal(await parent.isVisible(),true);
+ await settingsButton.click();
+ assert.equal(await parent.getByRole('button',{name:'Skill',exact:true}).count(),0);
  assert.equal(await page.getByRole('switch',{name:'自动提交生成'}).getAttribute('aria-checked'),'false');
  await page.getByRole('switch',{name:'自动提交生成'}).click();
  assert.equal(await page.getByRole('switch',{name:'自动提交生成'}).getAttribute('aria-checked'),'true');
+ await page.getByRole('button',{name:'关闭工具设置'}).click();
+ await parent.waitFor({state:'hidden'});
  await page.getByRole('button',{name:'Skill',exact:true}).click();
  await page.getByRole('button',{name:'我的',exact:true}).click();
  await search.fill('');
@@ -101,9 +106,7 @@ if(!process.argv[2]) {
  assert.equal(await editor.isVisible(),true);
  await editor.getByRole('button',{name:/Close|关闭/}).click();
  await editor.waitFor({state:'hidden'});
- assert.equal(await parent.isVisible(),true);
- await page.getByRole('button',{name:'关闭工具设置'}).click();
- await parent.waitFor({state:'hidden'});
+ assert.equal(await parent.isVisible(),false);
  await page.getByRole('button',{name:'思考强度：自动'}).click();
  await page.getByRole('menuitem',{name:'高',exact:true}).click();
  await page.getByRole('menu').waitFor({state:'hidden'});
@@ -121,7 +124,6 @@ if(!process.argv[2]) {
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
  console.log('home: effort, outside focus, 687/390 layout passed');
- await page.getByRole('button',{name:'工具设置',exact:true}).click();
  await page.getByRole('button',{name:'Skill',exact:true}).click();
  await search.fill('手机');
  const mobilePopup=await popup.boundingBox();
@@ -135,7 +137,7 @@ if(!process.argv[2]) {
  assert.equal(await guest.getByRole('button',{name:'工具设置',exact:true}).count(),0);
  assert.equal(await guest.getByRole('button',{name:/思考强度/}).count(),0);
  await guestContext.close();
- console.log('home: Skill layering, tool controls and guest visibility passed');
+ console.log('home: independent Skill beside settings, tool controls and guest visibility passed');
 }
 if(process.argv[2]==='/image') {
  await page.getByRole('button',{name:'底部',exact:true}).click();
@@ -211,8 +213,30 @@ if(process.argv[2]?.startsWith('/canvas/')) {
  await page.getByRole('listbox').waitFor({state:'hidden'});
  assert.equal(await input.evaluate(x=>x===document.activeElement),true);
  console.log('canvas: nested picker first outside click closes and focuses prompt');
+ await page.getByRole('button',{name:'查看节点信息',exact:true}).click();
+ const info=page.locator('.canvas-node-info-modal');
+ await info.waitFor({state:'visible'});
+ const topmost=await info.evaluate(modal=>{
+  const rect=modal.getBoundingClientRect();
+  return [0.25,0.5,0.85].every(y=>[0.25,0.75].every(x=>modal.contains(document.elementFromPoint(rect.x+rect.width*x,rect.y+rect.height*y))));
+ });
+ assert.equal(topmost,true,'node information must cover the prompt composer at every sampled point');
+ await info.getByText('JSON',{exact:true}).click();
+ await info.locator('pre').waitFor({state:'visible'});
+ await page.screenshot({path:artifact('huabu-node-info-topmost.png'),fullPage:true});
+ await info.locator('.ant-modal-close').click();
+ await info.waitFor({state:'hidden'});
+ console.log('canvas: node information stays above prompt composer and JSON/close work');
 }
 if(process.argv[2]==='/video') {
+ const customSeconds=page.getByRole('spinbutton',{name:'自定义秒数',exact:true});
+ assert.equal(await customSeconds.getAttribute('max'),'30');
+ await customSeconds.fill('30');
+ await customSeconds.blur();
+ assert.equal(await customSeconds.inputValue(),'30');
+ await customSeconds.fill('31');
+ await customSeconds.blur();
+ assert.equal(await customSeconds.inputValue(),'30');
  await page.getByRole('button',{name:'底部',exact:true}).click();
  for(const width of [1038,390]) {
   await page.setViewportSize({width,height:912});
@@ -225,6 +249,7 @@ if(process.argv[2]==='/video') {
  await page.getByRole('button',{name:'开始创作',exact:true}).click();
  await page.getByText('云端保存失败',{exact:true}).first().waitFor({timeout:30000});
  assert.equal(videoTasks.size,1);
+ assert.equal(JSON.parse(requests.find(request=>request.path==='/api/v1/videos'&&request.method==='POST').body).seconds,'30');
  console.log('video: result survives storage failure');
  console.log('video controls',await page.getByRole('button').allTextContents());
  historyOnline=true;
@@ -238,6 +263,15 @@ if(process.argv[2]==='/video') {
  assert.equal(videoTasks.size,1);
  assert.equal([...histories.values()][0].video.storageKey,'server:fixture-image');
  console.log('video: retry saves existing result without a second generation');
+}
+if(process.argv[2]==='/director/index.html') {
+ await page.getByRole('button',{name:'导演视角',exact:true}).waitFor({state:'visible'});
+ assert.equal(await page.getByRole('button',{name:'打开 GitHub',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'关闭',exact:true}).isVisible(),true);
+ await page.getByRole('button',{name:'机位视角',exact:true}).click();
+ assert.equal(await page.getByRole('button',{name:'机位视角',exact:true}).getAttribute('aria-pressed'),'true');
+ await page.screenshot({path:artifact('huabu-director-no-github.png'),fullPage:true});
+ console.log('director: GitHub entry hidden, close and camera mode remain available');
 }
 console.log(JSON.stringify({requestCount:requests.length,errors,artifactDir}));
 assert.equal(errors.length,0);

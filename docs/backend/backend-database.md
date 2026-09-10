@@ -36,6 +36,7 @@ description: 当前后端主要数据表与字段说明
 - `storage_objects`
 - `ext_model_policy`（定制路由初始化时单独迁移）
 - `ext_storage_access`（私有 OSS/CDN 访问配置初始化时单独迁移）
+- `ext_media_archive_sources`（远程媒体导入路由初始化时单独迁移）
 
 后续新增表时再同步补充本文档，未实际使用的规划表不提前写入。
 
@@ -61,6 +62,17 @@ description: 当前后端主要数据表与字段说明
 | `value` | text | JSON；包含允许来源、读取方式、CDN 域名和后端 Token B 密钥 |
 
 Token B 密钥只在后端数据库保存，管理接口只返回 `hasTokenKey`，不会返回密钥正文。数据库备份和访问权限仍需按生产密钥标准保护。
+
+### ext_media_archive_sources
+
+由 `extensions/mediaarchive/archive.go` 的 `Register` 执行 `AutoMigrate`，可重复执行，失败停止路由初始化和应用启动。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string(64) | 主键，账号 ID 与规范化来源 URL 的 SHA256 摘要，不保存 URL 或凭据正文 |
+| `object_id` | string | 非空，关联既有 `storage_objects.id`；成功导入后登记 |
+
+用于同账号重复导入不可变生成结果时复用已登记对象；读取时仍验证文件权限。源对象记录缺失时可重新导入，默认存储切换不迁移历史文件。无上游表变更，回退代码保留本表及对象。迁移、浏览器映射及重试边界见 [EXT-0034](../customizations/changes/0034-oss-reuse-cache-audit.md)。
 
 ### users
 
@@ -460,4 +472,4 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 - `ext_video_task_identity`：`extensions/taskidentity/identity.go` 按需迁移。`task_id`、`user_id` 为联合主键，`source` 为 user/admin/local，仅记录视频创建的凭证来源，不存密钥。旧任务无记录时走兼容查询；新记录冲突不覆盖原来源。
 - `ext_storage_access`：存储访问扩展的既有配置表。默认上传以 `__default_upload_provider__` 独立配置行保存 Provider ID，scope 为 default；不修改上游 Provider 表字段，也不迁移旧存储对象。
 
-浏览器 IndexedDB 新增 `ext_pending_history` 与 `ext_media_archive` 对象仓库，按账号保存待同步历史与归档状态；这些不是服务端持久后台作业，不保证关页后继续执行。
+浏览器 IndexedDB 使用 `ext_pending_history` 与 `ext_media_archive` 保存待同步历史与归档状态，`ext_media_identities` 保存来源摘要到 server key 的映射，`ext_protected_media` 保存受保护视频任务到云端或本地 key 的映射，均按账号隔离。这些不是服务端持久后台作业，不保证关页后继续执行。

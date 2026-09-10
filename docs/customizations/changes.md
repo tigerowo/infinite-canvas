@@ -39,6 +39,9 @@
 | EXT-0032 | [容器更新与真实存储联调](changes/0032-container-storage-live-check.md) | 新容器已运行，七牛读写/CORS/视频播放通过；CDN 域名、TOS 配置和真实登录上传待补齐 | 容器替换、PostgreSQL 备份、七牛云端 CORS 与真实媒体验收 |
 | EXT-0033 | [首页登录状态、工具说明与 Skill 弹层](changes/0033-home-tools-skill-layer.md) | 构建、独立类型检查及定向浏览器回归通过，已更新本地容器 | 游客隐藏模型、工具分组、自动生成开关、Skill 层级与点击边界 |
 | EXT-0035 | [上游 AutoDL 与媒体同步合并](changes/0035-upstream-sync.md) | 冲突处理、Go/Bun/插件、类型、构建与隔离浏览器通过；真实渠道和云清理待验收 | 上游 `163771b`，AutoDL、自动同步、默认归档目标及账号切换保护 |
+| EXT-0034 | [OSS 复用、缓存与归档修复](changes/0034-oss-reuse-cache-audit.md) | 已实现并通过本地回归；真实云端和跨设备验收见记录，未替换容器 | 上传稳定身份、服务端导入、持久缓存、受保护视频、账号隔离及共享文件删除保护 |
+| EXT-0036 | [Skill 独立工具栏入口](changes/0036-skill-toolbar.md) | 首页桌面/手机隔离浏览器验证通过，未替换容器 | 共享输入框将 Skill 移至设置按钮旁边 |
+| EXT-0037 | [节点信息层级、导演台入口与视频时长](changes/0037-canvas-overlay-video-duration.md) | 本地实现，验证见记录；未替换容器 | 节点信息置顶、导演台隐藏 GitHub、通用/NewAPI 视频最长 30 秒 |
 
 各项验证以正式记录为准。用户此前“ok了已经”的反馈只对应当时已运行流程，不扩大为 EXT-0011 或全部模型、计费路径通过。
 

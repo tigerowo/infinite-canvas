@@ -2,6 +2,8 @@ import axios from "axios";
 
 import { createNewAPIVideoRequest, isNewAPIConfig, parseNewAPIVideoResponse } from "@/extensions/newapi/request";
 import { publicImageURL, publicMediaURL } from "@/extensions/public-media/references";
+import { assertMediaSession, mediaSession } from "@/extensions/media-reliability/cache";
+import { reuseProtectedMedia } from "@/extensions/media-reliability/protected-media";
 import { isMiniMaxH3Config, normalizeMiniMaxH3Duration, normalizeMiniMaxH3Ratio, normalizeMiniMaxH3Resolution } from "@/lib/minimax-video";
 import { geminiActionUrl, geminiDirectHeaders, geminiErrorMessage, geminiOperationUrl, isGeminiConfig, isGeminiVideoModel } from "@/lib/gemini";
 import { isGeminiVeo31Model, normalizeGeminiVideoDuration, normalizeGeminiVideoRatio, normalizeGeminiVideoResolution } from "@/lib/gemini-video";
@@ -195,7 +197,7 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
 
 function videoSyncKey(config: AiConfig, task: VideoResponse) {
     const channelId = config.channelMode === "remote" ? channelIdForActiveModel(config) : localChannelForActiveModel(config)?.id;
-    return `${config.channelMode}:${channelId || config.baseUrl}:${task.id}:${task.task_id || ""}:${task.video_id || ""}`;
+    return JSON.stringify([config.channelMode, channelId, localChannelForActiveModel(config)?.baseUrl || config.baseUrl, config.model || config.videoModel, task.id, task.task_id, task.video_id]);
 }
 
 async function syncGeneratedVideo(task: VideoResponse, config: AiConfig, contentResolved = false): Promise<VideoResponse> {
@@ -239,14 +241,18 @@ async function cacheProtectedVideo(config: AiConfig, model: string, task: VideoR
     const needsProxyContent = (usesAccountProxy(config) || isNewAPIConfig(config)) && isCompletedVideoStatus(task.status) && !url;
     if (!isCompletedVideoStatus(task.status) || task.storageKey || (!needsProxyContent && !needs88APIContent && !needsGrokContent)) return task;
     const taskId = isNewAPIConfig(config) ? task.id : task.task_id || task.id || task.video_id || "";
-    const response = await fetch(`${aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`)}?model=${encodeURIComponent(model)}`, { headers: aiHeaders(config) });
-    if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
-    const blob = await response.blob();
-    if (!blob.size || blob.type.includes("json") || blob.type.startsWith("text/")) {
-        const text = await blob.text().catch(() => "");
-        throw new VideoRequestError(text || "视频内容接口没有返回视频文件", task);
-    }
-    const media = await uploadMediaBlob(blob, `generated-${taskId}.mp4`, true);
+    const media = await reuseProtectedMedia(videoSyncKey(config, task), resolveMediaUrl, async () => {
+        const session = mediaSession();
+        const response = await fetch(`${aiApiUrl(config, `/videos/${encodeURIComponent(taskId)}/content`)}?model=${encodeURIComponent(model)}`, { headers: aiHeaders(config) });
+        if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
+        const blob = await response.blob();
+        assertMediaSession(session);
+        if (!blob.size || blob.type.includes("json") || blob.type.startsWith("text/")) {
+            const text = await blob.text().catch(() => "");
+            throw new VideoRequestError(text || "视频内容接口没有返回视频文件", task);
+        }
+        return uploadMediaBlob(blob, `generated-${taskId}.mp4`, true);
+    });
     return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
 }
 
@@ -817,12 +823,18 @@ async function cacheProtectedGeminiVideo(config: AiConfig, model: string, task: 
     const url = task.video_url || task.url || "";
     if (!isGeminiConfig(config, model) || !isCompletedVideoStatus(task.status) || task.storageKey || !url) return task;
     const localTaskId = task.id || task.task_id || "";
-    const response = await fetch(
-        usesAccountProxy(config) ? `${aiApiUrl(config, `/videos/${encodeURIComponent(localTaskId)}/content`)}?model=${encodeURIComponent(model)}` : url,
-        { headers: usesAccountProxy(config) ? aiHeaders(config) : geminiDirectHeaders(config) },
-    );
-    if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
-    const media = await uploadMediaFile(await response.blob(), "generated-video", `video-content:${videoSyncKey(config, task)}`, true);
+    const media = await reuseProtectedMedia(videoSyncKey(config, task), resolveMediaUrl, async () => {
+        const session = mediaSession();
+        const response = await fetch(
+            usesAccountProxy(config) ? `${aiApiUrl(config, `/videos/${encodeURIComponent(localTaskId)}/content`)}?model=${encodeURIComponent(model)}` : url,
+            { headers: usesAccountProxy(config) ? aiHeaders(config) : geminiDirectHeaders(config) },
+        );
+        if (!response.ok) throw new VideoRequestError(`视频内容下载失败：${response.status}`, task);
+        const blob = await response.blob();
+        assertMediaSession(session);
+        if (!blob.size || blob.type.includes("json") || blob.type.startsWith("text/")) throw new VideoRequestError("视频内容接口没有返回视频文件", task);
+        return uploadMediaFile(blob, "generated-video", `video-content:${videoSyncKey(config, task)}`, true);
+    });
     return { ...task, url: media.url, video_url: media.url, storageKey: media.storageKey };
 }
 
