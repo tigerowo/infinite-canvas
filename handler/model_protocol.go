@@ -47,6 +47,35 @@ type aiProtocolAdapter struct {
 // 表只初始化一次；每阶段只执行自身钩子，bool 表示停止匹配，不表示字段是否改变。
 var builtinAIProtocols = []aiProtocolAdapter{
 	{
+		id: service.ModelChannelProtocolAutoDL,
+		path: func(channel model.ModelChannel, modelName string, path string) (string, bool) {
+			if !service.IsAutoDLChannel(channel) {
+				return path, false
+			}
+			if path == "/videos" || path == "/audio/speech" {
+				return service.AutoDLTaskPath(modelName, false), true
+			}
+			if strings.HasPrefix(path, "/videos/") && !strings.HasSuffix(path, "/content") {
+				return service.AutoDLTaskPath(strings.TrimPrefix(path, "/videos/"), true), true
+			}
+			return path, true
+		},
+		prepare: prepareAutoDLRequest,
+		copyResponse: copyAutoDLResponse,
+		videoResponse: func(payload []byte, _ *http.Request, channel model.ModelChannel, _ string, _ bool) ([]byte, bool) {
+			if !service.IsAutoDLChannel(channel) {
+				return nil, false
+			}
+			return transformAutoDLVideoResponse(payload), true
+		},
+		uploads: func(_ model.ModelChannel, kinds map[string]bool) (map[string]directAIUpload, error) {
+			if len(kinds) > 0 {
+				return nil, errors.New("AutoDL 参考素材请使用现有云存储上传后的地址")
+			}
+			return nil, nil
+		},
+	},
+	{
 		id:           service.ModelChannelProtocolGemini,
 		videoContent: serveGeminiVideoTaskContent,
 		path: func(channel model.ModelChannel, modelName string, path string) (string, bool) {

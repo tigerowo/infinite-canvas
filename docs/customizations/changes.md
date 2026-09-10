@@ -38,6 +38,7 @@
 | EXT-0031 | [默认存储、ESA 与生成结果归档](changes/0031-default-storage-archive.md) | 默认配置与签名单测、隔离保存失败重试通过；七牛源站实测见 EXT-0032，TOS/CDN 待验收 | storageaccess 扩展、TOS/七牛入口、唯一默认、ESA Type A、图片视频自动归档 |
 | EXT-0032 | [容器更新与真实存储联调](changes/0032-container-storage-live-check.md) | 新容器已运行，七牛读写/CORS/视频播放通过；CDN 域名、TOS 配置和真实登录上传待补齐 | 容器替换、PostgreSQL 备份、七牛云端 CORS 与真实媒体验收 |
 | EXT-0033 | [首页登录状态、工具说明与 Skill 弹层](changes/0033-home-tools-skill-layer.md) | 构建、独立类型检查及定向浏览器回归通过，已更新本地容器 | 游客隐藏模型、工具分组、自动生成开关、Skill 层级与点击边界 |
+| EXT-0035 | [上游 AutoDL 与媒体同步合并](changes/0035-upstream-sync.md) | 冲突处理、Go/Bun/插件、类型、构建与隔离浏览器通过；真实渠道和云清理待验收 | 上游 `163771b`，AutoDL、自动同步、默认归档目标及账号切换保护 |
 
 各项验证以正式记录为准。用户此前“ok了已经”的反馈只对应当时已运行流程，不扩大为 EXT-0011 或全部模型、计费路径通过。
 

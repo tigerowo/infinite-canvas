@@ -3,6 +3,7 @@ import { useState, type CSSProperties, type ReactNode } from "react";
 import { FileText, Image as ImageIcon, Music2, Plus, Settings2, Trash2, Video as VideoIcon, X } from "lucide-react";
 import { Button, Input, Switch } from "antd";
 
+import { isAutoDLConfig } from "@/lib/autodl";
 import {
     VideoSettingsPanel,
     isAPIMartKlingMotionControlConfig,

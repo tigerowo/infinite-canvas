@@ -321,6 +321,18 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 		mimeType = strings.TrimSpace(http.DetectContentType(payload))
 	}
 	if strings.Contains(mimeType, "json") {
+		var result struct {
+			Provider string `json:"provider"`
+			AudioURL string `json:"audio_url"`
+			MimeType string `json:"mime_type"`
+		}
+		if service.AutoDLModelKind(task.Model) == "audio" && json.Unmarshal(payload, &result) == nil && result.Provider == service.ModelChannelProtocolAutoDL && result.AudioURL != "" {
+			task.Status, task.Progress, task.CompletedAt = "completed", 100, taskTime()
+			task.AudioURL, task.MimeType, task.ResponseBody = result.AudioURL, result.MimeType, string(payload)
+			task.Error, task.ErrorDetail = "", ""
+			_, _ = service.SaveCanvasAudioTask(task)
+			return
+		}
 		saveFailedCanvasAudioTask(task, "音频接口没有返回音频文件", string(payload))
 		return
 	}

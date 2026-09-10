@@ -187,18 +187,14 @@ func apimartVideoConfig(modelName string) apimartInputConfig {
 	}
 
 	switch {
-	case strings.Contains(model, "doubao-seedance-2"):
+	case strings.Contains(model, "seedance-2"):
 		config.aspectField = "size"
 		config.imageRefKind = "seedance2"
 		config.videoRefField = "video_urls"
 		config.videoRefKind = "array"
 		config.audioRefField = "audio_urls"
 		config.audioRefKind = "array"
-	case strings.Contains(model, "doubao-seedance-1-0"):
-		config.aspectField = "aspect_ratio"
-		config.imageRefField = "image_with_roles"
-		config.imageRefKind = "roles"
-	case strings.Contains(model, "doubao-seedance-1-5"), strings.Contains(model, "seedance-1"):
+	case strings.Contains(model, "seedance-1"):
 		config.aspectField = "aspect_ratio"
 		config.imageRefField = "image_with_roles"
 		config.imageRefKind = "roles"
@@ -562,9 +558,9 @@ func normalizeAPIMartImageCount(payload map[string]any, config apimartInputConfi
 
 func applyAPIMartVideoDefaults(payload map[string]any, modelName string) {
 	model := normalizeAPIMartModelName(modelName)
-	if model == "doubao-seedance-2.5" {
+	if model == "seedance-2-5" {
 		switch strings.ToLower(strings.TrimSpace(toStringSafe(payload["resolution"]))) {
-		case "1080p", "1080", "2k", "4k":
+		case "2k", "4k":
 			payload["resolution"] = "720p"
 		}
 		if !isEmptyValue(payload["duration"]) {
@@ -648,9 +644,9 @@ func applyAPIMartVideoGenerateAudioInput(payload map[string]any, modelName strin
 	enabled := boolLike(value)
 	model := normalizeAPIMartModelName(modelName)
 	switch {
-	case strings.Contains(model, "doubao-seedance-2"), strings.Contains(model, "veo") && strings.Contains(model, "official"):
+	case strings.Contains(model, "seedance-2"), strings.Contains(model, "veo") && strings.Contains(model, "official"):
 		payload["generate_audio"] = enabled
-	case strings.Contains(model, "doubao-seedance-1-5"), strings.Contains(model, "seedance-1-5"):
+	case strings.Contains(model, "seedance-1-5"):
 		payload["audio"] = enabled
 	case model == "wan2-6", model == "wan2-6-i2v-flash":
 		payload["audio"] = enabled
@@ -681,9 +677,9 @@ func clearAPIMartConflictingReferences(payload map[string]any, modelName string)
 	if model == "happyhorse-1-1" && !isEmptyValue(payload["first_frame_image"]) {
 		delete(payload, "image_urls")
 	}
-	if strings.Contains(model, "doubao-seedance-2") && !isEmptyValue(payload["image_with_roles"]) {
+	if strings.Contains(model, "seedance-2") && !isEmptyValue(payload["image_with_roles"]) {
 		delete(payload, "image_urls")
-		if hasAPIMartFirstLastImageRole(payload) {
+		if strings.Contains(model, "seedance-2-0") && hasAPIMartFirstLastImageRole(payload) {
 			delete(payload, "video_urls")
 			delete(payload, "audio_urls")
 		}

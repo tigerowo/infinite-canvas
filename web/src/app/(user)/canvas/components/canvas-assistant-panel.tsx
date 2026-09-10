@@ -642,22 +642,13 @@ export function CanvasAssistantPanel({
                     )}
                 </div>
 
-                {(mode === "api" ? pendingDelete : codexConfirmations.length) || deleteChatIds.length ? (
+                {(mode === "api" ? pendingDelete : codexConfirmations.length) ? (
                     <div className="thin-scrollbar max-h-[50%] shrink-0 space-y-2 overflow-y-auto pb-2">
                         {mode === "api" && pendingDelete ? <AssistantPanelCard title={`删除「${pendingDelete.title}」？`} actions={[
                             { label: "取消", onClick: () => settleDeleteConfirmation(false) },
                             { label: "确认删除", danger: true, onClick: () => settleDeleteConfirmation(true) },
                         ]}><div className="text-xs opacity-55">相关连线和任务记录将按现有逻辑清理</div></AssistantPanelCard> : null}
                         {mode === "codex" ? codexConfirmations.map((confirmation) => <AssistantPanelCard key={confirmation.id} title={confirmation.title} actions={confirmation.actions}>{confirmation.content}</AssistantPanelCard>) : null}
-                        {deleteChatIds.length ? <AssistantPanelCard title="删除对话记录？" actions={[
-                            { label: "取消", onClick: () => setDeleteChatIds([]) },
-                            { label: "删除", danger: true, onClick: async () => {
-                                try {
-                                    await removeSessions(deleteChatIds);
-                                    setDeleteChatIds((current) => current === deleteChatIds ? [] : current);
-                                } catch (error) { appMessage.error(error instanceof Error ? error.message : "删除会话失败"); }
-                            } },
-                        ]}><p className="text-sm opacity-60">将删除 {deleteChatIds.length} 条对话记录，此操作不可撤销</p></AssistantPanelCard> : null}
                     </div>
                 ) : null}
                 {view === "chat" && !showCodexConnection ? (
@@ -714,6 +705,32 @@ export function CanvasAssistantPanel({
                         </div>
                         <Switch checked={agentConfig.autoGenerateMedia} onChange={(autoGenerateMedia) => onAgentConfigChange({ autoGenerateMedia })} />
                     </div>
+                </Modal>
+
+                <Modal
+                    title="删除对话记录？"
+                    open={deleteChatIds.length > 0}
+                    centered
+                    onCancel={() => setDeleteChatIds([])}
+                    footer={
+                        <>
+                            <Button onClick={() => setDeleteChatIds([])}>取消</Button>
+                            <Button
+                                danger
+                                type="primary"
+                                onClick={async () => {
+                                    try {
+                                        await removeSessions(deleteChatIds);
+                                        setDeleteChatIds((current) => current === deleteChatIds ? [] : current);
+                                    } catch (error) { appMessage.error(error instanceof Error ? error.message : "删除会话失败"); }
+                                }}
+                            >
+                                删除
+                            </Button>
+                        </>
+                    }
+                >
+                    <p className="text-sm opacity-60">将删除 {deleteChatIds.length} 条对话记录，此操作不可撤销</p>
                 </Modal>
             </motion.aside>
         </motion.div>

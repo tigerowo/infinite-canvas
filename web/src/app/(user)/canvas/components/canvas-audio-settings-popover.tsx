@@ -6,6 +6,7 @@ import { Settings2 } from "lucide-react";
 import { Button } from "antd";
 
 import { AudioSettingsPanel, type AudioSettingKey } from "@/components/audio-settings-panel";
+import { isAutoDLConfig } from "@/lib/autodl";
 import { audioFormatLabel, audioSpeedLabel, audioVoiceLabel, glmTtsVoiceLabel, isGlmTtsModel, normalizeGlmTtsFormat, normalizeGlmTtsSpeed } from "@/lib/audio-generation";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { isGrok2APITtsConfig, normalizeGrokTtsFormat, normalizeGrokTtsLanguage, normalizeGrokTtsSpeed } from "@/lib/grok-tts";
@@ -34,7 +35,7 @@ type CanvasAudioSettingsPopoverProps = {
 export function CanvasAudioSettingsPopover({ config, onConfigChange, resourceOptions = [], metadata, onMetadataChange, buttonClassName, placement = "topLeft" }: CanvasAudioSettingsPopoverProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const audioOptions = useMemo(() => resourceOptions.filter((item) => item.kind === "audio"), [resourceOptions]);
-    const cloneAudioNodeId = validCloneAudioNodeId(metadata?.mimoVoiceCloneAudioNodeId, audioOptions);
+    const cloneAudioNodeId = validCloneAudioNodeId(isAutoDLConfig(config) ? metadata?.referenceAudioNodeId : metadata?.mimoVoiceCloneAudioNodeId, audioOptions);
 
     return (
         <SettingsPopover
@@ -78,7 +79,7 @@ function AudioSettingsContent({
 
     return (
         <div className="space-y-4">
-            {!isNewAPIConfig(config) && isMimoVoiceCloneModel(model) ? (
+            {!isNewAPIConfig(config) && (isMimoVoiceCloneModel(model) || isAutoDLConfig(config, model)) ? (
                 <ResourceSinglePicker
                     label="参考音频"
                     value={cloneAudioNodeId}
@@ -86,7 +87,7 @@ function AudioSettingsContent({
                     placeholder="请选择音频节点"
                     emptyText={audioOptions.length ? "请选择已连接音频" : "暂无已连接音频节点"}
                     theme={theme}
-                    onChange={(value) => onMetadataChange?.({ mimoVoiceCloneAudioNodeId: value || undefined })}
+                    onChange={(value) => onMetadataChange?.(isAutoDLConfig(config, model) ? { referenceAudioNodeId: value || undefined } : { mimoVoiceCloneAudioNodeId: value || undefined })}
                 />
             ) : null}
             <AudioSettingsPanel config={config} onConfigChange={onConfigChange} theme={theme} showTitle={false} className="space-y-4" />

@@ -71,7 +71,7 @@ func prepareDirectAIRequest(input directAIRequestInput) (directAIRequestPlan, er
 	if input.Model == "" {
 		return directAIRequestPlan{}, errors.New("缺少模型名称")
 	}
-	if !isDirectAIEndpoint(input.Endpoint) {
+	if !isDirectAIEndpoint(input.Endpoint) && !(strings.EqualFold(input.Channel.Protocol, service.ModelChannelProtocolAutoDL) && input.Endpoint == "/audio/speech") {
 		return directAIRequestPlan{}, errors.New("当前接口不支持本地参数转译")
 	}
 	if err := validateDirectAIBaseURL(input.Channel.BaseURL); err != nil {

@@ -12,6 +12,7 @@ test("built-in protocol options retain both settings panels' labels and order", 
         { label: "APIMart", value: "apimart" },
         { label: "88API", value: "88api" },
         { label: "KIE", value: "kie" },
+        { label: "AutoDL", value: "autodl" },
         { label: "MiMo", value: "mimo" },
     ]);
 });
@@ -25,6 +26,7 @@ test("built-in protocols retain all existing default URLs and API Key links", ()
         metaso: "https://metaso.cn/api/minimax",
         apimart: "https://api.apimart.ai/v1",
         kie: "https://api.kie.ai/api/v1",
+        autodl: "https://autodl.art",
         mimo: "https://api.xiaomimimo.com",
         "88api": "https://88api.ai/v1",
     });
@@ -39,6 +41,7 @@ test("built-in protocols retain all existing default URLs and API Key links", ()
 test("public parameter translation eligibility keeps exact protocol matching", () => {
     assert.equal(directAIProviderForProtocol("kie"), "kie");
     assert.equal(directAIProviderForProtocol("apimart"), "apimart");
+    assert.equal(directAIProviderForProtocol("autodl"), "autodl");
     for (const protocol of ["openai", "gemini", "grok2api", "metaso", "mimo", "88api", "KIE", " kie ", "APIMart", "", "unknown"]) {
         assert.equal(directAIProviderForProtocol(protocol), null, protocol);
     }

@@ -32,6 +32,8 @@
 
 ## 复测与同步检查
 
+已合入上游 `163771b`，同步检查见 [EXT-0035](0035-upstream-sync.md)。自动同步和本地回退新增原会话校验，避免吞掉换账号异常；私有缓存、失败重试及相关隔离浏览器回归通过。新增云文件清理的真实共享引用场景仍待验收。
+
 浏览器脚本：`web/src/extensions/media-reliability/repair-ui-smoke.mjs`。先启动当前前端，再使用安装了 Playwright 和 Chromium 的 Node 环境运行：
 
 ```sh

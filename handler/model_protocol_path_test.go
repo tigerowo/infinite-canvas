@@ -14,6 +14,9 @@ func TestModelProtocolProxyPathContract(t *testing.T) {
 	tests := []struct {
 		name, protocol, baseURL, model, path, want string
 	}{
+		{"autodl create before URL inference", "autodl", "https://api.kie.ai", "minimax_h3_b99_002", "/videos", "/api/v1/comfyui/comfyui_workflow/minimax_h3_b99_002"},
+		{"autodl audio", "autodl", "", "indextts2-v1", "/audio/speech", "/api/v1/comfyui/comfyui_workflow/indextts2-v1"},
+		{"autodl poll escaped", "autodl", "", "minimax_h3_b99_002", "/videos/task a?b", "/api/v1/comfyui/comfyui_workflow/result/task%20a%3Fb"},
 		{"gemini chat", "gemini", "", "models/gemini-test", "/chat/completions", "/v1beta/models/gemini-test:streamGenerateContent?alt=sse"},
 		{"gemini speech before mimo", "gemini", "", "mimo-v2.5-tts", "/audio/speech", "/v1beta/models/mimo-v2.5-tts:generateContent"},
 		{"gemini video before cog", " GEMINI ", "https://api.kie.ai", "cogvideox-3", "/videos", "/v1beta/models/cogvideox-3:predictLongRunning"},
@@ -60,6 +63,7 @@ func TestModelProtocolProxyURLContract(t *testing.T) {
 		{"existing v1", "openai", "https://api.example/v1/", "model", "/videos", "https://api.example/v1/videos"},
 		{"gemini base version", "gemini", "https://api.example/v1beta/", "model", "/v1beta/models/model:generateContent", "https://api.example/v1beta/models/model:generateContent"},
 		{"metaso no v1", "metaso", "https://api.example/", "MiniMax-H3", "/v2/video_generation", "https://api.example/v2/video_generation"},
+		{"autodl no v1", "autodl", "https://api.example/", "minimax_h3_b99_002", "/api/v1/comfyui/comfyui_workflow/minimax_h3_b99_002", "https://api.example/api/v1/comfyui/comfyui_workflow/minimax_h3_b99_002"},
 		{"agnes query", "openai", "https://api.example/v1/", "agnes-video-2.5", "/videos/video_a b", "https://api.example/agnesapi?model_name=agnes-video-2.5&video_id=video_a+b"},
 		{"agnes wins protocol URL builder", "gemini", "https://api.example/v1", "agnes-video-2.5", "/videos/video_task", "https://api.example/agnesapi?model_name=agnes-video-2.5&video_id=video_task"},
 	}

@@ -5,7 +5,7 @@ import { collectHTTPURLs, normalizeDirectStatus, readDirectError } from "./share
 
 // Expectations are taken from direct-ai.ts at a27f046, before protocol extraction.
 test("direct protocols preserve polling paths and task ID precedence", () => {
-    assert.deepEqual(Object.keys(directProtocolAdapters).sort(), ["apimart", "kie"]);
+    assert.deepEqual(Object.keys(directProtocolAdapters).sort(), ["apimart", "autodl", "kie"]);
     assert.equal(directProtocolAdapters.kie.pollPath("task/a b?"), "/jobs/recordInfo?taskId=task%2Fa%20b%3F");
     assert.equal(directProtocolAdapters.apimart.pollPath("task/a b?"), "/tasks/task%2Fa%20b%3F?language=zh");
     assert.equal(directProtocolAdapters.kie.readTaskId({ data: { taskId: " kie-task ", task_id: "ignored" } }), "kie-task");
@@ -103,4 +103,49 @@ test("recursive URL parsing retains its original depth boundary", () => {
     assert.deepEqual(collectHTTPURLs({ nested: value }), []);
     assert.deepEqual(collectHTTPURLs('{"urls":["https://media.example/result.png"]}'), ["https://media.example/result.png"]);
     assert.deepEqual(collectHTTPURLs("not-json"), []);
+});
+
+test("AutoDL uses raw token and polls the workflow result endpoint without adding v1", () => {
+    const protocol = directProtocolAdapters.autodl;
+    assert.equal(protocol.rawAuthorization, true);
+    assert.equal(protocol.readTaskId({ code: "Success", data: { task_id: "created-once" } }), "created-once");
+    assert.equal(protocol.readTaskId({ code: "Success", data: {} }), "");
+    for (const base of ["https://autodl.art", "https://autodl.art/"]) {
+        assert.equal(protocol.pollURL?.(base, "task/a b?"), "https://autodl.art/api/v1/comfyui/comfyui_workflow/result/task%2Fa%20b%3F");
+    }
+    assert.equal(protocol.pollURL?.("https://proxy.example/autodl", "task"), "https://proxy.example/autodl/api/v1/comfyui/comfyui_workflow/result/task");
+    assert.equal(directProtocolAdapters.kie.rawAuthorization, undefined);
+    assert.equal(directProtocolAdapters.apimart.rawAuthorization, undefined);
+});
+
+test("AutoDL separates output media from input and preview URLs and does not invent progress", () => {
+    const protocol = directProtocolAdapters.autodl;
+    const payload = { code: "Success", data: {
+        task_id: "created-once", status: "SUCCESS", duration: 12,
+        input: { url: "https://media.example/input.mp4" },
+        results: [
+            { type: "image", url: "https://media.example/poster.png" },
+            { type: "video", output_type: "preview", url: "https://media.example/preview.mp4" },
+            { type: "audio", output_type: "output", url: "https://media.example/speech.wav" },
+            { type: "video", output_type: "output", url: "https://media.example/final.mp4" },
+        ],
+    } };
+    const video = protocol.readVideoPoll(payload, "created-once", "minimax_h3_b99_002");
+    assert.equal(video.video_url, "https://media.example/final.mp4");
+    assert.equal(video.status, "completed");
+    assert.equal(video.progress, undefined);
+    assert.deepEqual(protocol.readAudioPoll?.(payload), { url: "https://media.example/speech.wav", done: true, error: "" });
+    for (const status of ["QUEUED", "RUNNING"]) {
+        assert.equal(protocol.readVideoPoll({ code: "Success", data: { status } }, "created-once", "model").status, "processing");
+    }
+});
+
+test("AutoDL reports string business errors, task failures and completed tasks without outputs", () => {
+    const protocol = directProtocolAdapters.autodl;
+    assert.equal(protocol.readError({ code: "InsufficientBalance", msg: "额度不足" }), "额度不足");
+    assert.equal(protocol.readError({ code: "Success", data: { status: "FAILED", message: "参考文件不可读取" } }), "参考文件不可读取");
+    const empty = { code: "Success", data: { status: "completed", results: [{ type: "image", url: "https://media.example/poster.png" }] } };
+    assert.equal(protocol.readVideoPoll(empty, "task", "model").status, "failed");
+    assert.match(protocol.readVideoPoll(empty, "task", "model").error?.message || "", /没有返回视频地址/);
+    assert.match(protocol.readAudioPoll?.(empty).error || "", /没有返回音频地址/);
 });

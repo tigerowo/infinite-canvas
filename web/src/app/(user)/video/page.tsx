@@ -36,6 +36,8 @@ import { saveAs } from "file-saver";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/app/(user)/canvas/components/asset-picker-modal";
 import { ModelPicker } from "@/components/model-picker";
+import { useAutoDLWorkflow } from "@/hooks/use-autodl-workflow";
+import { getAutoDLCapabilities, isAutoDLConfig, normalizeAutoDLDuration } from "@/lib/autodl";
 import { KlingV26WorkbenchPanel } from "@/app/(user)/video/components/kling-v26-workbench-panel";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, isKIEKlingV3Config, kieKlingOmniVariant, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoResolutionOptions, videoSizeForResolution, videoSizeOptions } from "@/components/video-settings-panel";
@@ -207,7 +209,10 @@ export default function VideoPage() {
     const generationLockRef = useRef(false);
 
     const model = effectiveConfig.videoModel || effectiveConfig.model;
-    const canGenerate = Boolean(prompt.trim());
+    const autodl = isAutoDLConfig(videoConfig, model);
+    const { data: autodlWorkflow, error: autodlError } = useAutoDLWorkflow(videoConfig, model);
+    const autodlCapabilities = getAutoDLCapabilities(autodlWorkflow);
+    const canGenerate = Boolean(prompt.trim()) || (autodl && autodlCapabilities?.promptRequired === false);
     const pendingCount = results.filter((item) => item.status === "pending").length;
     const klingWorkbench = resolveKlingWorkbenchConfig(videoConfig, model);
     const klingWorkbenchVariant = klingWorkbench?.variant || "";
@@ -219,6 +224,10 @@ export default function VideoPage() {
     const videoReferenceLimit = klingAcceptsVideoReferences ? 1 : SEEDANCE_REFERENCE_LIMITS.videos;
     const pendingLogCount = logs.filter((log) => log.status === "生成中" && log.task && !log.video).length;
     const usesBackendVideoTasks = (value: AiConfig) => value.channelMode === "remote" || (value.channelMode === "local" && Boolean(token));
+
+    useEffect(() => {
+        if (autodl && autodlError) message.error(autodlError.message);
+    }, [autodl, autodlError, message]);
 
     const restorePendingLogResults = (sourceLogs: GenerationLog[]) => {
         const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.video);
@@ -407,16 +416,11 @@ export default function VideoPage() {
                     return { id: nanoid(), name: file.name, type: video.mimeType, url: video.url, storageKey: video.storageKey, bytes: video.bytes, width: video.width, height: video.height, durationMs: video.durationMs };
                 }),
             );
-            const nextAudioReferences = filterAudioReferencesByDuration(
-                audioReferences,
-                await Promise.all(
-                    audioFiles.map(async (file) => {
-                        const audio = await uploadMediaFile(file, "audio-reference");
-                        return { id: nanoid(), name: file.name, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
-                    }),
-                ),
-                message.warning,
-            );
+            const uploadedAudioReferences = await Promise.all(audioFiles.map(async (file) => {
+                const audio = await uploadMediaFile(file, "audio-reference");
+                return { id: nanoid(), name: file.name, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
+            }));
+            const nextAudioReferences = autodl ? uploadedAudioReferences : filterAudioReferencesByDuration(audioReferences, uploadedAudioReferences, message.warning);
             setReferences((value) => [...value, ...nextReferences].slice(0, referenceImageLimit));
             setVideoReferences((value) => [...value, ...nextVideoReferences].slice(0, videoReferenceLimit));
             setAudioReferences((value) => [...value, ...nextAudioReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
@@ -562,16 +566,11 @@ export default function VideoPage() {
             }
             const usable = blobs.filter((blob) => blob.size <= SEEDANCE_REFERENCE_LIMITS.audioMaxBytes).slice(0, SEEDANCE_REFERENCE_LIMITS.audios - audioReferences.length);
             if (blobs.some((blob) => blob.size > SEEDANCE_REFERENCE_LIMITS.audioMaxBytes)) message.warning("已忽略超过 15MB 的参考音频");
-            const nextAudioReferences = filterAudioReferencesByDuration(
-                audioReferences,
-                await Promise.all(
-                    usable.map(async (blob, index) => {
-                        const audio = await uploadMediaFile(blob, "audio-reference");
-                        return { id: nanoid(), name: `clipboard-audio-${index + 1}.mp3`, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
-                    }),
-                ),
-                message.warning,
-            );
+            const uploadedAudioReferences = await Promise.all(usable.map(async (blob, index) => {
+                const audio = await uploadMediaFile(blob, "audio-reference");
+                return { id: nanoid(), name: `clipboard-audio-${index + 1}.mp3`, type: audio.mimeType, url: audio.url, storageKey: audio.storageKey, durationMs: audio.durationMs };
+            }));
+            const nextAudioReferences = autodl ? uploadedAudioReferences : filterAudioReferencesByDuration(audioReferences, uploadedAudioReferences, message.warning);
             setAudioReferences((value) => [...value, ...nextAudioReferences].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
             message.success(`已读取 ${nextAudioReferences.length} 个参考音频`);
         } catch {
@@ -681,7 +680,7 @@ export default function VideoPage() {
         const omni = kieKlingOmniVariant(configValue, modelValue);
         const acceptsVideoReferences = omni === "reference-to-video" || omni === "transformation";
         const supportsElements = omni !== "transformation";
-        if (!text) {
+        if (!text && !isAutoDLConfig(configValue, modelValue)) {
             message.error("请输入视频提示词");
             return null;
         }
@@ -723,7 +722,7 @@ export default function VideoPage() {
                 return null;
             }
         }
-        if (!kling && !isMiniMaxH3Config(configValue, modelValue) && !isAgnesVideoV25Model(modelValue)) {
+        if (!kling && !isAutoDLConfig(configValue, modelValue) && !isMiniMaxH3Config(configValue, modelValue) && !isAgnesVideoV25Model(modelValue)) {
             const videoReferenceError = seedanceVideoReferenceError(videoReferenceItems);
             if (videoReferenceError) {
                 message.error(`${videoReferenceError}。${seedanceVideoReferenceHint}`);
@@ -1016,7 +1015,8 @@ export default function VideoPage() {
                 message.warning("请选择音频素材");
                 return;
             }
-            const next = filterAudioReferencesByDuration(audioReferences, [{ id: nanoid(), name: payload.title, type: payload.mimeType || "audio/mpeg", url: payload.url, storageKey: payload.storageKey, durationMs: payload.durationMs }], message.warning);
+            const picked = [{ id: nanoid(), name: payload.title, type: payload.mimeType || "audio/mpeg", url: payload.url, storageKey: payload.storageKey, durationMs: payload.durationMs }];
+            const next = autodl ? picked : filterAudioReferencesByDuration(audioReferences, picked, message.warning);
             setAudioReferences((value) => [...value, ...next].slice(0, SEEDANCE_REFERENCE_LIMITS.audios));
         };
 
@@ -1654,6 +1654,8 @@ function WorkbenchPanel({
     const frameReferencesEnabled = isNewAPIConfig({ ...config, model }) || supportsVideoFrameReferences(model, channelProtocolForConfig({ ...config, model }));
     const cogVideoX3 = !isNewAPIConfig({ ...config, model }) && isCogVideoX3Model(model);
     const audioGenerationEnabled = !isNewAPIConfig({ ...config, model }) && supportsVideoAudioGeneration(model, channelProtocolForConfig({ ...config, model, videoModel: model }));
+    const autodl = isAutoDLConfig(config, model);
+    const { data: autodlWorkflow } = useAutoDLWorkflow(config, model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
     const klingBottomConfig = resolveKlingWorkbenchConfig(config, model);
     const klingBottomVariant = klingBottomConfig?.variant || "";
@@ -1760,11 +1762,7 @@ function WorkbenchPanel({
                                         }}
                                     />
                                     <QuickSelect label="尺寸" value={videoSizeForResolution(config.vquality, config.size)} options={videoSizeOptions(config.vquality)} onChange={(value) => updateConfig("size", value)} />
-                                    {cogVideoX3 ? (
-                                        <QuickSelect label="秒数" value={normalizeCogVideoX3Duration(config.videoSeconds)} options={cogVideoX3DurationOptions} onChange={(value) => updateConfig("videoSeconds", value)} />
-                                    ) : (
-                                        <QuickNumber label="秒数" value={normalizeVideoSeconds(config.videoSeconds)} min={1} max={30} onChange={(value) => updateConfig("videoSeconds", value)} />
-                                    )}
+                                    {cogVideoX3 ? <QuickSelect label="秒数" value={normalizeCogVideoX3Duration(config.videoSeconds)} options={cogVideoX3DurationOptions} onChange={(value) => updateConfig("videoSeconds", value)} /> : <QuickNumber label="秒数" value={autodl ? config.videoSeconds ?? "" : normalizeVideoSeconds(config.videoSeconds)} min={1} max={30} onChange={(value) => updateConfig("videoSeconds", value)} clampOnChange={!autodl} normalizeOnBlur={autodl ? (value) => normalizeAutoDLDuration(value, autodlWorkflow) : undefined} />}
                                     {audioGenerationEnabled ? <QuickSwitch label="生成音频" checked={generateAudio} onChange={(checked) => updateConfig("videoGenerateAudio", String(checked))} /> : null}
                                     {motionControl ? (
                                         <QuickSelect
@@ -2149,22 +2147,11 @@ function QuickSelect({ label, value, options, onChange }: { label: string; value
     );
 }
 
-function QuickNumber({ label, value, min, max, onChange, clampOnChange = true }: { label: string; value: string; min: number; max: number; onChange: (value: string) => void; clampOnChange?: boolean }) {
+function QuickNumber({ label, value, min, max, onChange, clampOnChange = true, normalizeOnBlur }: { label: string; value: string; min: number; max: number; onChange: (value: string) => void; clampOnChange?: boolean; normalizeOnBlur?: (value: string) => string }) {
     return (
         <label className="grid gap-1 text-xs text-stone-500 dark:text-stone-400">
             {label}
-            <input
-                className="h-11 min-w-0 rounded-xl border border-stone-200 bg-background px-3 text-sm text-stone-900 outline-none dark:border-stone-800 dark:text-stone-100"
-                type="number"
-                min={min}
-                max={max}
-                value={value}
-                onChange={(event) => onChange(clampOnChange ? clampQuickNumberValue(event.target.value, min, max) : event.target.value)}
-                onBlur={(event) => onChange(clampQuickNumberValue(event.target.value, min, max))}
-                onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                }}
-            />
+            <input className="h-11 min-w-0 rounded-xl border border-stone-200 bg-background px-3 text-sm text-stone-900 outline-none dark:border-stone-800 dark:text-stone-100" type="number" min={min} max={max} value={value} onChange={(event) => onChange(clampOnChange ? clampQuickNumberValue(event.target.value, min, max) : event.target.value)} onBlur={(event) => onChange(normalizeOnBlur ? normalizeOnBlur(event.target.value) : clampQuickNumberValue(event.target.value, min, max))} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
         </label>
     );
 }
@@ -3466,6 +3453,7 @@ function buildVideoConfig(config: AiConfig, model: string): AiConfig {
     const resolvedChannelId = resolveVideoChannelId(config, model, config.videoChannelId, config.activeChannelId);
     const selected = { ...config, model, videoModel: model, videoChannelId: resolvedChannelId, activeChannelId: resolvedChannelId };
     if (isNewAPIConfig(selected)) return selected;
+    if (isAutoDLConfig(selected, model)) return selected;
     const seedance = isSeedanceVideoConfig({ ...config, model });
     const cogVideoX3 = isCogVideoX3Model(model);
     const klingV26 = isAPIMartKlingV26Config(config, model);

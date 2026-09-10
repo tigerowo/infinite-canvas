@@ -166,7 +166,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if err != nil {
 		log.Printf("AI proxy normalize %s request failed: model=%s err=%v", prepared.failureLabel, modelName, err)
 		message := "AI 接口请求失败"
-		if prepared.failureLabel == "MiMo TTS" {
+		if prepared.failureLabel == "MiMo TTS" || prepared.failureLabel == "AutoDL" {
 			message = err.Error()
 		}
 		Fail(w, message)

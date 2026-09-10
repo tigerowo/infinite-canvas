@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Cpu } from "lucide-react";
 
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { useAutoDLWorkflowNames } from "@/hooks/use-autodl-workflow";
 import { cn } from "@/lib/utils";
 import { selectableModelOptions, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
@@ -25,6 +26,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     const outsideFocus = useRef(false);
     const outsideTarget = useRef<HTMLElement | null>(null);
     const channelOptions = useMemo(() => selectableModelOptions(config, capability), [capability, config]);
+    const modelLabel = useAutoDLWorkflowNames(channelOptions);
     const currentOption = useMemo(() => {
         if (!value) return undefined;
         return channelOptions.find((item) => item.model === value && item.channelId === channelId) || channelOptions.find((item) => item.model === value);
@@ -120,8 +122,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
             >
                 {options.length ? (
                     options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${option.model} ${option.channelName}`}>
-                            <ModelLabel model={option.model} channelName={option.channelName} />
+                        <SelectItem key={option.key} value={option.key} textValue={`${modelLabel(option.model, option)} ${option.model} ${option.channelName}`}>
+                            <ModelLabel model={option.model} label={modelLabel(option.model, option)} channelName={option.channelName} />
                         </SelectItem>
                     ))
                 ) : (
@@ -134,12 +136,12 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
     );
 }
 
-function ModelLabel({ model, channelName }: { model: string; channelName?: string }) {
+function ModelLabel({ model, label, channelName }: { model: string; label?: string; channelName?: string }) {
     return (
         <span className="flex min-w-0 items-center gap-2">
             <ModelIcon model={model} />
-            <span className="truncate">{model}</span>
-            {channelName ? <span className="ml-auto max-w-20 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
+            <span className="truncate" title={model}>{label || model}</span>
+            {channelName ? <span className="ml-auto max-w-24 shrink-0 truncate text-xs opacity-50">{channelName}</span> : null}
         </span>
     );
 }

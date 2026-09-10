@@ -14,7 +14,7 @@ import (
 )
 
 func TestModelProtocolAuthContract(t *testing.T) {
-	for _, protocol := range []string{"", "openai", " GEMINI ", "grok2api", "metaso", "apimart", "kie", "mimo", "88api", "unknown"} {
+	for _, protocol := range []string{"", "openai", " GEMINI ", "grok2api", "metaso", "apimart", "kie", "mimo", "88api", " AUTODL ", "unknown"} {
 		request := httptest.NewRequest(http.MethodPost, "https://upstream.invalid", nil)
 		request.Header.Set("Authorization", "existing authorization")
 		request.Header.Set("x-goog-api-key", "existing google key")
@@ -23,6 +23,9 @@ func TestModelProtocolAuthContract(t *testing.T) {
 		wantAuthorization, wantGoogle := "Bearer test-key", "existing google key"
 		if protocol == " GEMINI " {
 			wantAuthorization, wantGoogle = "existing authorization", "test-key"
+		}
+		if protocol == " AUTODL " {
+			wantAuthorization = "test-key"
 		}
 		if request.Header.Get("Authorization") != wantAuthorization || request.Header.Get("x-goog-api-key") != wantGoogle {
 			t.Errorf("%q auth changed: %v", protocol, request.Header)

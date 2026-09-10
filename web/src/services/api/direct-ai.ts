@@ -1,4 +1,9 @@
 import { apiPost } from "@/services/api/request";
+import { resolveMediaUrl, uploadRemoteMediaToServer } from "@/services/file-storage";
+import { resolveImageUrl } from "@/services/image-storage";
+import { getStorageObjectInfo } from "@/services/api/storage";
+import type { ReferenceImage } from "@/types/image";
+import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 import { buildApiUrl, localChannelForActiveModel, type AiConfig, type DirectAIProvider } from "@/stores/use-config-store";
 import { directProtocolAdapters } from "./protocols/direct-registry";
 import { isPlainRecord, readPath, readString } from "./protocols/shared";
@@ -14,6 +19,40 @@ type SerializedDirectBody = { body: unknown; references: DirectReference[] };
 
 const DIRECT_REFERENCE_HOST = "direct-reference.invalid";
 const DIRECT_IMAGE_POLL_INTERVAL_MS = 2000;
+
+export async function autoDLReferenceURL(reference: ReferenceImage | ReferenceVideo | ReferenceAudio) {
+    for (const value of [reference.url, "dataUrl" in reference ? reference.dataUrl : ""]) {
+        const url = publicReferenceURL(value);
+        if (url) return url;
+    }
+    const storedUrl = await storedReferenceURL(reference.storageKey);
+    if (storedUrl) return storedUrl;
+    if (reference.storageKey?.startsWith("server:")) throw new Error("AutoDL 参考素材需要云存储提供可公开访问的地址");
+    const source = "dataUrl" in reference
+        ? await resolveImageUrl(reference.storageKey, reference.dataUrl || reference.url || "")
+        : await resolveMediaUrl(reference.storageKey, reference.url);
+    if (!source) throw new Error("参考素材不可用");
+    const uploaded = await uploadRemoteMediaToServer(source, reference.name || "reference");
+    const url = publicReferenceURL(uploaded.url) || await storedReferenceURL(uploaded.storageKey);
+    if (!url) throw new Error("AutoDL 参考素材需要云存储提供可公开访问的地址");
+    return url;
+}
+
+async function storedReferenceURL(storageKey?: string) {
+    if (!storageKey?.startsWith("server:") || storageKey.startsWith("server:webdav:")) return "";
+    const info = await getStorageObjectInfo(storageKey.slice("server:".length));
+    return publicReferenceURL(info.publicUrl);
+}
+
+function publicReferenceURL(value?: string) {
+    if (!value || !/^https?:\/\//i.test(value)) return "";
+    try {
+        const url = new URL(value);
+        return ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ? "" : url.href;
+    } catch {
+        return "";
+    }
+}
 
 export async function requestDirectImages(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits", body: DirectRequestBody, timeoutSeconds: number): Promise<DirectImageResponse> {
     const startedAt = Date.now();
@@ -55,7 +94,24 @@ export async function pollDirectVideoTask(config: AiConfig, provider: DirectAIPr
     return protocol.readVideoPoll(payload, pollId, config.model || config.videoModel);
 }
 
-async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits" | "/videos", body: DirectRequestBody) {
+export async function requestDirectAudioURL(config: AiConfig, provider: DirectAIProvider, body: DirectRequestBody) {
+    const startedAt = Date.now();
+    const timeoutSeconds = Number(config.timeout) || 600;
+    const { plan, requestBody, apiKey, protocol } = await prepareDirectRequest(config, provider, "/audio/speech", body);
+    if (!protocol.readAudioPoll) throw new Error("当前协议不支持异步音频");
+    const created = await requestDirectJSON(protocol, plan.url, apiKey, plan.contentType, requestBody, remainingTimeoutMs(startedAt, timeoutSeconds));
+    const id = protocol.readTaskId(created);
+    if (!id) throw new Error(protocol.readError(created) || "音频接口没有返回任务 ID");
+    for (;;) {
+        await delay(Math.min(DIRECT_IMAGE_POLL_INTERVAL_MS, remainingTimeoutMs(startedAt, timeoutSeconds)));
+        const payload = await requestDirectJSON(protocol, directPollURL(config, protocol, id), apiKey, "", undefined, remainingTimeoutMs(startedAt, timeoutSeconds));
+        const result = protocol.readAudioPoll(payload);
+        if (result.error) throw new Error(result.error);
+        if (result.done && result.url) return { id, url: result.url };
+    }
+}
+
+async function prepareDirectRequest(config: AiConfig, provider: DirectAIProvider, endpoint: "/images/generations" | "/images/edits" | "/videos" | "/audio/speech", body: DirectRequestBody) {
     const channel = requireDirectChannel(config);
     const serialized = await serializeDirectBody(body);
     assertSafeDirectBody(serialized.body);
@@ -256,7 +312,7 @@ async function requestDirectJSON(protocol: DirectProtocolAdapter, url: string, a
         const response = await fetch(url, {
             method: body === undefined ? "GET" : "POST",
             headers: {
-                Authorization: `Bearer ${apiKey}`,
+                Authorization: protocol.rawAuthorization ? apiKey : `Bearer ${apiKey}`,
                 ...(body === undefined ? {} : { "Content-Type": contentType || "application/json" }),
             },
             ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -284,6 +340,7 @@ async function readDirectResponse(response: Response): Promise<unknown> {
 
 function directPollURL(config: AiConfig, protocol: DirectProtocolAdapter, taskId: string) {
     const channel = requireDirectChannel(config);
+    if (protocol.pollURL) return protocol.pollURL(channel.baseUrl, taskId);
     return buildApiUrl(channel.baseUrl, protocol.pollPath(taskId));
 }
 

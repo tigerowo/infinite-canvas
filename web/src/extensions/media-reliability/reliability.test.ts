@@ -4,6 +4,17 @@ import { retryableRequest, privateCacheKey, scopedMediaStore } from "./cache";
 import { responsesImageState } from "../newapi/response-state";
 import { durableMediaSnapshot, mapMedia } from "./snapshot";
 import { useUserStore } from "@/stores/use-user-store";
+import { collectMediaStorageKeys } from "@/services/file-storage";
+
+test("media cleanup retains historical string keys and nested object references", () => {
+    const keys = collectMediaStorageKeys({
+        logKeys: ["generated-video:history-only", "server:history-only"],
+        projects: [{ nodes: [{ metadata: { storageKey: "audio:node" } }] }],
+        nested: [["file:reference"]],
+    });
+    for (const key of ["generated-video:history-only", "server:history-only", "audio:node", "file:reference"]) assert.equal(keys.has(key), true);
+    assert.equal(keys.has("generated-video:unused"), false);
+});
 
 test("failed config requests retry and concurrent successful reads share one request", async () => {
     let calls = 0;

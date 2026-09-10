@@ -5,6 +5,8 @@ import { Input, Switch } from "antd";
 import { isNewAPIConfig } from "@/extensions/newapi/config";
 
 import { ImageSettingsTheme } from "@/components/image-settings-panel";
+import { useAutoDLWorkflow } from "@/hooks/use-autodl-workflow";
+import { isAutoDLConfig, normalizeAutoDLDuration } from "@/lib/autodl";
 import {
     boolConfig,
     isSeedanceFastOrMiniModel,
@@ -72,17 +74,19 @@ type VideoSettingsPanelProps = {
 };
 
 export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, showTitle = true, className = "w-[320px] space-y-4 rounded-2xl px-1 py-0.5", hideNegativePrompt = false, visualOnly = false }: VideoSettingsPanelProps) {
+    const model = modelName || config.model || config.videoModel;
+    const autodl = isAutoDLConfig(config, model);
+    const { data: workflow } = useAutoDLWorkflow(config, model);
     if (isAPIMartKlingV26Config(config, modelName || config.model || config.videoModel) || isAPIMartKlingV3Config(config, modelName || config.model || config.videoModel) || isKIEKlingV3Config(config, modelName || config.model || config.videoModel)) {
         return <KlingV26VideoSettingsPanel config={config} modelName={modelName} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} hideNegativePrompt={hideNegativePrompt} visualOnly={visualOnly} />;
     }
-    if (!isNewAPIConfig(config) && isSeedanceVideoConfig(config)) {
+    if (!isNewAPIConfig(config) && !autodl && isSeedanceVideoConfig(config)) {
         return <SeedanceVideoSettingsPanel config={config} modelName={modelName} onConfigChange={onConfigChange} theme={theme} showTitle={showTitle} className={className} visualOnly={visualOnly} />;
     }
 
-    const model = modelName || config.model || config.videoModel;
     const grokMode = config.videoMode === "fun" || config.videoMode === "spicy" ? config.videoMode : "normal";
     const cogVideoX3 = !isNewAPIConfig(config) && isCogVideoX3Model(model);
-    const seconds = cogVideoX3 ? normalizeCogVideoX3Duration(config.videoSeconds) : config.videoSeconds || "6";
+    const seconds = autodl ? config.videoSeconds ?? "" : cogVideoX3 ? normalizeCogVideoX3Duration(config.videoSeconds) : config.videoSeconds || "6";
     const size = normalizeVideoSizeValue(config.size);
     const dimensions = readSizeDimensions(size);
     const resolution = normalizeVideoResolutionValue(config.vquality);
@@ -166,7 +170,7 @@ export function VideoSettingsPanel({ config, modelName, onConfigChange, theme, s
                                         {value}s
                                     </OptionPill>
                                 ))}
-                                {cogVideoX3 ? null : <NumberInput value={seconds} selected={!secondOptions.includes(Number(seconds))} min={1} max={15} theme={theme} onChange={(value) => onConfigChange("videoSeconds", value)} />}
+                                {cogVideoX3 ? null : <NumberInput value={seconds} selected={!secondOptions.includes(Number(seconds))} min={1} max={autodl ? 30 : 15} theme={theme} onBlur={autodl ? (value) => onConfigChange("videoSeconds", normalizeAutoDLDuration(value, workflow)) : undefined} onChange={(value) => onConfigChange("videoSeconds", value)} />}
                             </div>
                         </SettingGroup>
                         {audioGenerationEnabled ? <AudioGenerationSetting checked={generateAudio} theme={theme} onChange={(checked) => onConfigChange("videoGenerateAudio", String(checked))} /> : null}
@@ -439,7 +443,7 @@ function DimensionInput({ prefix, value, disabled, selected, theme, onChange }: 
     );
 }
 
-function NumberInput({ value, selected = false, min, max, theme, onChange }: { value: string; selected?: boolean; min: number; max: number; theme: CanvasTheme; onChange: (value: string) => void }) {
+function NumberInput({ value, selected = false, min, max, theme, onChange, onBlur }: { value: string; selected?: boolean; min: number; max: number; theme: CanvasTheme; onChange: (value: string) => void; onBlur?: (value: string) => void }) {
     return (
         <input
             type="number"
@@ -451,7 +455,7 @@ function NumberInput({ value, selected = false, min, max, theme, onChange }: { v
             style={{ color: theme.node.text, WebkitTextFillColor: theme.node.text }}
             value={value}
             onChange={(event) => onChange(event.target.value)}
-            onBlur={(event) => onChange(String(Math.min(max, Math.max(min, Math.round(Number(event.target.value) || min)))))}
+            onBlur={(event) => onBlur ? onBlur(event.target.value) : onChange(String(Math.min(max, Math.max(min, Math.round(Number(event.target.value) || min)))))}
             onMouseDown={(event) => event.stopPropagation()}
         />
     );

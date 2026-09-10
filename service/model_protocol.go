@@ -16,6 +16,7 @@ const (
 	ModelChannelProtocolAPIMart  = "apimart"
 	ModelChannelProtocolKIE      = "kie"
 	ModelChannelProtocol88API    = "88api"
+	ModelChannelProtocolAutoDL   = "autodl"
 )
 
 type modelProtocolAdapter struct {
@@ -31,7 +32,7 @@ type modelProtocolRule struct {
 }
 
 var modelProtocolRegistry map[string]modelProtocolAdapter
-var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocol88API}
+var modelProtocolIDs = []string{ModelChannelProtocolOpenAI, ModelChannelProtocolGemini, ModelChannelProtocolGrok2API, ModelChannelProtocolMiniMax, ModelChannelProtocolAPIMart, ModelChannelProtocolKIE, ModelChannelProtocolMiMo, ModelChannelProtocol88API, ModelChannelProtocolAutoDL}
 
 func init() {
 	modelProtocolIDs = append(modelProtocolIDs, ModelChannelProtocolNewAPI)
@@ -82,6 +83,28 @@ func init() {
 		return result, nil
 	}
 	modelProtocolRegistry[ModelChannelProtocolKIE] = kie
+	autodl := compatible
+	autodl.buildURL = func(channel model.ModelChannel, path string) string {
+		return BuildAutoDLURL(channel.BaseURL, path)
+	}
+	autodl.setAuth = func(request *http.Request, channel model.ModelChannel) {
+		request.Header.Set("Authorization", channel.APIKey)
+	}
+	autodl.models = func(channel model.ModelChannel) ([]string, error) {
+		workflows, err := AutoDLWorkflows(channel.BaseURL)
+		ids := make([]string, 0, len(workflows))
+		for _, workflow := range workflows {
+			ids = append(ids, workflow.UUID)
+		}
+		return ids, err
+	}
+	autodl.testModel = func(channel model.ModelChannel, modelName string) (string, error) {
+		if _, err := AutoDLWorkflowDetail(channel.BaseURL, modelName); err != nil {
+			return "", err
+		}
+		return "AutoDL 工作流目录可读取；Token 和真实生成请在对应创作入口测试。", nil
+	}
+	modelProtocolRegistry[ModelChannelProtocolAutoDL] = autodl
 
 	api88 := compatible
 	api88.testModel = func(model.ModelChannel, string) (string, error) {
@@ -98,6 +121,7 @@ func init() {
 
 // 发现模型、配置测试与生成的命中规则不同，分别保留原有优先级。
 var modelDiscoveryRules = []modelProtocolRule{
+	{ModelChannelProtocolAutoDL, func(channel model.ModelChannel, _ string) bool { return IsAutoDLChannel(channel) }},
 	{ModelChannelProtocolGemini, func(channel model.ModelChannel, _ string) bool { return IsGeminiChannel(channel) }},
 	{ModelChannelProtocolMiniMax, func(channel model.ModelChannel, _ string) bool { return IsMiniMaxChannel(channel) }},
 	{ModelChannelProtocolMiMo, func(channel model.ModelChannel, _ string) bool { return IsMiMoChannel(channel) }},
@@ -105,6 +129,7 @@ var modelDiscoveryRules = []modelProtocolRule{
 }
 
 var modelConfigTestRules = []modelProtocolRule{
+	{ModelChannelProtocolAutoDL, func(channel model.ModelChannel, _ string) bool { return IsAutoDLChannel(channel) }},
 	{ModelChannelProtocolMiniMax, func(channel model.ModelChannel, _ string) bool { return IsMiniMaxChannel(channel) }},
 	{ModelChannelProtocol88API, func(channel model.ModelChannel, _ string) bool {
 		return strings.EqualFold(strings.TrimSpace(channel.Protocol), ModelChannelProtocol88API)
@@ -115,6 +140,7 @@ var modelConfigTestRules = []modelProtocolRule{
 }
 
 var modelGenerationTestRules = []modelProtocolRule{
+	{ModelChannelProtocolAutoDL, func(channel model.ModelChannel, _ string) bool { return IsAutoDLChannel(channel) }},
 	{"model:glm-tts", func(_ model.ModelChannel, modelName string) bool {
 		return strings.EqualFold(strings.TrimSpace(modelName), "glm-tts")
 	}},

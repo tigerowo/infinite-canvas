@@ -4,6 +4,18 @@ import { defaultConfig, filterChannelModelsByCapability, modelMatchesCapability,
 
 const videoAliases = ["lec-mj-wan-3-0-1080p", "lec-seed-2-0-900", "lec-seed-2-5-900"];
 
+test("AutoDL options preserve workflow lookup context and exclude audio from video selection", () => {
+    const models = ["minimax_h3_video", "wan2.2animate-v4-motion_retargeting", "indextts2-v1"];
+    const config = { ...defaultConfig, channelMode: "remote" as const, models, publicChannels: [
+        { id: "autodl", protocol: "autodl" as const, baseUrl: "https://autodl.example", models },
+    ] };
+    const options = selectableModelOptions(config, "video");
+    assert.deepEqual(options.map((option) => option.model), models.slice(0, 2));
+    assert.equal(options[0].protocol, "autodl");
+    assert.equal(options[0].baseUrl, "https://autodl.example");
+    assert.equal(resolveModelForCapability(config, "", "audio"), "indextts2-v1");
+});
+
 test("model picker excludes unpublished models and preserves selectable channel identities", () => {
     const config = { ...defaultConfig, channelMode: "remote" as const, models: ["sora-video", "gpt-5.5"], publicChannels: [
         { id: "a", protocol: "newapi" as const, models: ["sora-video", "sora-video", "sora-2", "gpt-5.5"] },

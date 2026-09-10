@@ -59,7 +59,7 @@ await context.route('**/api/**', async route=>{
  else if(path==='/api/v1/agent-skills') data=[{id:'user-skill',name:'我的测试 Skill',description:'编辑测试',source:'user',content:'test',enabled:true}];
  else if(path.includes('generation-logs')||path.includes('tasks')||path.includes('skills')||path.includes('channels')) data=[];
  else if(path.includes('prompts')||path.includes('assets')) data={items:[],total:0};
- else if(path.includes('storage/config')) data={mode:'server_sqlite_s3',allowUserProvider:false,allowUserGlobalProvider:true};
+ else if(path.includes('storage/config')) data={mode:'server_sqlite_s3',allowUserProvider:false,allowUserGlobalProvider:true,autoSyncAllAssets:process.env.EXT_MEDIA_RELIABILITY_AUTO_SYNC==='true'};
  await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({code:0,data})});
 });
 await context.route('**/fixture.mp4',route=>route.fulfill({contentType:'video/mp4',body:Buffer.from('fixture-invalid-video')}));
@@ -70,7 +70,7 @@ await context.addInitScript(({config})=>{
 },{config});
 const page=await context.newPage();
 const errors=[];page.on('pageerror',error=>errors.push(error.message));
-process.on('uncaughtException',async error=>{console.error(error.message);console.log(JSON.stringify({requests,errors,body:(await page.locator('body').innerText()).slice(-5000)},null,2));await page.screenshot({path:artifact('huabu-ui-failure.png'),fullPage:true});await browser.close();process.exit(1);});
+process.on('uncaughtException',async error=>{console.error(error.stack);console.log(JSON.stringify({requests,errors,body:(await page.locator('body').innerText()).slice(-5000)},null,2));await page.screenshot({path:artifact('huabu-ui-failure.png'),fullPage:true});await browser.close();process.exit(1);});
 await page.goto((process.env.EXT_MEDIA_RELIABILITY_TEST_URL || 'http://127.0.0.1:3001')+(process.argv[2]||'/'),{waitUntil:'networkidle',timeout:120000});
 console.log(JSON.stringify({url:page.url(),buttons:await page.getByRole('button').allTextContents(),comboboxes:await page.getByRole('combobox').evaluateAll(xs=>xs.map(x=>({text:x.textContent,label:x.getAttribute('aria-label')}))),editable:await page.locator('[contenteditable],textarea').evaluateAll(xs=>xs.map(x=>({tag:x.tagName,role:x.getAttribute('role'),placeholder:x.getAttribute('placeholder')}))),errors},null,2));
 await page.screenshot({path:artifact('huabu-repair-ui.png'),fullPage:true});
@@ -151,9 +151,11 @@ if(process.argv[2]==='/image') {
  await page.getByRole('button',{name:'开始创作',exact:true}).click();
  await page.getByText('云端保存失败',{exact:true}).first().waitFor({timeout:20000});
  assert.equal(imageTasks.size,1);
- assert.equal(await page.getByRole('button',{name:'重新同步',exact:true}).count(),1);
+ await page.getByRole('button',{name:'重新同步',exact:true}).waitFor();
  historyOnline=true;
+ const syncedHistory=page.waitForResponse(response=>response.url().endsWith('/api/v1/generation-logs/images')&&response.request().method()==='POST'&&response.status()===200);
  await page.getByRole('button',{name:'重新同步',exact:true}).click();
+ await syncedHistory;
  await page.getByRole('button',{name:'重新同步',exact:true}).waitFor({state:'hidden'});
  assert.equal(histories.size,1);
  storageOnline=true;

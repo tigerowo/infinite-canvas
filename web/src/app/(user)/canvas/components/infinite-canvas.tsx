@@ -82,9 +82,13 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         };
     }, []);
 
-    const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    const handleWheel = (event: React.WheelEvent<HTMLDivElement> | WheelEvent) => {
         const target = event.target instanceof Element ? event.target : null;
-        if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
+        if (event instanceof WheelEvent) {
+            if (!event.ctrlKey || !containerRef.current?.contains(target)) return;
+            event.preventDefault();
+            event.stopPropagation();
+        } else if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
 
         const delta = -event.deltaY;
         const factor = Math.pow(1.1, delta / 100);
@@ -203,8 +207,12 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             event.preventDefault();
         };
         container.addEventListener("wheel", preventWheelScroll, { passive: false });
-        return () => container.removeEventListener("wheel", preventWheelScroll);
-    }, [containerRef]);
+        document.addEventListener("wheel", handleWheel, { capture: true, passive: false });
+        return () => {
+            container.removeEventListener("wheel", preventWheelScroll);
+            document.removeEventListener("wheel", handleWheel, true);
+        };
+    }, [containerRef, handleWheel]);
 
     const temporaryTool = isSpacePressed;
     const activeTool = temporaryTool ? (tool === "select" ? "pan" : "select") : tool;

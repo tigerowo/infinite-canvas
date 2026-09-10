@@ -135,10 +135,10 @@ func HasActiveCloudStorage(ctx context.Context) (bool, error) {
 }
 
 // PublicStorageConfig 返回公开存储配置。
-func PublicStorageConfig() (model.PublicStorageSetting, error) {
+func PublicStorageConfig() (model.PublicStorageConfig, error) {
 	settings, err := repository.GetSettings()
 	if err != nil {
-		return model.PublicStorageSetting{}, err
+		return model.PublicStorageConfig{}, err
 	}
 	settings = normalizeSettings(settings)
 	storage := normalizePrivateStorageSetting(settings.Private.Storage)
@@ -150,7 +150,7 @@ func PublicStorageConfig() (model.PublicStorageSetting, error) {
 		mode = "hybrid"
 	}
 
-	return model.PublicStorageSetting{Mode: mode, AllowUserProvider: storage.AllowUserProvider, AllowUserGlobalProvider: storage.AllowUserGlobalProvider}, nil
+	return model.PublicStorageConfig{PublicStorageSetting: model.PublicStorageSetting{Mode: mode, AllowUserProvider: storage.AllowUserProvider, AllowUserGlobalProvider: storage.AllowUserGlobalProvider}, AutoSyncAllAssets: storage.AutoSyncAllAssets}, nil
 }
 
 // StorageObjectInfo 获取存储对象元数据。

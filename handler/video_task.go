@@ -92,6 +92,10 @@ func proxyAIVideoTaskRequest(w http.ResponseWriter, r *http.Request) {
 	body, contentType, err = normalizeVideoCreateBody(body, contentType, modelName, channel, upstreamPath)
 	if err != nil {
 		log.Printf("AI video normalize request failed: model=%s err=%v", modelName, err)
+		if service.IsAutoDLChannel(channel) {
+			Fail(w, err.Error())
+			return
+		}
 		Fail(w, "AI 接口请求失败")
 		return
 	}

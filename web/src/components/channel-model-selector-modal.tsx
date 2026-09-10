@@ -3,10 +3,12 @@
 import { ReloadOutlined } from "@ant-design/icons";
 import { App, Button, Checkbox, Flex, Input, Modal, Space, Tabs, Typography } from "antd";
 import { useMemo, useState } from "react";
+import { useAutoDLWorkflowNames } from "@/hooks/use-autodl-workflow";
 
 type ModelSelectTabKey = "new" | "current";
 
 type ChannelModelSelectorModalProps = {
+    channel?: { protocol?: string; baseUrl?: string };
     models: string[];
     sourceModels?: string[];
     onCancel: () => void;
@@ -15,8 +17,9 @@ type ChannelModelSelectorModalProps = {
     onModelsFetched?: (models: string[]) => void;
 };
 
-export function ChannelModelSelectorModal({ models, sourceModels = [], onCancel, onConfirm, onFetchModels, onModelsFetched }: ChannelModelSelectorModalProps) {
+export function ChannelModelSelectorModal({ channel, models, sourceModels = [], onCancel, onConfirm, onFetchModels, onModelsFetched }: ChannelModelSelectorModalProps) {
     const { message } = App.useApp();
+    const modelLabel = useAutoDLWorkflowNames(channel ? [channel] : []);
     const [source, setSource] = useState(() => uniqueModels(sourceModels));
     const [existing, setExisting] = useState(() => uniqueModels(models));
     const [selected, setSelected] = useState(() => uniqueModels(models));
@@ -27,8 +30,8 @@ export function ChannelModelSelectorModal({ models, sourceModels = [], onCancel,
     const groups = useMemo(() => buildModelGroups(source, existing), [source, existing]);
     const activeModels = useMemo(() => {
         const normalizedKeyword = keyword.trim().toLowerCase();
-        return groups[activeTab].filter((model) => model.toLowerCase().includes(normalizedKeyword));
-    }, [activeTab, groups, keyword]);
+        return groups[activeTab].filter((model) => `${model} ${modelLabel(model, channel)}`.toLowerCase().includes(normalizedKeyword));
+    }, [activeTab, channel, groups, keyword, modelLabel]);
     const activeSelectedCount = activeModels.filter((model) => selected.includes(model)).length;
 
     const fetchModels = async () => {
@@ -102,7 +105,7 @@ export function ChannelModelSelectorModal({ models, sourceModels = [], onCancel,
                 <Flex gap={12} wrap>
                     <Input.Search placeholder="搜索模型" allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} style={{ flex: "1 1 260px" }} />
                     <Space.Compact style={{ flex: "1 1 320px" }}>
-                        <Input value={newModel} placeholder="输入模型名称" onChange={(event) => setNewModel(event.target.value)} onPressEnter={addModel} />
+                        <Input value={newModel} placeholder={channel?.protocol === "autodl" ? "输入工作流 ID" : "输入模型名称"} onChange={(event) => setNewModel(event.target.value)} onPressEnter={addModel} />
                         <Button onClick={addModel}>增加模型</Button>
                         <Button icon={<ReloadOutlined />} loading={fetching} onClick={() => void fetchModels()}>
                             拉取模型列表
@@ -135,7 +138,7 @@ export function ChannelModelSelectorModal({ models, sourceModels = [], onCancel,
                         <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", columnGap: 24, rowGap: 12 }}>
                             {activeModels.map((model) => (
                                 <Checkbox key={model} checked={selected.includes(model)} onChange={(event) => toggleModel(model, event.target.checked)}>
-                                    <Typography.Text style={{ wordBreak: "break-all" }}>{model}</Typography.Text>
+                                    <Typography.Text title={model} style={{ wordBreak: "break-all" }}>{modelLabel(model, channel)}</Typography.Text>
                                 </Checkbox>
                             ))}
                         </div>
