@@ -47,12 +47,14 @@ type CanvasNodeProps = {
     onHoverEnd: (nodeId: string) => void;
     onConnectStart: (event: React.PointerEvent, nodeId: string, handleType: "source" | "target") => void;
     onResize: (nodeId: string, width: number, height: number, position?: Position) => void;
+    onMediaLoaded: (nodeId: string, source: string, width: number, height: number) => void;
     onContentChange: (nodeId: string, content: string) => void;
     onTitleChange: (nodeId: string, title: string) => void;
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (node: CanvasNodeData) => void;
     onRetry?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
+    onMediaActivity?: () => void;
     onSelectReference?: (nodeId: string) => void;
     onClosePanel?: () => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
@@ -78,6 +80,7 @@ type NodeContentRendererProps = {
     mentionReferences: CanvasResourceReference[];
     onRetry?: (node: CanvasNodeData) => void;
     onViewImage?: (node: CanvasNodeData) => void;
+    onMediaActivity?: () => void;
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
     onMoveStart?: (event: React.PointerEvent<HTMLButtonElement>) => void;
@@ -111,12 +114,14 @@ export const CanvasNode = React.memo(function CanvasNode({
     onHoverEnd,
     onConnectStart,
     onResize,
+    onMediaLoaded,
     onContentChange,
     onTitleChange,
     onToggleBatch,
     onSetBatchPrimary,
     onRetry,
     onViewImage,
+    onMediaActivity,
     onSelectReference,
     onClosePanel,
     onContextMenu,
@@ -381,6 +386,14 @@ export const CanvasNode = React.memo(function CanvasNode({
                 if (referenceSelectionState) event.preventDefault();
                 else onContextMenu(event, data.id);
             }}
+            onLoadCapture={(event) => {
+                const image = event.target;
+                if (image instanceof HTMLImageElement) onMediaLoaded(data.id, image.getAttribute("src") || "", image.naturalWidth, image.naturalHeight);
+            }}
+            onLoadedMetadataCapture={(event) => {
+                const video = event.target;
+                if (video instanceof HTMLVideoElement) onMediaLoaded(data.id, video.getAttribute("src") || "", video.videoWidth, video.videoHeight);
+            }}
         >
             {!referenceSelectionState ? <div
                 className="absolute left-3 top-[-28px] z-[65] max-w-[calc(100%-24px)]"
@@ -444,7 +457,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                 }}
                 onPointerDown={(event) => {
                     const target = event.target instanceof Element ? event.target : null;
-                    if (target?.closest("button,input,textarea,select,label,a,audio,video,[role='button'],[role='combobox'],[role='radio'],[role='switch'],[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-handle='true']")) {
+                    if (target?.closest("button,input,textarea,select,label,a,audio,video[controls],[role='button'],[role='combobox'],[role='radio'],[role='switch'],[contenteditable='true'],[data-canvas-no-zoom],[data-canvas-handle='true']")) {
                         event.stopPropagation();
                         return;
                     }
@@ -505,6 +518,7 @@ export const CanvasNode = React.memo(function CanvasNode({
                             onStopEditing={() => setIsEditingContent(false)}
                             onRetry={onRetry}
                             onViewImage={onViewImage}
+                            onMediaActivity={onMediaActivity}
                             onToggleBatch={() => onToggleBatch?.(data.id)}
                             onSetBatchPrimary={() => onSetBatchPrimary?.(data)}
                             onMoveStart={(event) => onMouseDown(event, data.id)}
@@ -777,7 +791,7 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
     return content;
 }
 
-function VideoNodeContent({ node, theme, isSelected, onViewImage }: NodeContentRendererProps) {
+function VideoNodeContent({ node, theme, isSelected, onViewImage, onMediaActivity }: NodeContentRendererProps) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [mediaDurationMs, setMediaDurationMs] = useState(0);
@@ -801,7 +815,7 @@ function VideoNodeContent({ node, theme, isSelected, onViewImage }: NodeContentR
             </div>
         );
     const controlStyle = { background: theme.toolbar.panel, color: theme.toolbar.item };
-    const controlClassName = "absolute bottom-2 z-20 flex size-7 items-center justify-center rounded-md opacity-70 backdrop-blur transition-opacity hover:opacity-100";
+    const controlClassName = "absolute bottom-2 z-[60] flex size-7 items-center justify-center rounded-md opacity-70 backdrop-blur transition-opacity hover:opacity-100";
     const keepVideoFocus = (event: React.MouseEvent<HTMLButtonElement>) => {
         event.preventDefault();
         event.stopPropagation();
@@ -809,7 +823,7 @@ function VideoNodeContent({ node, theme, isSelected, onViewImage }: NodeContentR
     };
     return (
         <div className="relative h-full w-full overflow-hidden rounded-[18px] bg-black">
-            <video ref={videoRef} src={node.metadata.content} tabIndex={-1} playsInline className="h-full w-full object-contain outline-none" onLoadStart={() => { setVideoTime(0); setMediaDurationMs(0); }} onLoadedMetadata={(event) => setMediaDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)} onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
+            <video ref={videoRef} src={node.metadata.content} tabIndex={-1} playsInline className="h-full w-full object-contain outline-none" onLoadStart={() => { setVideoTime(0); setMediaDurationMs(0); }} onLoadedMetadata={(event) => setMediaDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1000 : 0)} onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)} onPlay={() => { setIsPlaying(true); onMediaActivity?.(); }} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
             {mediaDurationMs > 0 ? <span className="pointer-events-none absolute left-2 top-2 z-20 flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium opacity-70 backdrop-blur" style={controlStyle}>{new Date(mediaDurationMs).toISOString().slice(mediaDurationMs >= 3_600_000 ? 11 : 14, 19)}</span> : null}
             <button type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} className={`${controlClassName} left-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); togglePlayback(); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
                 {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
@@ -817,7 +831,7 @@ function VideoNodeContent({ node, theme, isSelected, onViewImage }: NodeContentR
             <button type="button" title="放大预览" aria-label="放大预览" className={`${controlClassName} right-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); videoRef.current?.pause(); onViewImage?.(node); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
                 <Maximize2 className="size-3.5" />
             </button>
-            <div className="absolute bottom-2 left-11 right-11 z-20 flex h-7 items-center" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
+            <div className="absolute bottom-2 left-11 right-11 z-[60] flex h-7 items-center" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.stopPropagation()} onClick={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()}>
                 <input
                     type="range"
                     min={0}
@@ -841,7 +855,7 @@ function VideoNodeContent({ node, theme, isSelected, onViewImage }: NodeContentR
     );
 }
 
-function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
+function AudioNodeContent({ node, theme, onMediaActivity }: NodeContentRendererProps) {
     if (!node.metadata?.content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
@@ -855,7 +869,7 @@ function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
                 <Music2 className="size-4 shrink-0" />
                 <span className="truncate">{node.title || "音频"}</span>
             </div>
-            <audio src={node.metadata.content} controls className="w-full" data-canvas-no-zoom />
+            <audio src={node.metadata.content} controls className="w-full" data-canvas-no-zoom onPlay={onMediaActivity} />
         </div>
     );
 }

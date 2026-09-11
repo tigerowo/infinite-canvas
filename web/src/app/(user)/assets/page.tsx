@@ -1,8 +1,9 @@
 "use client";
+import { useCopyMaterial } from "@/extensions/media-lifecycle/use-copy-material";
 
 import { Copy, Download, PencilLine, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { App, Button, Card, Drawer, Empty, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Drawer, Empty, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 
 import { useCopyText } from "@/hooks/use-copy-text";
@@ -11,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 import { AssetFormModal } from "@/components/assets/asset-form-modal";
+import { userAssetDragPayload, writeAssetDrag } from "@/extensions/media-reliability/asset-dnd";
 
 const kindOptions = [
     { label: "全部", value: "all" },
@@ -25,6 +27,7 @@ export default function AssetsPage() {
     const copyText = useCopyText();
     const assetInputRef = useRef<HTMLInputElement>(null);
     const assets = useAssetStore((state) => state.assets);
+    const syncError = useAssetStore((state) => state.syncError);
     const addAsset = useAssetStore((state) => state.addAsset);
     const removeAsset = useAssetStore((state) => state.removeAsset);
     const [keyword, setKeyword] = useState("");
@@ -140,6 +143,7 @@ export default function AssetsPage() {
                     </div>
 
                     <div className="mx-auto mt-6 grid max-w-6xl gap-3 text-left">
+                        {syncError && <Alert type="warning" showIcon title="素材尚未同步" description={syncError} />}
                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
                                 <div className="text-xs font-medium text-stone-500 dark:text-stone-400">类型</div>
@@ -225,11 +229,14 @@ export default function AssetsPage() {
 }
 
 function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
+    const copyMaterial = useCopyMaterial();
     const cover = asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "");
     const summary = assetSummary(asset);
     return (
         <Card
             hoverable
+            draggable
+            onDragStart={(event) => writeAssetDrag(event, userAssetDragPayload(asset))}
             className="overflow-hidden"
             styles={{ body: { padding: 0 } }}
             cover={
@@ -269,6 +276,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                 </div>
             </button>
             <div className="flex items-center gap-2 px-4 pb-4">
+                {asset.kind !== "text" && asset.data.storageKey?.startsWith("server:") ? <Button size="small" onClick={() => void copyMaterial(asset.data.storageKey)}>复制 ID</Button> : null}
                 <Button size="small" onClick={onOpen}>
                     查看
                 </Button>

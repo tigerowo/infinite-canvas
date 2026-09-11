@@ -3,6 +3,7 @@ package repository
 import (
 	"errors"
 	"strings"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -25,33 +26,56 @@ func ListUserCanvasProjects(userID string) ([]model.CanvasProject, error) {
 
 func SaveUserCanvasProject(
 	project model.CanvasProject,
+	baseUpdatedAt ...*string,
 ) (model.CanvasProject, error) {
 	db, err := DB()
 	if err != nil {
 		return project, err
 	}
+	var saved model.CanvasProject
+	err = medialifecycle.WithLock(db,func(tx *gorm.DB,p *medialifecycle.Policy)error{
+		var saveErr error
+		saved,saveErr = saveCanvasProject(tx,project,baseUpdatedAt...)
+		if saveErr != nil { return saveErr }
+		if saved.DeletedAt != "" { return nil }
+		return medialifecycle.TrackRecord(tx,*p,&saved)
+	})
+	return saved,err
+}
+
+func saveCanvasProject(db *gorm.DB,project model.CanvasProject,baseUpdatedAt ...*string)(model.CanvasProject,error){
 
 	project.UserID = strings.TrimSpace(project.UserID)
 	project.ID = strings.TrimSpace(project.ID)
 
 	var current model.CanvasProject
-	err = db.First(
+	err := db.First(
 		&current,
 		"user_id = ? AND id = ?",
 		project.UserID,
 		project.ID,
 	).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if len(baseUpdatedAt) > 0 && baseUpdatedAt[0] != nil && *baseUpdatedAt[0] != "" {
+			return current, canvasSyncError("画布版本已更新，请重新同步")
+		}
 		return project, db.Create(&project).Error
 	}
 	if err != nil {
 		return project, err
 	}
+	if len(baseUpdatedAt) > 0 && baseUpdatedAt[0] != nil && (current.DeletedAt != "" || current.UpdatedAt != *baseUpdatedAt[0] || project.UpdatedAt <= current.UpdatedAt) {
+		return current, canvasSyncError("画布版本已更新，请重新同步")
+	}
 	if current.DeletedAt != "" || current.UpdatedAt > project.UpdatedAt {
 		return current, nil
 	}
 
-	result := db.Model(&model.CanvasProject{}).
+	query := db.Model(&model.CanvasProject{})
+	if len(baseUpdatedAt) > 0 && baseUpdatedAt[0] != nil {
+		query = query.Where("updated_at = ?", *baseUpdatedAt[0])
+	}
+	result := query.
 		Where(
 			"user_id = ? AND id = ? AND deleted_at = '' AND updated_at <= ?",
 			project.UserID,
@@ -66,6 +90,9 @@ func SaveUserCanvasProject(
 		return project, result.Error
 	}
 	if result.RowsAffected == 0 {
+		if len(baseUpdatedAt) > 0 && baseUpdatedAt[0] != nil {
+			return current, canvasSyncError("画布版本已更新，请重新同步")
+		}
 		if err := db.First(
 			&current,
 			"user_id = ? AND id = ?",
@@ -78,6 +105,11 @@ func SaveUserCanvasProject(
 	}
 	return project, nil
 }
+
+type canvasSyncError string
+
+func (err canvasSyncError) Error() string       { return string(err) }
+func (err canvasSyncError) SafeMessage() string { return string(err) }
 
 func SaveUserCanvasProjects(
 	userID string,
@@ -118,7 +150,14 @@ func SoftDeleteUserCanvasProjects(
 		})
 	}
 
-	return db.Clauses(clause.OnConflict{
+	return medialifecycle.WithLock(db,func(tx *gorm.DB,p *medialifecycle.Policy)error{
+	if p.Clearing { return medialifecycle.ErrClearing }
+	for _,id:=range ids{
+		key:=medialifecycle.Key(userID,"canvas",id)
+		if err:=tx.Model(&medialifecycle.Entity{}).Where("entity_key = ?",key).Updates(map[string]any{"state":medialifecycle.Deleted,"version":gorm.Expr("version + 1")}).Error;err!=nil{return err}
+		if err:=tx.Where("entity_key = ?",key).Delete(&medialifecycle.Reference{}).Error;err!=nil{return err}
+	}
+	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "user_id"},
 			{Name: "id"},
@@ -129,6 +168,7 @@ func SoftDeleteUserCanvasProjects(
 			"deleted_at",
 		}),
 	}).Create(&records).Error
+	})
 }
 
 func CleanupDeletedCanvasProjects(before string) error {
@@ -137,8 +177,9 @@ func CleanupDeletedCanvasProjects(before string) error {
 		return err
 	}
 
+	// Keep the lightweight tombstone: old browsers can return after any cleanup window.
 	return db.Where(
 		"deleted_at <> '' AND deleted_at < ?",
 		before,
-	).Delete(&model.CanvasProject{}).Error
+	).Model(&model.CanvasProject{}).Update("project_data", "").Error
 }

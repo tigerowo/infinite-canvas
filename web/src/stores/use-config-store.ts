@@ -205,7 +205,7 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
     const fallbackModel = validDefault(modelChannel.defaultModel, textModels) || fallbackTextModel;
     const fallbackImageModel = validDefault(modelChannel.defaultImageModel, imageModels) || preferredModel(imageModels, isImageModelName);
     const fallbackVideoModel = validDefault(modelChannel.defaultVideoModel, videoModels) || preferredModel(videoModels, isVideoModelName);
-    const fallbackAudioModel = preferredModel(audioModels, isAudioModelName);
+    const fallbackAudioModel = validDefault(modelChannel.defaultAudioModel, audioModels) || preferredModel(audioModels, isAudioModelName);
     return {
         ...config,
         channelMode,
@@ -502,7 +502,11 @@ export function useEffectiveConfig() {
     const token = useUserStore((state) => state.token);
     const user = useUserStore((state) => state.user);
     const canUseRemoteChannel = Boolean(token && user && (user.role === "admin" || modelChannel?.allowUserRemoteChannel === true));
-    return useMemo(() => resolveEffectiveConfig(config, modelChannel, canUseRemoteChannel), [canUseRemoteChannel, config, modelChannel]);
+    return useMemo(() => {
+        const effective = resolveEffectiveConfig(config, modelChannel, canUseRemoteChannel);
+        if (token && user) return effective;
+        return { ...effective, models: [], imageModels: [], videoModels: [], textModels: [], audioModels: [], publicChannels: [], localChannels: [], model: "", imageModel: "", videoModel: "", textModel: "", audioModel: "" };
+    }, [canUseRemoteChannel, config, modelChannel, token, user]);
 }
 
 export function buildApiUrl(baseUrl: string, path: string) {

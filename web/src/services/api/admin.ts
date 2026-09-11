@@ -200,6 +200,7 @@ export type AdminPublicModelChannelSettings = {
     defaultImageModel: string;
     defaultVideoModel: string;
     defaultTextModel: string;
+    defaultAudioModel: string;
     systemPrompt: string;
     systemPrompts: {
         image: string;
@@ -328,10 +329,6 @@ export type AdminAICallLogListResponse = {
 
 export async function fetchAdminAICallLogs(token: string, query: AdminUserQuery = {}) {
     return apiGet<AdminAICallLogListResponse>("/api/admin/ai-logs", compactApiParams(query), token);
-}
-
-export async function deleteAdminAICallLogs(token: string, olderThanDays = 7) {
-    return apiDelete<{ removedFiles: number }>(`/api/admin/ai-logs?olderThanDays=${encodeURIComponent(String(olderThanDays))}`, token);
 }
 
 export type AdminSettings = {

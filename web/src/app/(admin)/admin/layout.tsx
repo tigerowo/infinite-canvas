@@ -19,6 +19,7 @@ const adminMenus = [
     { key: "/admin/skills", icon: <ToolOutlined />, label: "Skill 管理" },
     { key: "/admin/assets", icon: <PictureOutlined />, label: "素材库" },
     { key: "/admin/settings", icon: <SettingOutlined />, label: "系统设置" },
+    { key: "/admin/retention", icon: <AuditOutlined />, label: "数据保留与清理" },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
@@ -30,7 +31,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
     const user = useUserStore((state) => state.user);
     const isReady = useUserStore((state) => state.isReady);
     const logout = useUserStore((state) => state.clearSession);
-    const activeKey = pathname.startsWith("/admin/settings")
+    const activeKey = pathname.startsWith("/admin/retention") ? "/admin/retention" : pathname.startsWith("/admin/settings")
         ? "/admin/settings"
         : pathname.startsWith("/admin/assets")
           ? "/admin/assets"
@@ -111,7 +112,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                     <Flex align="center" gap={8} style={{ minWidth: 0 }}>
                     <Button aria-label="打开后台导航" icon={<MenuOutlined />} className="!h-11 !w-11 lg:!hidden" onClick={() => setMobileNavOpen(true)} />
                     <Typography.Title level={5} style={{ margin: 0, whiteSpace: "nowrap" }}>
-                        {pageTitle}
+                        {pathname.startsWith("/admin/retention") ? "数据保留与清理" : pageTitle}
                     </Typography.Title>
                     </Flex>
                     <Flex align="center" gap={4}>

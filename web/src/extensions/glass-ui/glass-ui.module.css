@@ -81,14 +81,29 @@
 }
 
 .workbench {
-    background: linear-gradient(145deg, var(--glass-highlight), transparent 55%), var(--glass-surface-strong);
+    background: var(--card) !important;
+    background-color: var(--card) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
     border: 1px solid var(--glass-border);
     border-radius: 24px;
     box-shadow:
         var(--glass-shadow),
         inset 0 1px 0 var(--glass-highlight);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
+}
+
+.layoutSwitchActive {
+    border-color: var(--glass-accent) !important;
+    color: #fff !important;
+    background: var(--glass-accent) !important;
+    opacity: 1 !important;
+    box-shadow: none !important;
+}
+
+.layoutSwitchInactive {
+    color: var(--foreground) !important;
+    background: var(--glass-control) !important;
+    border-color: transparent !important;
 }
 
 .nodeToolbar button {

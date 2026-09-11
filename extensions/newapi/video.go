@@ -3,6 +3,7 @@ package newapi
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 )
 
 type VideoTask struct {
@@ -72,7 +73,21 @@ func ParseVideoTask(payload []byte) VideoTask {
 	if result.Error != "" {
 		result.ErrorDetail = string(payload)
 	}
-	// Download through the gateway content endpoint. Provider IDs and metadata
-	// URLs cannot change polling identity, status or the resulting video URL.
+	// Accept only the explicit completed-result contract; arbitrary metadata URLs
+	// and provider IDs must not change task identity or imply completion.
+	if result.Status == "completed" {
+		var metadata struct {
+			Result struct {
+				Version int    `json:"version"`
+				URL     string `json:"url"`
+			} `json:"canvas_video_result"`
+		}
+		if json.Unmarshal(root["metadata"], &metadata) == nil && metadata.Result.Version == 1 {
+			u, err := url.Parse(metadata.Result.URL)
+			if err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Hostname() != "" && u.User == nil {
+				result.VideoURL = metadata.Result.URL
+			}
+		}
+	}
 	return result
 }

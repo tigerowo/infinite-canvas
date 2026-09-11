@@ -1,4 +1,7 @@
 "use client";
+import { useMaterialDraft, protectSubmittedReferences, type DraftReference } from "@/extensions/media-lifecycle/use-material-draft";
+import { assistantDraftReference } from "@/extensions/media-lifecycle/canvas-drafts";
+import { referenceLimitError } from "@/extensions/media-reliability/reference-limit";
 
 import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -73,7 +76,7 @@ type CanvasAssistantPanelProps = {
     onOpenUpload: () => void;
     onOpenAssets: () => void;
     getAgentContext: (state: CanvasAgentState) => CanvasAgentContext;
-    onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[]) => Promise<CanvasAgentToolResult>;
+    onExecuteAction: (action: CanvasAgentAction, messageReferenceNodeIds: string[], externalReferences?: CanvasAssistantReference[]) => Promise<CanvasAgentToolResult>;
     onCollapseStart: () => void;
     onCollapse: () => void;
     initialRequest?: { prompt: string; references: CanvasAssistantReference[]; skills: CanvasAgentSkillSelection[] } | null;
@@ -131,6 +134,7 @@ export function CanvasAssistantPanel({
     const [closing, setClosing] = useState(false);
     const [resizing, setResizing] = useState(false);
     const [composerReferenceIds, setComposerReferenceIds] = useState<string[]>([]);
+    const [externalDrafts, setExternalDrafts] = useState<DraftReference[]>([]);
     const [selectedSkills, setSelectedSkills] = useState<CanvasAgentSkillSelection[]>([]);
     const [removedReferenceIds, setRemovedReferenceIds] = useState<Set<string>>(new Set());
     const [pendingDelete, setPendingDelete] = useState<PendingDeleteConfirmation | null>(null);
@@ -163,14 +167,19 @@ export function CanvasAssistantPanel({
     const selectedNodeKey = useMemo(() => Array.from(selectedNodeIds).sort().join(","), [selectedNodeIds]);
 
     const resourceReferences = useMemo(() => buildAllCanvasResourceReferences(nodes), [nodes]);
+    useMaterialDraft(`canvas:${canvasId}:assistant:${mode}:${resolvedActiveSessionId}`, prompt, externalDrafts,
+        (text, refs) => { setPrompt(text); setExternalDrafts(refs); setComposerReferenceIds(refs.map((ref) => ref.id)); },
+        (refs, text) => { setExternalDrafts((value) => [...value, ...refs]); setComposerReferenceIds((ids) => [...ids, ...refs.map((ref) => ref.id)]); setPrompt((value) => value + text + (refs.length ? " " + refs.map((ref) => assistantDraftReference(ref).label).join(" ") : "")); },
+        undefined, composerReferenceIds.length, '[data-media-assistant-draft]');
+    const externalById = useMemo(() => new Map(externalDrafts.map((ref) => [ref.id, assistantDraftReference(ref)])), [externalDrafts]);
     const resourceReferenceById = useMemo(() => new Map(resourceReferences.map((reference) => [reference.nodeId, reference])), [resourceReferences]);
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
     const resolveReferences = useCallback((ids: string[]) => ids.flatMap((id) => {
         const node = nodeById.get(id);
         const resource = resourceReferenceById.get(id);
-        const reference = node && resource ? nodeToReference(node, resource) : null;
+        const reference = externalById.get(id) || (node && resource ? nodeToReference(node, resource) : null);
         return reference ? [reference] : [];
-    }), [nodeById, resourceReferenceById]);
+    }), [nodeById, resourceReferenceById, externalById]);
     const composerReferences = useMemo(() => resolveReferences(composerReferenceIds), [composerReferenceIds, resolveReferences]);
     const pendingReferences = useMemo(() => {
         const pendingClickNodeId = referenceNodeClick.version > consumedReferenceNodeClickVersionRef.current ? referenceNodeClick.nodeId : null;
@@ -264,7 +273,7 @@ export function CanvasAssistantPanel({
         setSelectedSkills((current) => current.filter((skill) => skill.id !== id || skill.source !== source));
     };
 
-    const executeCanvasTool = async (action: CanvasAgentAction, messageReferenceNodeIds: string[], activeSkills: CanvasAgentSkillSelection[], provider: "api" | "codex", signal: AbortSignal): Promise<CanvasAgentToolResult> => {
+    const executeCanvasTool = async (action: CanvasAgentAction, messageReferenceNodeIds: string[], activeSkills: CanvasAgentSkillSelection[], provider: "api" | "codex", signal: AbortSignal, externalReferences: CanvasAssistantReference[] = []): Promise<CanvasAgentToolResult> => {
         signal.throwIfAborted();
         if (action.name === "read_skill_file") {
             const skillId = typeof action.arguments.skillId === "string" ? action.arguments.skillId : "";
@@ -278,7 +287,7 @@ export function CanvasAssistantPanel({
                 return { ok: false, code: "skill_file_not_found", message: error instanceof Error ? error.message : "Skill 文件读取失败" };
             }
         }
-        if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds);
+        if (action.name !== "delete_node") return onExecuteAction(action, messageReferenceNodeIds, externalReferences);
         const nodeId = typeof action.arguments.nodeId === "string" ? action.arguments.nodeId : "";
         const node = nodes.find((item) => item.id === nodeId);
         let confirmed: boolean;
@@ -413,6 +422,10 @@ export function CanvasAssistantPanel({
         }));
 
         const references = savedReferences || composerReferences;
+        const limitError = referenceLimitError(references.filter((ref) => ref.type !== CanvasNodeType.Text).length);
+        if (limitError) { appMessage.warning(limitError); return; }
+        try { await protectSubmittedReferences(references, `canvas:${canvasId}:assistant:${mode}:${resolvedActiveSessionId}`); }
+        catch (error) { appMessage.error(error instanceof Error ? error.message : "参考素材准备失败"); return; }
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, skills: activeSkills, skillsSelected: showSelectedSkills, status: "success" };
         const assistantId = nanoid();
@@ -420,6 +433,7 @@ export function CanvasAssistantPanel({
         appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
         setPrompt("");
         setComposerReferenceIds([]);
+        setExternalDrafts([]);
         setSelectedSkills([]);
         setRemovedReferenceIds(new Set(selectedNodeIds));
 
@@ -472,7 +486,7 @@ export function CanvasAssistantPanel({
                 contextCheckpoint: session.contextCheckpoint,
                 preferredJsonMode: session.jsonToolFallbackKey === jsonToolFallbackKey ? session.jsonToolFallbackMode || "structured-json" : undefined,
                 getContext: getAgentContext,
-                executeAction: (action, signal = controller.signal) => executeCanvasTool(action, messageReferenceNodeIds, activeSkills, mode, signal),
+                executeAction: (action, signal = controller.signal) => executeCanvasTool(action, messageReferenceNodeIds, activeSkills, mode, signal, references.filter((reference) => !nodeById.has(reference.id))),
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
                 onCheckpoint: (checkpoint) =>
@@ -670,6 +684,7 @@ export function CanvasAssistantPanel({
                             const removedSelectedIds = composerReferenceIds.filter((id) => selectedNodeIds.has(id) && !ids.includes(id));
                             if (removedSelectedIds.length) setRemovedReferenceIds((previous) => new Set([...previous, ...removedSelectedIds]));
                             setComposerReferenceIds(ids);
+                            setExternalDrafts((refs) => refs.filter((ref) => ids.includes(ref.id)));
                         }}
                         onSubmit={submit}
                         onStop={() => abortRef.current?.abort()}

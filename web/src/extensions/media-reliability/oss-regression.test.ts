@@ -64,6 +64,29 @@ function browser(disk = new Map<string, unknown>()) {
     return { disk, calls, load, switchUser, signHook: (fn: () => void) => { beforeSign = fn; }, uploads: () => uploads };
 }
 
+test("deduplicated image caching preserves URLs used by existing history cards", async () => {
+    const app = browser();
+    const images = app.load("@/services/image-storage");
+    const original = await images.setImageBlob("server:immutable", new Blob(["fixture"], { type: "image/png" }));
+    const repeated = await images.setImageBlob("server:immutable", new Blob(["fixture"], { type: "image/png" }));
+    assert.equal(repeated, original);
+    assert.equal(await (await fetch(original)).text(), "fixture");
+});
+
+test("history restores promoted OSS identity, caches it and works after reload", async () => {
+    const app = browser();
+    await app.load("@/extensions/media-reliability/identity").rememberMediaIdentity("image:old", "server:restored");
+    const [ref] = await app.load("@/extensions/media-reliability/history-references").restoreHistoryImages([{ storageKey: "image:old", dataUrl: "blob:expired" }], true);
+    assert.equal(ref.storageKey, "server:restored");
+    assert.ok(ref.dataUrl.startsWith("blob:"));
+    const fresh = browser(app.disk);
+    const [restored] = await fresh.load("@/extensions/media-reliability/history-references").restoreHistoryImages([{ storageKey: ref.storageKey, dataUrl: "" }], true);
+    assert.equal(restored.storageKey, ref.storageKey);
+    assert.ok(restored.dataUrl.startsWith("blob:"));
+    assert.equal(fresh.calls.length, 0);
+    assert.equal(app.uploads(), 0);
+});
+
 test("model signing reuses server identity and discards an account switched response", async () => {
     const app = browser();
     const { publicImageURL } = app.load("@/extensions/public-media/references");
@@ -115,6 +138,22 @@ test("history cleanup never deletes cloud objects or an offline only copy", asyn
     assert.ok(await media.getMediaBlob("video:only-copy"));
     assert.equal(await images.getImageBlob("server:shared"), null);
     assert.equal(app.calls.length, 0);
+});
+
+test("played server media is cached once and reused after reload", async () => {
+    const app = browser();
+    const media = app.load("@/services/file-storage");
+    const urls = await Promise.all([
+        media.cacheServerMediaLocally("server:played-video"),
+        media.cacheServerMediaLocally("server:played-video"),
+    ]);
+    assert.ok(urls.every((url: string) => url.startsWith("blob:")));
+    assert.equal(app.calls.filter((call) => call.url.includes("played-video")).length, 1);
+
+    const reloaded = browser(app.disk);
+    const restored = await reloaded.load("@/services/file-storage").resolveMediaUrl("server:played-video");
+    assert.ok(restored.startsWith("blob:"));
+    assert.equal(reloaded.calls.length, 0);
 });
 
 test("remote archive sends only a source URL and automatic sync survives reload", async () => {

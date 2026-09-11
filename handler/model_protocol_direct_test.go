@@ -50,9 +50,9 @@ func TestModelProtocolRequestGoldens(t *testing.T) {
 			want: `{"model":"bytedance/seedream-v4-text-to-image","input":{"prompt":"scene","image_size":"landscape_16_9","image_resolution":"4K","max_images":3}}`,
 		},
 		{
-			name: "apimart sora caps resolution and images", protocol: "apimart", model: "sora-2",
+			name: "apimart sora caps resolution and preserves images", protocol: "apimart", model: "sora-2",
 			body: `{"prompt":"scene","size":"1920x1080","seconds":"5s","resolution_name":"1080","image":["https://media.invalid/first.png","https://media.invalid/last.png"],"preset":"x"}`,
-			want: `{"model":"sora-2","prompt":"scene","duration":5,"resolution":"720p","image_urls":["https://media.invalid/first.png"]}`,
+			want: `{"model":"sora-2","prompt":"scene","duration":5,"resolution":"720p","image_urls":["https://media.invalid/first.png","https://media.invalid/last.png"]}`,
 		},
 		{
 			name: "apimart kling indexed shots", protocol: "apimart", model: "kling-v3",

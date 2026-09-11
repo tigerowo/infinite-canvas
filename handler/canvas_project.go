@@ -18,7 +18,8 @@ func UserCanvasProjects(w http.ResponseWriter, r *http.Request) {
 
 func SaveUserCanvasProject(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Data json.RawMessage `json:"data"`
+		Data          json.RawMessage `json:"data"`
+		BaseUpdatedAt *string         `json:"base_updated_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil ||
 		len(request.Data) == 0 {
@@ -29,6 +30,7 @@ func SaveUserCanvasProject(w http.ResponseWriter, r *http.Request) {
 	project, err := service.SaveCurrentUserCanvasProject(
 		r.Context(),
 		request.Data,
+		request.BaseUpdatedAt,
 	)
 	if err != nil {
 		FailError(w, err)

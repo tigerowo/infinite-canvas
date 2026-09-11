@@ -1,4 +1,14 @@
 "use client";
+import { createHistoryStore } from "@/extensions/media-lifecycle/history-store";
+import { touchLifecycleEntity } from "@/extensions/media-lifecycle/activity";
+import { createHistoryWriteQueue, mergeHistoryRefresh } from "@/extensions/media-lifecycle/history-write";
+import { useMaterialDraft, protectSubmittedReferences } from "@/extensions/media-lifecycle/use-material-draft";
+import { retryTaskArchive } from "@/extensions/media-lifecycle/task-recovery";
+import { taskLookupMessage, preserveTerminalHistory } from "@/extensions/media-reliability/task-state";
+import { useHistoryRefresh } from "@/extensions/media-reliability/use-history-refresh";
+import { restoreHistoryImages } from "@/extensions/media-reliability/history-references";
+import { AdaptiveMediaFrame } from "@/extensions/media-reliability/adaptive-media-frame";
+import { referenceLimitError } from "@/extensions/media-reliability/reference-limit";
 
 import {
     AlertCircle,
@@ -27,7 +37,6 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Segmented, Tag, Typography } from "antd";
-import localforage from "localforage";
 import { saveAs } from "file-saver";
 
 import { ImageSettingsPanel, imageFormatLabel, imageQualityLabel, imageSizeLabel, imageSizeOptions } from "@/components/image-settings-panel";
@@ -51,6 +60,7 @@ import type { ReferenceImage } from "@/types/image";
 import { archiveGeneratedMedia } from "@/extensions/media-reliability/archive";
 import { mediaSession, assertMediaSession } from "@/extensions/media-reliability/cache";
 import { mapMedia } from "@/extensions/media-reliability/snapshot";
+import { ASSET_DND_TYPE, hasSupportedDrop, readAssetDrag, readDroppedFiles, writeAssetDrag } from "@/extensions/media-reliability/asset-dnd";
 
 type GeneratedImage = {
     archiveError?: string;
@@ -88,6 +98,7 @@ type GenerationResult = {
 };
 
 type GenerationLog = {
+    archiveRecovery?: number;
     id: string;
     createdAt: number;
     title: string;
@@ -129,8 +140,9 @@ const WORKBENCH_LAYOUT_KEY = "infinite-canvas:image-workbench-layout";
 const RESULT_VIEW_MODE_KEY = "infinite-canvas:image-result-view-mode";
 const IMAGE_TASK_POLL_INTERVAL_MS = 10000;
 const WORKFLOW_BUTTON_POSITION_KEY = "infinite-canvas:workflow-button-position";
-const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const categoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
+const logStore = createHistoryStore("image_generation_logs");
+const categoryStore = createHistoryStore("image_generation_categories");
+const queueImageHistoryWrite = createHistoryWriteQueue();
 export default function ImagePage() {
     const { message, modal } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -145,6 +157,10 @@ export default function ImagePage() {
     const isUserReady = useUserStore((state) => state.isReady);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
+    const pasteMaterial = useMaterialDraft("image:prompt", prompt, references,
+        (text, refs) => { setPrompt(text); setReferences(refs.map((ref) => ({ ...ref, dataUrl: ref.dataUrl || "" }))); },
+        (refs, text) => { setReferences((value) => [...value, ...refs.map((ref) => ({ ...ref, dataUrl: ref.dataUrl || "" }))]); if (text) setPrompt((value) => value + text); },
+        (material) => { if (!material.mimeType.startsWith("image/")) throw new Error("当前生图输入只支持图片参考，请在视频创作台使用视频或音频"); });
     const [uploadingCount, setUploadingCount] = useState(0);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
@@ -166,11 +182,12 @@ export default function ImagePage() {
     const workflowButtonRef = useRef<HTMLButtonElement>(null);
     const workflowButtonDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; moved: boolean } | null>(null);
     const accountHistorySyncEnabledRef = useRef(false);
-    const saveLogChainRef = useRef<Promise<void>>(Promise.resolve());
+    const deletedHistoryKeysRef = useRef(new Set<string>());
     const pollingLogIdsRef = useRef(new Set<string>());
     const logsRef = useRef<GenerationLog[]>([]);
     const effectiveConfigRef = useRef(effectiveConfig);
     const generationLockRef = useRef(false);
+    const historyLoadRef = useRef(0);
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
@@ -181,9 +198,7 @@ export default function ImagePage() {
     const imageTaskConfig = () => effectiveConfigRef.current;
 
     const restorePendingLogResults = (sourceLogs: GenerationLog[]) => {
-        const pendingLogs = sourceLogs.filter((log) => log.status === "生成中" && log.task && !log.images.length);
-        if (!pendingLogs.length) return;
-        setResults((value) => mergePendingLogResults(value, pendingLogs));
+        setResults((value) => mergePendingLogResults(value, sourceLogs, true));
     };
 
     const pollPendingLogsOnce = (sourceLogs: GenerationLog[]) => {
@@ -232,13 +247,23 @@ export default function ImagePage() {
     }, [logs]);
 
     useEffect(() => {
+        logsRef.current = [];
+        deletedHistoryKeysRef.current.clear();
+        setLogs([]); setResults([]); setCategories([]); setSelectedLogIds([]); setPreviewLog(null);
         if (!isUserReady) return;
-        if (token) {
-            void loadAccountImageHistory(token).then((items) => syncBackendImageTasks(items || logsRef.current));
-            return;
-        }
-        void refreshLogs().then((items) => syncBackendImageTasks(items));
+        const session = mediaSession();
+        void (async () => {
+            const items = token ? await loadAccountImageHistory(token) : await refreshLogs();
+            assertMediaSession(session);
+            await syncBackendImageTasks(items || logsRef.current);
+        })().catch(() => undefined);
     }, [isUserReady, token]);
+
+    useHistoryRefresh(Boolean(isUserReady && token), async () => {
+        if (generationLockRef.current || pollingLogIdsRef.current.size) return;
+        const items = await loadAccountImageHistory(token);
+        await syncBackendImageTasks(items || logsRef.current);
+    });
 
     useEffect(() => {
         if (!pendingCount && !pendingLogCount) return;
@@ -312,9 +337,16 @@ export default function ImagePage() {
         persistWorkflowButtonPosition(finalPos);
     };
 
+    const canAddReferences = (additional: number) => {
+        const error = referenceLimitError(references.length + additional);
+        if (error) message.warning(error);
+        return !error;
+    };
+
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
         if (!imageFiles.length) return;
+        if (!canAddReferences(imageFiles.length)) return;
         setUploadingCount(imageFiles.length);
         const hideLoading = message.loading("正在上传参考图...", 0);
         try {
@@ -342,6 +374,7 @@ export default function ImagePage() {
                 message.error("剪切板里没有可读取的图片");
                 return;
             }
+            if (!canAddReferences(blobs.length)) return;
             setUploadingCount(blobs.length);
             const hideLoading = message.loading("正在上传并读取参考图...", 0);
             try {
@@ -382,14 +415,15 @@ export default function ImagePage() {
     const pastePromptFromClipboard = async () => {
         try {
             const text = (await navigator.clipboard.readText()).trim();
+            if (await pasteMaterial(text)) return;
             if (!text) {
                 message.error("剪切板里没有可读取的文本");
                 return;
             }
             setPrompt(text);
             message.success("已读取剪切板文本");
-        } catch {
-            message.error("剪切板里没有可读取的文本");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "剪切板里没有可读取的文本");
         }
     };
 
@@ -408,11 +442,18 @@ export default function ImagePage() {
         }
         const snapshot = buildRequestSnapshot();
         if (!snapshot) return;
-        setPrompt("");
         await submitGenerationBatch(snapshot);
     };
 
     const retryLog = async (log: GenerationLog) => {
+        try {
+            const revision = await retryTaskArchive(log.task, "image-task", log.errors?.[0]);
+            if (revision) {
+                await saveLog({ ...log, archiveRecovery: revision, status: "生成中", task: log.task ? { ...log.task, status: "processing", progress: 99 } : undefined, errors: [], errorDetails: [], failCount: 0, lastPolledAt: 0 });
+                message.success("已重新尝试云端保存");
+                return;
+            }
+        } catch (error) { message.error(error instanceof Error ? error.message : "恢复保存失败"); return; }
         if (generationLockRef.current) {
             message.info("已有图片任务正在提交，请稍候");
             return;
@@ -467,20 +508,21 @@ export default function ImagePage() {
     };
 
     const createPersistentImageTask = async (pendingLog: GenerationLog, snapshot: RequestSnapshot, index: number, taskCount: number) => {
+        const session = mediaSession();
         try {
             const task = await createCanvasImageTask({ ...snapshot.requestConfig, seedIndex: index, seedCount: taskCount, count: "1" } as AiConfig & { seedIndex?: number; seedCount?: number }, snapshot.text, snapshot.references, {
                 source: "image-workbench",
                 sourceId: pendingLog.id,
                 clientTaskId: imageLogTaskId(pendingLog),
             });
+            assertMediaSession(session);
             const nextLog = { ...pendingLog, task, lastPolledAt: Date.now() };
             await saveLog(nextLog);
-            setResults((value) => updateResultByLogId(value, pendingLog.id, { taskLogId: nextLog.id, task, progress: task.progress, lastPolledAt: nextLog.lastPolledAt }));
             return nextLog;
         } catch (error) {
+            assertMediaSession(session);
             const nextLog = { ...pendingLog, status: "失败" as const, durationMs: Date.now() - pendingLog.createdAt, failCount: 1, errors: [errorMessage(error)], errorDetails: [errorDetail(error)], lastPolledAt: Date.now() };
             await saveLog(nextLog);
-            setResults((value) => updateResultByLogId(value, pendingLog.id, { status: "failed", error: nextLog.errors[0], errorDetail: nextLog.errorDetails?.[0], durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
             throw error;
         }
     };
@@ -491,7 +533,11 @@ export default function ImagePage() {
         }
         generationLockRef.current = true;
         try {
+            await protectSubmittedReferences(snapshot.references, "image:prompt");
+            setPrompt((value) => value.trim() === snapshot.text.trim() ? "" : value);
             await submitGenerationBatchInternal(snapshot);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "参考素材准备失败");
         } finally {
             generationLockRef.current = false;
         }
@@ -594,6 +640,7 @@ export default function ImagePage() {
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
+        if (!canAddReferences(1)) return;
         try {
             if (image.storageKey) {
                 const url = await resolveImageUrl(image.storageKey, image.dataUrl);
@@ -675,6 +722,7 @@ export default function ImagePage() {
         if (payload.kind === "text") {
             setPrompt(payload.content);
         } else if (payload.kind === "image") {
+            if (!canAddReferences(1)) return;
             const resolvedUrl = await resolveImageUrl(payload.storageKey, payload.dataUrl);
             const safeUrl = resolvedUrl || "";
             const reference =
@@ -738,15 +786,21 @@ export default function ImagePage() {
     };
 
     const deleteSelectedLogs = async () => {
+        const session = mediaSession();
         const deletedLogs = logs.filter((log) => selectedLogIds.includes(log.id));
         const nextLogs = logs.filter((log) => !selectedLogIds.includes(log.id));
         const imageKeys = disposableLogStorageKeys(deletedLogs, nextLogs);
         try {
             await deleteBackendImageTasks(deletedLogs);
             await deleteAccountImageLogs(deletedLogs);
-            await Promise.all([deleteStoredImages(imageKeys), ...deletedLogs.map((log) => logStore.removeItem(log.id))]);
-            logsRef.current = nextLogs;
-            setLogs(nextLogs);
+            await queueImageHistoryWrite(async () => {
+                assertMediaSession(session);
+                deletedLogs.flatMap(imageLogIdentityKeys).forEach((key) => deletedHistoryKeysRef.current.add(key));
+                await Promise.all([deleteStoredImages(imageKeys), ...deletedLogs.map((log) => logStore.removeItem(log.id))]);
+                assertMediaSession(session);
+                logsRef.current = logsRef.current.filter((item) => !imageLogIdentityKeys(item).some((key) => deletedHistoryKeysRef.current.has(key)));
+                setLogs(logsRef.current);
+            });
             setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
         } catch (error) {
             message.error(error instanceof Error ? error.message : "删除失败，请重试");
@@ -768,13 +822,19 @@ export default function ImagePage() {
             cancelText: "取消",
             okButtonProps: { danger: true },
             onOk: async () => {
+                const session = mediaSession();
                 const nextLogs = logs.filter((item) => item.id !== log.id);
                 const imageKeys = disposableLogStorageKeys([log], nextLogs);
                 await deleteBackendImageTasks([log]);
                 await deleteAccountImageLogs([log]);
-                await Promise.all([deleteStoredImages(imageKeys), logStore.removeItem(log.id)]);
-                logsRef.current = nextLogs;
-                setLogs(nextLogs);
+                await queueImageHistoryWrite(async () => {
+                    assertMediaSession(session);
+                    imageLogIdentityKeys(log).forEach((key) => deletedHistoryKeysRef.current.add(key));
+                    await Promise.all([deleteStoredImages(imageKeys), logStore.removeItem(log.id)]);
+                    assertMediaSession(session);
+                    logsRef.current = logsRef.current.filter((item) => !imageLogIdentityKeys(item).some((key) => deletedHistoryKeysRef.current.has(key)));
+                    setLogs(logsRef.current);
+                });
                 setReferences((value) => value.filter((item) => !item.storageKey || !imageKeys.includes(item.storageKey)));
                 setSelectedLogIds((value) => value.filter((id) => id !== log.id));
                 if (previewLog?.id === log.id) setPreviewLog(null);
@@ -802,27 +862,35 @@ export default function ImagePage() {
 
     const saveLog = async (log: GenerationLog) => {
         const session = mediaSession();
-        const localLog = await persistInlineLogImages(log);
-        const persistedLog = { ...localLog, images: localLog.images.map((image) => ({ ...image, archivePending: Boolean(token && session.userId && !image.storageKey?.startsWith("server:") && !image.archiveError) })) };
-        const prevChain = saveLogChainRef.current;
-        const nextChain = (async () => {
-            try {
-                await prevChain;
-            } catch {
-                // Ignore previous errors so the chain doesn't break permanently
-            }
+        const previous = logsRef.current.find((item) => item.id === log.id);
+        if (previous !== log && preserveTerminalHistory(previous, log) === previous) return;
+        const localLog = await persistInlineLogImages({ ...log, references: await restoreHistoryImages(log.references || []) });
+        let persistedLog = { ...localLog, images: localLog.images.map((image) => ({ ...image, archivePending: Boolean(token && session.userId && !image.storageKey?.startsWith("server:") && !image.archiveError) })) };
+        let accepted = false;
+        await queueImageHistoryWrite(async () => {
             const storedLogs = logsRef.current;
+            assertMediaSession(session);
+            if (imageLogIdentityKeys(log).some((key) => deletedHistoryKeysRef.current.has(key))) return;
+            const current = storedLogs.find((item) => item.id === log.id);
+            if (previous && !current) return;
+            const resolved = preserveTerminalHistory(current, persistedLog);
+            if (resolved === current && current !== persistedLog) return;
+            persistedLog = resolved as typeof persistedLog;
+            accepted = true;
             const keys = new Set(imageLogIdentityKeys(log));
             const duplicateLogs = storedLogs.filter((item) => item.id !== log.id && imageLogIdentityKeys(item).some((key) => keys.has(key)));
             const nextLogs = dedupeGenerationLogs([persistedLog, ...storedLogs.filter((item) => item.id !== log.id)]);
-            logsRef.current = nextLogs;
-            setLogs(nextLogs);
             await Promise.all(duplicateLogs.map((item) => logStore.removeItem(item.id)));
             await logStore.setItem(log.id, serializeLog(persistedLog));
+            assertMediaSession(session);
+            logsRef.current = nextLogs;
+            setLogs(nextLogs);
+            setResults((value) => persistedLog.status === "生成中"
+                ? updateResultByLogId(value, log.id, { task: persistedLog.task, status: "pending", progress: persistedLog.task?.progress, durationMs: persistedLog.durationMs, lastPolledAt: persistedLog.lastPolledAt, error: persistedLog.errors[0], errorDetail: persistedLog.errorDetails?.[0] })
+                : value.filter((item) => !imageResultMatchesLog(item, persistedLog)));
             await persistImageHistory([persistedLog], categories);
-        })();
-        saveLogChainRef.current = nextChain;
-        await nextChain;
+        });
+        if (!accepted) return;
         if (token && session.userId && persistedLog.images.some((image) => !image.storageKey?.startsWith("server:") && !image.archiveError)) {
             try {
                 const images = await Promise.all(persistedLog.images.map(async (image) => {
@@ -832,7 +900,7 @@ export default function ImagePage() {
                 }));
                 assertMediaSession(session);
                 const current = logsRef.current.find((item) => item.id === log.id);
-                if (!current) return;
+                if (!current || current !== persistedLog) return;
                 if (images.some((image) => image.archiveError)) message.warning("图片已生成，云端保存失败，可点击云上传按钮重试");
                 setResults((value) => value.map((item) => ({ ...item, image: images.find((image) => image.id === item.image?.id) || item.image })));
                 await saveLog({ ...current, images });
@@ -841,29 +909,40 @@ export default function ImagePage() {
     };
 
     const refreshLogs = async () => {
+        const session = mediaSession(), snapshot = logsRef.current;
         const nextLogs = await readStoredLogs();
-        setLogs(nextLogs);
-        return nextLogs;
+        assertMediaSession(session);
+        const merged = dedupeGenerationLogs(mergeHistoryRefresh(snapshot, logsRef.current, nextLogs));
+        logsRef.current = merged;
+        setLogs(merged);
+        return merged;
     };
     const refreshCategories = async () => setCategories(await readStoredCategories());
 
     const loadAccountImageHistory = async (currentToken: string) => {
+        const session = mediaSession(), snapshot = logsRef.current;
         try {
             accountHistorySyncEnabledRef.current = true;
             const localLogs = await readStoredLogs();
             const storedCategories = await readStoredCategories();
             const remoteLogs = await fetchImageGenerationLogs<GenerationLog>(currentToken);
             const mergedLogs = await mergeGenerationLogs(remoteLogs, localLogs);
-            const categorized = withWorkflowLogCategories(mergedLogs, storedCategories);
-            await replaceStoredImageHistory(categorized.logs, categorized.categories);
-            setCategories(categorized.categories);
-            logsRef.current = categorized.logs;
-            setLogs(categorized.logs);
+            const categorized = await queueImageHistoryWrite(async () => {
+                assertMediaSession(session);
+                const value = withWorkflowLogCategories(mergeHistoryRefresh(snapshot, logsRef.current, mergedLogs), storedCategories);
+                await replaceStoredImageHistory(value.logs, value.categories);
+                assertMediaSession(session);
+                setCategories(value.categories);
+                logsRef.current = value.logs;
+                setLogs(value.logs);
+                return value;
+            });
             void Promise.all(categorized.logs.filter((log) => log.images.some((image) => image.archivePending)).map(saveLog)).catch(() => undefined);
             setHistorySyncError(false);
             return categorized.logs;
         } catch {
             // Keep local history available when account sync fails.
+            if (session.token !== mediaSession().token || session.userId !== mediaSession().userId) return;
             setHistorySyncError(true);
             return undefined;
         }
@@ -885,55 +964,61 @@ export default function ImagePage() {
     const syncBackendImageTasks = async (baseLogs?: GenerationLog[]) => {
         const currentConfig = imageTaskConfig();
         if (!token) return baseLogs || logsRef.current;
+        const session = mediaSession(), snapshot = logsRef.current;
         try {
             const tasks = await listCanvasImageTasks(currentConfig, ["image-workbench", "workflow"]);
             const recoverableTasks = tasks.filter(isRecoverableImageTask);
             if (!recoverableTasks.length) return baseLogs || logsRef.current;
             const currentLogs = baseLogs || (await readStoredLogs());
-            const mergedLogs = mergeBackendImageTasks(currentLogs, recoverableTasks, currentConfig);
-            const taskIds = new Set(recoverableTasks.flatMap(imageTaskIdentityKeys));
-            const recoveredLogs = mergedLogs.filter((log) => imageLogIdentityKeys(log).some((key) => taskIds.has(key)));
-            await Promise.all(recoveredLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
-            setLogs(mergedLogs);
-            setResults((value) => mergePendingLogResults(value, recoveredLogs));
-            return mergedLogs;
+            const incoming = mergeBackendImageTasks(currentLogs, recoverableTasks, currentConfig);
+            return await queueImageHistoryWrite(async () => {
+                assertMediaSession(session);
+                const mergedLogs = mergeHistoryRefresh(snapshot, logsRef.current, incoming).filter((log) => !imageLogIdentityKeys(log).some((key) => deletedHistoryKeysRef.current.has(key)));
+                await Promise.all(mergedLogs.map((log) => logStore.setItem(log.id, serializeLog(log))));
+                assertMediaSession(session);
+                logsRef.current = mergedLogs;
+                setLogs(mergedLogs);
+                return mergedLogs;
+            });
         } catch {
             return baseLogs || logsRef.current;
         }
     };
 
     const pollImageTaskLogsOnce = async (pendingLogs: GenerationLog[]) => {
+        const session = mediaSession();
         const ids = pendingLogs.map(imageLogTaskId).filter(Boolean);
         if (!ids.length) return;
         pendingLogs.forEach((log) => pollingLogIdsRef.current.add(log.id));
         try {
             const tasks = await batchCanvasImageTaskStatus(imageTaskConfig(), ids);
+            assertMediaSession(session);
             const taskById = new Map(tasks.map((task) => [task.id, task]));
             await Promise.all(
                 pendingLogs.map(async (log) => {
+                    if (!logsRef.current.some((item) => item.id === log.id)) return;
                     const task = taskById.get(imageLogTaskId(log));
                     if (!task) {
                         const nextLog = { ...log, status: "失败" as const, durationMs: Date.now() - log.createdAt, failCount: 1, errors: ["图片任务不存在或未创建成功"], errorDetails: ["后端没有找到对应的图片任务"], lastPolledAt: Date.now() };
                         await saveLog(nextLog);
-                        setResults((value) => updateResultByLogId(value, log.id, { status: "failed", error: nextLog.errors[0], errorDetail: nextLog.errorDetails?.[0], durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
                         return;
                     }
                     if ((task.image_urls?.length || 0) > 1) {
                         const nextLogs = imageLogsFromTask(log, task);
                         await Promise.all(nextLogs.map(saveLog));
-                        setResults((value) => value.filter((item) => !imageResultMatchesLog(item, nextLogs[0])));
                         return;
                     }
 
                     const nextLog = imageLogFromTask(log, task);
                     await saveLog(nextLog);
-                    if (nextLog.status === "生成中") {
-                        setResults((value) => updateResultByLogId(value, log.id, { task, progress: task.progress, durationMs: nextLog.durationMs, lastPolledAt: nextLog.lastPolledAt }));
-                    } else {
-                        setResults((value) => value.filter((item) => !imageResultMatchesLog(item, nextLog)));
-                    }
                 }),
             );
+        } catch (error) {
+            if (session.token !== mediaSession().token || session.userId !== mediaSession().userId) return;
+            const detail = taskLookupMessage(error);
+            await Promise.all(pendingLogs.map(async (log) => {
+                await saveLog({ ...log, errors: [detail], errorDetails: [detail], lastPolledAt: Date.now() });
+            }));
         } finally {
             pendingLogs.forEach((log) => pollingLogIdsRef.current.delete(log.id));
         }
@@ -1004,6 +1089,13 @@ export default function ImagePage() {
     };
 
     const previewGenerationLog = async (log: GenerationLog) => {
+        const session = mediaSession(), requestId = ++historyLoadRef.current;
+        try {
+            log = { ...log, references: await restoreHistoryImages(log.references || [], true) };
+            assertMediaSession(session);
+            if (requestId !== historyLoadRef.current) return;
+        }
+        catch (error) { message.error(errorMessage(error)); return; }
         setPreviewLog(log);
         setPrompt(log.prompt);
         setReferences(log.references || []);
@@ -1036,6 +1128,11 @@ export default function ImagePage() {
         configOverride,
     }: { promptText?: string; referenceItems?: ReferenceImage[]; taskCount?: number; configOverride?: Partial<GenerationLogConfig> } = {}) => {
         const text = promptText.trim();
+        const limitError = referenceLimitError(referenceItems.length);
+        if (limitError) {
+            message.warning(limitError);
+            return null;
+        }
         if (!text) {
             message.error("请输入生图提示词");
             return null;
@@ -1187,7 +1284,7 @@ export default function ImagePage() {
     };
 
     return (
-        <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
+        <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100" onDragOver={(event) => { if (hasSupportedDrop(event)) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }} onDrop={(event) => { const payload = readAssetDrag(event); const files = payload ? null : readDroppedFiles(event); if (!files && !payload) return; event.preventDefault(); if (payload) void insertPickedAsset(payload); else if (files) void addReferences(files); }}>
             <main className={`${workbenchLayout === "side" ? "grid grid-cols-1 lg:grid-cols-[420px_minmax(0,1fr)]" : "relative flex flex-col"} min-h-0 flex-1 gap-3 overflow-y-auto p-3 lg:overflow-hidden`}>
                 {historySyncError ? (
                     <div role="status" className="absolute inset-x-3 top-3 z-30 flex items-center justify-between gap-3 rounded-2xl border border-amber-300/60 bg-amber-50/90 px-4 py-3 text-xs text-amber-900 shadow-lg backdrop-blur-md dark:border-amber-500/30 dark:bg-amber-950/80 dark:text-amber-100">
@@ -1601,10 +1698,10 @@ function WorkbenchHeader({ currentLayout, onLayoutChange, compact = false }: { c
                 <h1 className={`${compact ? "text-base" : "text-2xl"} font-semibold text-stone-950 dark:text-stone-100`}>生图工作台</h1>
             </div>
             <div className="flex shrink-0 rounded-lg border border-stone-200 bg-stone-50 p-1 dark:border-stone-800 dark:bg-stone-900">
-                <Button size="small" type={currentLayout === "side" ? "primary" : "text"} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>
+                <Button size="small" type="text" aria-pressed={currentLayout === "side"} className={currentLayout === "side" ? glassStyles.layoutSwitchActive : glassStyles.layoutSwitchInactive} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>
                     侧边
                 </Button>
-                <Button size="small" type={currentLayout === "bottom" ? "primary" : "text"} icon={<PanelBottom className="size-3.5" />} onClick={() => onLayoutChange("bottom")}>
+                <Button size="small" type="text" aria-pressed={currentLayout === "bottom"} className={currentLayout === "bottom" ? glassStyles.layoutSwitchActive : glassStyles.layoutSwitchInactive} icon={<PanelBottom className="size-3.5" />} onClick={() => onLayoutChange("bottom")}>
                     底部
                 </Button>
             </div>
@@ -1623,7 +1720,7 @@ function ReferenceStrip({ references, compact = false, className = "", onRemoveR
             }}
         >
             {references.map((item) => (
-                <div key={item.id} className={`${compact ? "size-12" : "size-20"} group relative shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800`}>
+                <div key={item.id} draggable onDragStart={(event) => writeAssetDrag(event, { kind: "image", dataUrl: item.dataUrl, storageKey: item.storageKey, title: item.name, mimeType: item.type, source: "asset" })} className={`${compact ? "size-12" : "size-20"} group relative shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800`}>
                     <Image
                         src={item.dataUrl || undefined}
                         alt={item.name}
@@ -1881,6 +1978,7 @@ function ResultsPanel({
                             onSaveAsset={onSaveAsset}
                             syncing={syncingImageIds.includes(log.images.find((image) => Boolean(image.dataUrl))?.id || "")}
                             onSync={(image) => onSyncLog(log, image, index)}
+                            onActivity={(action) => void touchLifecycleEntity("image-history", log.id, action).catch(() => undefined)}
                         />
                     ))}
                 </div>
@@ -2030,8 +2128,8 @@ function ResultImageCard({
     onSync: (image: GeneratedImage) => void;
 }) {
     return (
-        <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
+        <div draggable onDragStart={(event) => writeAssetDrag(event, { kind: "image", dataUrl: image.dataUrl, storageKey: image.storageKey, title: `生成图片 ${index + 1}`, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType, source: "asset" })} className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
+            <AdaptiveMediaFrame className="bg-stone-100 dark:bg-stone-900" width={image.width} height={image.height} fallback={4 / 3}>
                 <div className="absolute right-1.5 top-1.5 z-10 flex gap-1">
                     {!image.storageKey?.startsWith("server:") ? (
                         <Tag className="m-0 text-[10px]" color="gold">
@@ -2043,8 +2141,8 @@ function ResultImageCard({
                     </Tag>
                 </div>
                 <ReferenceThumbnailOverlay references={result.references} className="left-1.5 top-1.5" />
-                <ResultImageMedia key={image.dataUrl} src={image.dataUrl} alt={`生成结果 ${index + 1}`} />
-            </div>
+                <ResultImageMedia src={image.dataUrl} alt={`生成结果 ${index + 1}`} />
+            </AdaptiveMediaFrame>
             <TaskInfo result={result} onCopyPrompt={onCopyPrompt} />
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
                 <div className="flex min-w-0 flex-wrap gap-x-1.5 gap-y-1 text-[10px] text-stone-500 dark:text-stone-400">
@@ -2067,6 +2165,7 @@ function ResultImageCard({
 
 function ResultImageMedia({ src, alt }: { src: string; alt: string }) {
     const [failed, setFailed] = useState(false);
+    useEffect(() => setFailed(false), [src]);
     if (failed) return (
         <div role="status" className="flex size-full flex-col items-center justify-center gap-3 p-5 text-center text-sm text-stone-500 dark:text-stone-400">
             <ImagePlus className="size-7" aria-hidden />
@@ -2074,7 +2173,7 @@ function ResultImageMedia({ src, alt }: { src: string; alt: string }) {
             <Button onClick={() => setFailed(false)}>重新加载</Button>
         </div>
     );
-    return <Image src={src} alt={alt} loading="lazy" decoding="async" className="aspect-[4/3] object-cover" onError={() => setFailed(true)} />;
+    return <Image data-adaptive-media src={src} alt={alt} width="100%" height="100%" loading="lazy" decoding="async" className="object-contain" onError={() => setFailed(true)} />;
 }
 
 function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationResult; now: number; onCopyPrompt: (text: string) => void | Promise<void> }) {
@@ -2091,6 +2190,7 @@ function PendingImageCard({ result, now, onCopyPrompt }: { result: GenerationRes
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                     <LoaderCircle className="size-6 animate-spin" />
                     <span>生成中</span>
+                    {result.error ? <span role="status" className="px-3 text-center text-xs">{result.error}</span> : null}
                     <span className="rounded-full bg-white/80 px-2 py-1 text-xs text-stone-600 shadow-sm dark:bg-stone-950/70 dark:text-stone-300">{formatDuration(Math.max(0, now - result.createdAt))}</span>
                 </div>
             </div>
@@ -2182,6 +2282,7 @@ function HistoryLogCard({
     onSaveAsset,
     syncing,
     onSync,
+    onActivity,
 }: {
     log: GenerationLog;
     categories: GenerationCategory[];
@@ -2201,6 +2302,7 @@ function HistoryLogCard({
     onSaveAsset: (image: GeneratedImage, index: number) => void;
     syncing: boolean;
     onSync: (image: GeneratedImage) => void;
+    onActivity: (action: "open" | "download" | "edit") => void;
 }) {
     const displayImages = log.images.filter((image) => Boolean(image.dataUrl));
     const firstImage = displayImages[0];
@@ -2232,8 +2334,8 @@ function HistoryLogCard({
     }, [categoryOpen]);
 
     return (
-        <div className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
-            <div className="relative aspect-[4/3] bg-stone-100 dark:bg-stone-900">
+        <div draggable={Boolean(firstImage)} onDragStart={(event) => { if (firstImage) writeAssetDrag(event, { kind: "image", dataUrl: firstImage.dataUrl, storageKey: firstImage.storageKey, title: "历史图片", width: firstImage.width, height: firstImage.height, bytes: firstImage.bytes, mimeType: firstImage.mimeType, source: "asset" }); }} className={`overflow-hidden rounded-lg border bg-background dark:bg-stone-950 ${active ? "border-stone-900 dark:border-stone-100" : "border-stone-200 dark:border-stone-800"}`}>
+            <AdaptiveMediaFrame className="bg-stone-100 dark:bg-stone-900" width={firstImage?.width} height={firstImage?.height} fallback={4 / 3}>
                 <div className="absolute left-1.5 top-1.5 z-10 flex items-center gap-1 rounded-md bg-white/85 px-1.5 py-1 shadow-sm dark:bg-stone-950/80">
                     <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
                     {selected ? <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={onDelete} /> : null}
@@ -2250,7 +2352,7 @@ function HistoryLogCard({
                     <Tag className="m-0 text-[10px]">{log.imageCount} 张</Tag>
                 </div>
                 {firstImage ? (
-                    <ResultImageMedia key={firstImage.dataUrl} src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} />
+                    <ResultImageMedia src={firstImage.dataUrl} alt={`历史结果 ${index + 1}`} />
                 ) : (
                     <div className="flex size-full flex-col items-center justify-center gap-2 p-5 text-center text-sm text-red-500">
                         <AlertCircle className="size-7" />
@@ -2265,7 +2367,7 @@ function HistoryLogCard({
                     </div>
                 ) : null}
                 <ReferenceThumbnailOverlay references={log.references} className="bottom-1.5 right-1.5" />
-            </div>
+            </AdaptiveMediaFrame>
             <div className="space-y-2 border-t border-stone-200 p-2.5 text-xs dark:border-stone-800">
                 <div className={`${expanded ? "" : "line-clamp-2"} whitespace-pre-wrap text-stone-700 dark:text-stone-200`}>{log.prompt}</div>
                 <div className="flex items-center justify-end gap-1">
@@ -2310,7 +2412,7 @@ function HistoryLogCard({
             </div>
             <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 border-t border-stone-200 px-2.5 py-2 dark:border-stone-800">
                 <div ref={categoryMenuRef} className="relative flex flex-wrap gap-1">
-                    <Button size="small" onClick={() => closeThen(onPreview)}>
+                    <Button size="small" onClick={() => closeThen(() => { onActivity("open"); onPreview(); })}>
                         载入
                     </Button>
                     <Button size="small" icon={<RotateCcw className="size-3.5" />} onClick={() => closeThen(onRetry)}>
@@ -2344,8 +2446,8 @@ function HistoryLogCard({
                     <div className="flex shrink-0 gap-1">
                         <Button size="small" title="同步到云端存储" icon={<CloudUpload className="size-3.5" />} loading={syncing} disabled={firstImage.storageKey?.startsWith("server:")} onClick={() => closeThen(() => onSync(firstImage))} />
                         <Button size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => closeThen(() => void onSaveAsset(firstImage, index))} />
-                        <Button size="small" icon={<PenLine className="size-3.5" />} onClick={() => closeThen(() => void onEdit(firstImage, index))} />
-                        <Button size="small" icon={<Download className="size-3.5" />} onClick={() => closeThen(() => onDownload(firstImage, index))} />
+                        <Button size="small" icon={<PenLine className="size-3.5" />} onClick={() => closeThen(() => { onActivity("edit"); void onEdit(firstImage, index); })} />
+                        <Button size="small" icon={<Download className="size-3.5" />} onClick={() => closeThen(() => { onActivity("download"); onDownload(firstImage, index); })} />
                     </div>
                 ) : null}
             </div>
@@ -2420,14 +2522,16 @@ function updateResultByLogId(results: GenerationResult[], logId: string, next: P
     return results.map((item) => (imageResultIdentityKeys(item).some((key) => keys.has(key)) ? { ...item, ...next } : item));
 }
 
-function mergePendingLogResults(results: GenerationResult[], logs: GenerationLog[]) {
-    const updatedResults = results.map((result) => {
+function mergePendingLogResults(results: GenerationResult[], logs: GenerationLog[], authoritative = false) {
+    const updatedResults = results.flatMap((result) => {
         const resultKeys = new Set(imageResultIdentityKeys(result));
         const log = logs.find((item) => imageLogIdentityKeys(item).some((key) => resultKeys.has(key)));
-        return log ? { ...result, id: log.id, taskLogId: log.id, task: log.task, progress: log.task?.progress ?? result.progress, durationMs: log.durationMs || result.durationMs, lastPolledAt: log.lastPolledAt || result.lastPolledAt } : result;
+        if (!log) return authoritative && result.taskLogId ? [] : [result];
+        if (log.status !== "生成中") return [];
+        return [{ ...result, id: log.id, status: "pending" as const, taskLogId: log.id, task: log.task, progress: log.task?.progress ?? result.progress, durationMs: log.durationMs || result.durationMs, lastPolledAt: log.lastPolledAt || result.lastPolledAt, error: log.errors[0], errorDetail: log.errorDetails?.[0] }];
     });
     const existingIds = new Set(updatedResults.flatMap(imageResultIdentityKeys));
-    const pendingResults = logs.filter((log) => !imageLogIdentityKeys(log).some((key) => existingIds.has(key))).map((log) => createResultFromImageLog(log, "pending"));
+    const pendingResults = logs.filter((log) => log.status === "生成中" && log.task && !log.images.length && !imageLogIdentityKeys(log).some((key) => existingIds.has(key))).map((log) => createResultFromImageLog(log, "pending"));
     return dedupeGenerationResults([...pendingResults, ...updatedResults]).sort((a, b) => b.createdAt - a.createdAt);
 }
 
@@ -2595,7 +2699,7 @@ function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[],
         if (existing) {
             const index = nextLogs.findIndex((log) => log.id === existing.id);
             if (index >= 0) {
-                const nextLog = { ...existing, task, lastPolledAt: existing.lastPolledAt || Date.now() };
+                const nextLog = preserveTerminalHistory(existing, imageLogFromTask(existing, task));
                 nextLogs[index] = nextLog;
                 imageLogIdentityKeys(nextLog).forEach((key) => byKey.set(key, nextLog));
             }
@@ -2622,7 +2726,7 @@ function mergeBackendImageTasks(logs: GenerationLog[], tasks: CanvasImageTask[],
             createdAt: startedAt,
             time: formatLogTime(startedAt),
         });
-        nextLogs.unshift(nextLog);
+        nextLogs.unshift(imageLogFromTask(nextLog, task));
         imageLogIdentityKeys(nextLog).forEach((key) => byKey.set(key, nextLog));
     });
     return dedupeGenerationLogs(nextLogs);
@@ -2663,6 +2767,7 @@ function imageLogsFromTask(log: GenerationLog, task: CanvasImageTask): Generatio
 }
 
 function imageLogFromTask(log: GenerationLog, task: CanvasImageTask): GenerationLog {
+    log = { ...log, archiveRecovery: task.archiveRecovery ?? log.archiveRecovery };
     const startedAt = parseImageTaskTime(task.started_at ?? task.startedAt ?? task.created_at ?? task.createdAt) || log.createdAt;
     const durationMs = Date.now() - startedAt;
     if (isFailedImageTask(task)) {
@@ -2678,7 +2783,7 @@ function imageLogFromTask(log: GenerationLog, task: CanvasImageTask): Generation
         const image: GeneratedImage = { id: task.id, dataUrl: url, storageKey: task.storageKey, durationMs, width: stored?.width || task.width || 0, height: stored?.height || task.height || 0, bytes: task.bytes || 0, mimeType: task.mimeType || "image/png" };
         return { ...log, task, status: "成功", durationMs, successCount: 1, failCount: 0, imageCount: 1, images: [image], thumbnails: [url], errors: [], errorDetails: [], lastPolledAt: Date.now() };
     }
-    return { ...log, task, durationMs, lastPolledAt: Date.now() };
+    return { ...log, task, status: "生成中", durationMs, lastPolledAt: Date.now(), errors: [], errorDetails: [] };
 }
 
 function parseImageTaskTime(value: unknown) {
@@ -2808,12 +2913,7 @@ function mergeGenerationCategories(remoteCategories: GenerationCategory[], local
 }
 
 async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
-    const references = await Promise.all(
-        (log.references || []).map(async (item) => ({
-            ...item,
-            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
-        })),
-    );
+    const references = await restoreHistoryImages(log.references || []);
     const images = await Promise.all(
         (log.images || []).map(async (item) => {
             const dataUrl = await resolveImageUrl(item.storageKey, item.dataUrl);
@@ -2840,6 +2940,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
     const config = normalizeLogConfig(log);
     return {
         id: log.id || nanoid(),
+        archiveRecovery: Math.max(log.archiveRecovery || 0, log.task?.archiveRecovery || 0),
         createdAt: log.createdAt || Date.now(),
         title: log.title || log.model || "未命名",
         prompt: log.prompt || log.title || "",

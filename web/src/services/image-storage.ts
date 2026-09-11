@@ -1,6 +1,7 @@
 "use client";
 
 import localforage from "localforage";
+import { lifecycleEpoch, lifecycleHeaders, inspectLifecycleEpoch } from "@/extensions/media-lifecycle/session";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "@/lib/image-utils";
@@ -241,7 +242,9 @@ export async function uploadRemoteImageToServer(url: string, filename: string, g
     const formData = new FormData();
     formData.append("file", blob, filename || "image-" + nanoid() + "." + imageExtension(blob.type));
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
-    const uploadResponse = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: "Bearer " + token }, body: formData });
+    await lifecycleEpoch(token);
+    const uploadResponse = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: "Bearer " + token, ...lifecycleHeaders(token) }, body: formData });
+    inspectLifecycleEpoch(token, uploadResponse.headers.get("X-Media-Epoch"));
     const payload = (await uploadResponse.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!uploadResponse.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "服务端图片上传失败");
     assertMediaSession(session);
@@ -341,7 +344,9 @@ async function maybeUploadImageToServer(blob: Blob): Promise<UploadedImage | nul
     const formData = new FormData();
     formData.append("file", blob, `image-${nanoid()}.${imageExtension(blob.type)}`);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
-    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+    await lifecycleEpoch(token);
+    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}`, ...lifecycleHeaders(token) }, body: formData });
+    inspectLifecycleEpoch(token, response.headers.get("X-Media-Epoch"));
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedImage } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) {
         if (!canUseGlobalProvider) return null;
@@ -381,6 +386,9 @@ export async function getImageBlob(storageKey: string) {
 export async function setImageBlob(storageKey: string, blob: Blob) {
     await store.setItem(storageKey, blob);
     const previous = objectUrls.get(storageKey);
+    // OSS object identities are immutable. Repeated uploads can deduplicate to
+    // this object while existing history cards still display its cached URL.
+    if (previous && storageKey.startsWith("server:") && !storageKey.startsWith("server:webdav:")) return previous;
     if (previous) URL.revokeObjectURL(previous);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);

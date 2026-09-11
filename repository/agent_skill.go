@@ -3,6 +3,7 @@ package repository
 import (
 	"encoding/json"
 	"errors"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -47,7 +48,7 @@ func SaveAgentSkill(item model.AgentSkill) (model.AgentSkill, error) {
 	if err != nil {
 		return item, err
 	}
-	return item, db.Save(&item).Error
+	return item, medialifecycle.SaveRecord(db,&item)
 }
 
 func ListAgentSkillFiles(skillID string) ([]model.AgentSkillFile, error) {
@@ -112,7 +113,7 @@ func DeleteUserAgentSkill(id string, userID string) error {
 	if err != nil {
 		return err
 	}
-	return db.Delete(&model.AgentSkill{}, "id = ? AND source = ? AND owner_user_id = ?", id, model.AgentSkillSourceUser, userID).Error
+	return medialifecycle.Release(db,userID,"skill",id,0,func(tx *gorm.DB)error{return tx.Delete(&model.AgentSkill{},"id = ? AND source = ? AND owner_user_id = ?",id,model.AgentSkillSourceUser,userID).Error})
 }
 
 func DeleteSystemAgentSkill(id string) error {

@@ -1,6 +1,7 @@
 "use client";
 
 import localforage from "localforage";
+import { lifecycleEpoch, lifecycleHeaders, inspectLifecycleEpoch } from "@/extensions/media-lifecycle/session";
 import { nanoid } from "nanoid";
 
 import { uploadAnonymousStorageFile } from "@/services/anonymous-storage";
@@ -15,6 +16,7 @@ export type UploadedFile = { url: string; storageKey: string; bytes: number; mim
 
 const store = scopedMediaStore(localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" }));
 const objectUrls = new Map<string, string>();
+const serverMediaCacheWrites = new Map<string, Promise<string>>();
 clearMediaMapsOnSessionChange(objectUrls);
 
 export async function uploadMediaFile(input: string | Blob, prefix = "file", syncId?: string, globalOnly = false): Promise<UploadedFile> {
@@ -93,7 +95,9 @@ async function uploadMediaBlobToServer(blob: Blob, filename: string, globalOnly 
     const formData = new FormData();
     formData.append("file", blob, filename);
     if (userProvider) formData.append("provider", JSON.stringify(toProviderPayload(userProvider)));
-    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: formData });
+    await lifecycleEpoch(token);
+    const response = await fetch("/api/v1/files", { method: "POST", headers: { Authorization: `Bearer ${token}`, ...lifecycleHeaders(token) }, body: formData });
+    inspectLifecycleEpoch(token, response.headers.get("X-Media-Epoch"));
     const payload = (await response.json().catch(() => null)) as { code?: number; msg?: string; data?: UploadedFile } | null;
     if (!response.ok || payload?.code !== 0 || !payload.data) throw new Error(payload?.msg || "媒体同步失败");
     assertMediaSession(session);
@@ -176,6 +180,29 @@ export async function setMediaBlob(storageKey: string, blob: Blob) {
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     return url;
+}
+
+export async function cacheServerMediaLocally(storageKey: string, fallback = "") {
+    if (!storageKey.startsWith("server:")) return resolveMediaUrl(storageKey, fallback);
+    const session = mediaSession();
+    const pendingKey = `${session.userId}\u0000${storageKey}`;
+    const active = serverMediaCacheWrites.get(pendingKey);
+    if (active) return active;
+    const pending = (async () => {
+        const resolved = await resolveMediaUrl(storageKey, fallback);
+        if (!resolved || resolved.startsWith("blob:")) return resolved;
+        const blob = await downloadRemoteMedia(resolved);
+        assertMediaSession(session);
+        return setMediaBlob(storageKey, blob);
+    })();
+    serverMediaCacheWrites.set(pendingKey, pending);
+    try {
+        return await pending;
+    } catch {
+        return resolveMediaUrl(storageKey, fallback);
+    } finally {
+        if (serverMediaCacheWrites.get(pendingKey) === pending) serverMediaCacheWrites.delete(pendingKey);
+    }
 }
 
 export async function deleteStoredMedia(keys: Iterable<string>) {

@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/tigerowo/infinite-canvas/service"
 )
@@ -79,19 +78,4 @@ func ClientAICallLog(w http.ResponseWriter, r *http.Request) {
 	request.UserDisplayName = firstNonEmpty(user.DisplayName, user.Username)
 	service.SaveAICallLog(request)
 	OK(w, true)
-}
-
-func AdminDeleteAICallLogs(w http.ResponseWriter, r *http.Request) {
-	days := 7
-	if v := r.URL.Query().Get("olderThanDays"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			days = parsed
-		}
-	}
-	removed, err := service.DeleteAICallLogsOlderThan(days)
-	if err != nil {
-		FailError(w, err)
-		return
-	}
-	OK(w, map[string]int{"removedFiles": removed})
 }

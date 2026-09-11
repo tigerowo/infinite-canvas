@@ -1,4 +1,5 @@
 import axios from "axios";
+import { assertReferenceLimit, countMediaReferences } from "@/extensions/media-reliability/reference-limit";
 
 import { createNewAPIVideoRequest, isNewAPIConfig, parseNewAPIVideoResponse } from "@/extensions/newapi/request";
 import { publicImageURL, publicMediaURL } from "@/extensions/public-media/references";
@@ -19,7 +20,7 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-export type VideoResponse = { id: string; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string };
+export type VideoResponse = { id: string; archiveRecovery?: number; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; updated_at?: string | number; updatedAt?: string | number; started_at?: string | number; startedAt?: string | number; completed_at?: string | number; completedAt?: string | number; request_body?: string };
 type ApiVideoEnvelope = { code: number; data?: VideoResponse | VideoResponse[] | null; msg?: string; message?: string };
 type ApiVideoResponse = VideoResponse | ApiVideoEnvelope;
 export type VideoGenerationResult = { id: string; url: string; durationMs: number; width: number; height: number; bytes: number; mimeType: string; task: VideoResponse };
@@ -111,7 +112,17 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
     return pollCreatedVideoGenerationTask(config, created.task, { startedAt: created.startedAt, requestBody: created.requestBody, onProgress: onProgress ? (progress) => onProgress(progress) : undefined });
 }
 
+const pendingVideoCreations = new Map<string, Promise<CreatedVideoGenerationTask>>();
+
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
+    const id = normalizeVideoTaskCreateOptions(options).clientTaskId;
+    const pending = createVideoGenerationTaskRequest(config, prompt, references, onProgress, options);
+    if (id) pendingVideoCreations.set(id, pending);
+    try { return await pending; }
+    finally { if (id && pendingVideoCreations.get(id) === pending) pendingVideoCreations.delete(id); }
+}
+
+async function createVideoGenerationTaskRequest(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
     const model = (config.model || config.videoModel || "").trim();
     if (!model) throw new VideoRequestError("模型名称不能为空，请先选择可用的视频模型");
     const systemPrompt = (config.systemPrompts.video || config.systemPrompt).trim();
@@ -188,6 +199,8 @@ export async function pollVideoGenerationTaskStatus(config: AiConfig, task: Vide
     const model = config.model || config.videoModel;
     const pollId = videoPollId(model, task, config);
     if (!pollId) throw new VideoRequestError("视频接口没有返回任务 ID", task);
+    const creating = pendingVideoCreations.get(pollId);
+    if (creating) return (await creating).task;
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     const result = directProvider
         ? await (await import("@/services/api/direct-ai")).pollDirectVideoTask(config, directProvider, pollId)
@@ -233,6 +246,12 @@ function isGrok2APIVideoConfig(config: AiConfig, model: string) {
 }
 
 async function cacheProtectedVideo(config: AiConfig, model: string, task: VideoResponse) {
+    const archiveError = (task as VideoResponse & { archive_error?: string }).archive_error;
+    if (archiveError) return task;
+    if (isCompletedVideoStatus(task.status) && task.storageKey) {
+        const storedURL = await resolveMediaUrl(task.storageKey);
+        return { ...task, url: storedURL, video_url: storedURL };
+    }
     const url = task.video_url || task.url || "";
     const needs88APIContent = videoChannelProtocol(config, model) === "88api" && !url;
     const needsGrokContent = isGrok2APIVideoConfig(config, model) && /\/v1\/videos\/[^/]+\/content(?:[?#]|$)/.test(url);
@@ -336,7 +355,13 @@ async function create88APIVideoRequestBody(config: AiConfig, model: string, prom
     return body;
 }
 
+export function videoReferenceCount(config: AiConfig, model: string, input: VideoReferenceInput) {
+    const hasElements = !isNewAPIConfig(config) && (isAPIMartKlingV3VideoConfig(config, model) || isKIEKlingV3Config(config, model)) && kieKlingOmniVariant(config, model) !== "transformation";
+    return countMediaReferences(input, hasElements ? config.videoElementList : undefined);
+}
+
 async function createVideoRequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    assertReferenceLimit(videoReferenceCount(config, model, input));
     if (isNewAPIConfig(config)) return createNewAPIVideoRequest(config, model, prompt, input);
     if (videoChannelProtocol(config, model) === "autodl") {
         const capabilities = getAutoDLCapabilities(await fetchAutoDLWorkflow(autoDLBaseUrl(config, model), model));
@@ -365,7 +390,7 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     if (isAgnesVideoV25Model(model)) return createAgnesVideoV25RequestBody(config, model, prompt, input);
     if (isAgnesVideoModel(model)) {
         const references = input.references;
-        const inputReferences = await Promise.all(references.slice(0, 7).map(imageToAgnesReference));
+        const inputReferences = await Promise.all(references.map(imageToAgnesReference));
         const dimensions = size ? parseVideoDimensions(size) : null;
         const frameRate = agnesFrameRate(config.videoSeconds);
         const body: Record<string, unknown> = {
@@ -432,12 +457,11 @@ async function createVideoRequestBody(config: AiConfig, model: string, prompt: s
     }
     if (motionControl) body.append("character_orientation", normalizeCharacterOrientation(config.videoCharacterOrientation));
     if (supportsVideoAudioGeneration(model)) body.append("video_generate_audio", String(boolConfig(config.videoGenerateAudio, false)));
-    const imageReferenceLimit = kieKlingOmni === "text-to-video" ? 0 : kieKlingOmni === "reference-to-video" ? input.references.length : kieKlingOmni === "transformation" ? 4 : kling ? 2 : 9;
-    const files = await Promise.all(input.references.slice(0, imageReferenceLimit).map(imageReferenceToFormValue));
+    const files = kieKlingOmni === "text-to-video" ? [] : await Promise.all(input.references.map(imageReferenceToFormValue));
     files.forEach((file) => body.append("input_reference[]", file));
     if (!kling && input.firstFrame) body.append("first_frame_url", await imageReferenceToFormValue(input.firstFrame));
     if (!kling && input.lastFrame) body.append("last_frame_url", await imageReferenceToFormValue(input.lastFrame));
-    const videoFiles = kling && kieKlingOmni !== "reference-to-video" && kieKlingOmni !== "transformation" ? [] : await Promise.all(input.videoReferences.slice(0, kieKlingOmni ? 1 : input.videoReferences.length).map(mediaReferenceToFormValue));
+    const videoFiles = kling && kieKlingOmni !== "reference-to-video" && kieKlingOmni !== "transformation" ? [] : await Promise.all(input.videoReferences.map(mediaReferenceToFormValue));
     videoFiles.forEach((file) => body.append("video_reference[]", file));
     const audioFiles = kling ? [] : await Promise.all(input.audioReferences.map(mediaReferenceToFormValue));
     audioFiles.forEach((file) => body.append("audio_reference[]", file));
@@ -488,7 +512,7 @@ async function miniMaxReferenceValue(value: Promise<string>) {
 async function createCogVideoX3RequestBody(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
     if (input.videoReferences.length || input.audioReferences.length) throw new VideoRequestError("CogVideoX-3 不支持参考视频或参考音频");
     const frames = [input.firstFrame, input.lastFrame].filter((frame): frame is ReferenceImage => Boolean(frame));
-    const references = (frames.length ? frames : input.references).slice(0, 2);
+    const references = frames.length ? frames : input.references;
     const imageUrls = await Promise.all(references.map(publicImageURL));
     return {
         model,
@@ -590,12 +614,12 @@ function normalizeKlingMultiPromptDuration(value: string | undefined) {
 }
 
 async function normalizeKlingElementList(value: AiConfig["videoElementList"] | undefined) {
-    const items = Array.isArray(value) ? value.slice(0, 3) : [];
+    const items = Array.isArray(value) ? value : [];
     const result = [];
     for (const item of items) {
-        const refs = Array.isArray(item?.references) ? item.references.slice(0, 4) : [];
+        const refs = Array.isArray(item?.references) ? item.references : [];
         if (!refs.length) continue;
-        const urls = (await Promise.all(refs.map(elementReferenceToInputUrl))).filter(Boolean).slice(0, 4);
+        const urls = (await Promise.all(refs.map(elementReferenceToInputUrl))).filter(Boolean);
         if (!urls.length) continue;
         result.push({ name: item.name || "", description: item.description || "", element_input_urls: urls });
     }
@@ -603,12 +627,12 @@ async function normalizeKlingElementList(value: AiConfig["videoElementList"] | u
 }
 
 async function normalizeKIEKlingElementList(value: AiConfig["videoElementList"] | undefined) {
-    const items = Array.isArray(value) ? value.slice(0, 3) : [];
+    const items = Array.isArray(value) ? value : [];
     const result = [];
     for (const item of items) {
-        const refs = Array.isArray(item?.references) ? item.references.slice(0, 4) : [];
+        const refs = Array.isArray(item?.references) ? item.references : [];
         if (!refs.length) continue;
-        const references = (await Promise.all(refs.map(async (reference) => ({ kind: reference.kind, url: await elementReferenceToInputUrl(reference) })))).filter((reference) => reference.url).slice(0, 4);
+        const references = (await Promise.all(refs.map(async (reference) => ({ kind: reference.kind, url: await elementReferenceToInputUrl(reference) })))).filter((reference) => reference.url);
         if (!references.length) continue;
         result.push({ name: item.name || "", description: item.description || "", references });
     }
@@ -769,7 +793,6 @@ async function createGeminiVeoRequestBody(config: AiConfig, model: string, promp
     const hasFrames = Boolean(input.firstFrame || input.lastFrame);
     if (hasFrames && input.references.length) throw new VideoRequestError("首尾帧模式不能与普通参考图同时使用");
     if ((input.lastFrame || input.references.length) && !isGeminiVeo31Model(model)) throw new VideoRequestError("当前 Veo 模型不支持尾帧或普通参考图");
-    if (input.references.length > 3) throw new VideoRequestError("Veo 3.1 参考图最多 3 张");
 
     const instance: Record<string, unknown> = { prompt };
     const resolution = normalizeGeminiVideoResolution(config.vquality);

@@ -1,4 +1,7 @@
 "use client";
+import { useMaterialDraft, type DraftReference } from "@/extensions/media-lifecycle/use-material-draft";
+import { assistantDraftReference, setCanvasDraft } from "@/extensions/media-lifecycle/canvas-drafts";
+import { assistantToPromptReference } from "./canvas-assistant-composer";
 
 import { useEffect, useState } from "react";
 import { ArrowUp, LoaderCircle, Maximize2 } from "lucide-react";
@@ -26,11 +29,12 @@ import type { CanvasResourceReference } from "../utils/canvas-resource-reference
 export type CanvasNodeGenerationMode = CanvasGenerationMode;
 
 type CanvasNodePromptPanelProps = {
+    location: string;
     node: CanvasNodeData;
     isRunning: boolean;
     onPromptChange: (nodeId: string, prompt: string) => void;
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeData["metadata"]>) => void;
-    onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
+    onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string, onAccepted?: () => void) => void;
     mentionReferences?: CanvasResourceReference[];
     connectedNodes?: CanvasNodeData[];
     onDisconnectReference?: (fromNodeId: string, toNodeId: string) => void;
@@ -39,7 +43,7 @@ type CanvasNodePromptPanelProps = {
     onImageSettingsOpenChange?: (open: boolean) => void;
 };
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], connectedNodes = [], videoResourceOptions = [], onDisconnectReference, onStartReferenceSelection, onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ location, node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences: connectedMentions = [], connectedNodes = [], videoResourceOptions = [], onDisconnectReference, onStartReferenceSelection, onImageSettingsOpenChange }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const modelCosts = useConfigStore((state) => state.publicSettings?.modelChannel.modelCosts);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
@@ -52,6 +56,13 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const hasImageContent = isCanvasImageNodeType(node.type) && Boolean(node.metadata?.content);
     const sourcePrompt = isPanorama ? node.metadata?.panoramaSourcePrompt || "" : node.metadata?.prompt || "";
     const [prompt, setPrompt] = useState(sourcePrompt);
+    const [externalDrafts, setExternalDrafts] = useState<DraftReference[]>([]);
+    useMaterialDraft(location, prompt, externalDrafts,
+        (text, refs) => { if (text) setPrompt(text); setExternalDrafts(refs); },
+        (refs, text) => { setExternalDrafts((value) => [...value, ...refs]); setPrompt((value) => value + text + (refs.length ? " " + refs.map((ref) => assistantDraftReference(ref).label).join(" ") : "")); },
+        undefined, connectedMentions.filter((ref) => ref.kind !== "text").length + externalDrafts.length, '[data-media-node-draft]');
+    useEffect(() => { setCanvasDraft(location, externalDrafts); }, [location, externalDrafts]);
+    const mentionReferences = [...connectedMentions, ...externalDrafts.map((ref) => assistantToPromptReference(assistantDraftReference(ref)))];
     const [expanded, setExpanded] = useState(false);
     const credits = requestCreditCost({ channelMode: config.channelMode, modelCosts, model: config.model, count: mode === "image" ? config.count : 1 });
 
@@ -69,13 +80,13 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
     const submit = () => {
         const text = prompt.trim();
         if (!canSubmit || isRunning) return;
-        onGenerate(node.id, mode, text);
-        if (!isPanorama) setPrompt("");
+        onGenerate(node.id, mode, text, () => { if (!isPanorama) setPrompt(""); });
     };
 
     return (
         <div
             data-canvas-no-zoom
+            data-media-node-draft
             className="rounded-2xl border p-3 shadow-2xl"
             style={{ background: "var(--popover)", borderColor: theme.toolbar.border, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
@@ -87,6 +98,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 value={prompt}
                 references={mentionReferences}
                 onChange={updatePrompt}
+                onReferenceIdsChange={(ids) => setExternalDrafts((refs) => refs.filter((ref) => ids.includes(ref.id)))}
                 onSubmit={submit}
                 className="thin-scrollbar min-h-20 max-h-[min(240px,40dvh)] w-full rounded-xl px-3 py-2 text-sm leading-5 outline-none"
                 style={{ background: "transparent", color: theme.node.text }}
@@ -139,12 +151,13 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
                 </Button>
             </div>
             <Modal title="编辑提示词" open={expanded} centered width={760} footer={null} onCancel={() => setExpanded(false)} destroyOnHidden>
-                <div data-canvas-no-zoom className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>
+                <div data-canvas-no-zoom data-media-node-draft className="pt-2" onWheelCapture={(event) => event.stopPropagation()}>
                     <CanvasNodeReferenceBar nodeId={node.id} connectedNodes={connectedNodes} onDisconnect={onDisconnectReference} onStartSelection={(nodeId) => { setExpanded(false); onStartReferenceSelection?.(nodeId); }} />
                     <CanvasPromptChipInput
                         value={prompt}
                         references={mentionReferences}
                         onChange={updatePrompt}
+                        onReferenceIdsChange={(ids) => setExternalDrafts((refs) => refs.filter((ref) => ids.includes(ref.id)))}
                         className="thin-scrollbar h-[52dvh] min-h-80 w-full cursor-text overflow-y-auto rounded-2xl border p-4 text-[15px] leading-6 outline-none"
                         style={{ background: "transparent", borderColor: theme.toolbar.border, color: theme.node.text }}
                         placeholder={isPanorama ? "描述想生成的全景，或上传/连接图片作为参考" : promptPlaceholder(mode, hasImageContent, hasTextContent)}

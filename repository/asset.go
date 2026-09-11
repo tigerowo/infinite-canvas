@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -54,7 +55,7 @@ func SaveAsset(item model.Asset) (model.Asset, error) {
 	} else if ok && item.CreatedAt == "" {
 		item.CreatedAt = saved.CreatedAt
 	}
-	return item, db.Save(&item).Error
+	return item, medialifecycle.SaveRecord(db,&item)
 }
 
 // DeleteAsset 删除指定素材。
@@ -63,7 +64,7 @@ func DeleteAsset(id string) error {
 	if err != nil {
 		return err
 	}
-	return db.Delete(&model.Asset{}, "id = ?", id).Error
+	return medialifecycle.Release(db,"@admin-assets","asset",id,0,func(tx *gorm.DB)error{return tx.Delete(&model.Asset{},"id = ?",id).Error})
 }
 
 // applyAssetFilters 应用素材列表的搜索条件。

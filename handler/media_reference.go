@@ -8,15 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/google/uuid"
+	"github.com/tigerowo/infinite-canvas/config"
 )
 
 const (
 	referenceMediaMaxBytes    = 80 << 20
 	referenceImageMaxBytes    = 30 << 20
 	referenceVideoMaxBytes    = 50 << 20
-	referenceAudioMaxBytes    = 15 << 20
 	referenceImageAllowedText = "jpeg/png/webp/bmp/gif/heic/heif 图片"
 	referenceVideoAllowedText = "mp4/mov 视频"
 	referenceAudioAllowedText = "mp3/wav 音频"
@@ -36,8 +35,8 @@ func UploadReferenceMedia(w http.ResponseWriter, r *http.Request) {
 		Fail(w, "未配置 PUBLIC_BASE_URL，无法把本地参考素材提供给火山方舟访问")
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, referenceMediaMaxBytes+1)
-	if err := r.ParseMultipartForm(referenceMediaMaxBytes); err != nil {
+	// This is the in-memory threshold; larger audio uploads spill to a temporary file.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		Fail(w, "参考素材过大或上传格式不正确")
 		return
 	}
@@ -219,7 +218,7 @@ func referenceMediaTypeMaxBytes(mimeType string) int64 {
 		return referenceVideoMaxBytes
 	}
 	if strings.HasPrefix(mimeType, "audio/") {
-		return referenceAudioMaxBytes
+		return 0
 	}
 	return referenceMediaMaxBytes
 }
@@ -230,9 +229,6 @@ func referenceMediaSizeMessage(mimeType string) string {
 	}
 	if strings.HasPrefix(mimeType, "video/") {
 		return "参考视频超过大小限制，请使用 50MB 以内的 mp4/mov 视频"
-	}
-	if strings.HasPrefix(mimeType, "audio/") {
-		return "参考音频超过大小限制，请使用 15MB 以内的 mp3/wav 音频"
 	}
 	return "参考素材超过大小限制"
 }

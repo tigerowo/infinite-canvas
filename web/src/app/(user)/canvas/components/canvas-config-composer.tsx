@@ -1,4 +1,6 @@
 "use client";
+import { useMaterialDraft, type DraftReference } from "@/extensions/media-lifecycle/use-material-draft";
+import { draftInputs, setCanvasDraft } from "@/extensions/media-lifecycle/canvas-drafts";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
@@ -10,6 +12,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import type { NodeGenerationInput } from "./canvas-node-generation";
 
 type CanvasConfigComposerProps = {
+    location: string;
     value: string;
     inputs: NodeGenerationInput[];
     onChange: (value: string) => void;
@@ -26,7 +29,14 @@ type MentionState = {
 
 export const CONFIG_REFERENCE_PATTERN = /@\[node:([^\]]+)\]/g;
 
-export function CanvasConfigComposer({ value, inputs, onChange, onClose }: CanvasConfigComposerProps) {
+export function CanvasConfigComposer({ location, value, inputs: connectedInputs, onChange, onClose }: CanvasConfigComposerProps) {
+    const [draftReferences, setDraftReferences] = useState<DraftReference[]>([]);
+    useMaterialDraft(location, value, draftReferences,
+        (text, refs) => { if (text) onChange(text); setDraftReferences(refs); },
+        (refs, text) => { setDraftReferences((current) => [...current, ...refs]); onChange(value + text + (refs.length ? " " + refs.map((ref) => `@[node:${ref.id}]`).join(" ") : "")); },
+        undefined, connectedInputs.filter((input) => input.type !== "text").length + draftReferences.length, '[data-media-config-draft]');
+    useEffect(() => { setCanvasDraft(location, draftReferences); }, [location, draftReferences]);
+    const inputs = useMemo(() => [...connectedInputs, ...draftInputs(draftReferences)], [connectedInputs, draftReferences]);
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const editorRef = useRef<HTMLDivElement>(null);
     const composingRef = useRef(false);
@@ -43,7 +53,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
     }, [inputs, mention]);
 
     useEffect(() => {
-        if (document.activeElement === editorRef.current) return;
+        if (document.activeElement === editorRef.current && serializeEditor(editorRef.current!) === value) return;
         const editor = editorRef.current;
         if (!editor) return;
         editor.textContent = "";
@@ -61,6 +71,8 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
         const editor = editorRef.current;
         if (!editor) return;
         const next = serializeEditor(editor);
+        const ids = new Set(parseComposerTokens(next).flatMap((token) => token.type === "reference" ? [token.nodeId] : []));
+        setDraftReferences((refs) => refs.filter((ref) => ids.has(ref.id)));
         onChange(next);
         syncMention();
     };
@@ -137,6 +149,7 @@ export function CanvasConfigComposer({ value, inputs, onChange, onClose }: Canva
                 {!value.trim() ? <div className="pointer-events-none absolute left-3 top-2 text-sm leading-7" style={{ color: theme.node.placeholder }}>输入提示词，按 @ 引用连接的图片或文本</div> : null}
                 <div
                     ref={editorRef}
+                    data-media-config-draft
                     contentEditable
                     suppressContentEditableWarning
                     className="thin-scrollbar min-h-24 max-h-[40dvh] w-full cursor-text overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 text-sm leading-7 outline-none"

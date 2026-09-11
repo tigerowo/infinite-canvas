@@ -469,6 +469,51 @@ S3/R2 与 WebDAV 共用的媒体文件索引表，不保存画布、素材列表
 
 ## 定制扩展数据
 
+### 素材生命周期（EXT-0045，实现中）
+
+`repository.DB` 在上游表迁移之后依次调用 `medialifecycle.Migrate`、`Backfill` 和 `BackfillTaskAttempts`。新增结构均在 `extensions/media-lifecycle/`，没有给上游业务表增加生命周期列。迁移失败阻止启动；建表可重复执行，业务回填以 `policies.migrated_at` 防重，任务恢复元数据只补缺失行，不重置已存在的次数或状态。生产启用前仍需完成三数据库和真实范围核对，进度见 [EXT-0045](../customizations/changes/0045-media-lifecycle.md)。
+
+以下表统一以 `ext_media_lifecycle_` 为前缀，时间使用服务端 Unix 毫秒：
+
+| 表后缀 | 关键字段与约束 | 用途 |
+| --- | --- | --- |
+| `policies` | `id=1`；`mode`、`days`、`execution`、`version`、`epoch`、`serial`、`clearing`、`storage_reviewed`、`migrated_at` | 保留策略、清空代次和短事务串行锁；初始 retention/30/observe |
+| `files` | `id` 主键；`scope`、`hash`、`state`、`bytes`、`mime`、`activity`、`created`、`protection`、`version`、`epoch`、`object_json`、`delete_worker`、`delete_until` | 物理文件身份、期限、跨批次删除租约和恢复定位；失租不能确认删除或清掉定位 |
+| `dedup` | 范围与字节哈希摘要 `id` 主键；`file_id`、`token`、`lease_until` | 并发上传唯一位置与租约；防止多个进程同时 PUT 相同内容 |
+| `materials` | 随机分享 `id` 主键；`owner + file_id` 唯一；`name`、`state`、`activity`、`epoch` | 用户独立分享身份；与是否存在素材库保留关系分开 |
+| `entities` | `entity_key` 主键，由 owner/kind/id 派生；`state`、`fingerprint`、`activity`、`created`、`protection`、`version`、`epoch` | 业务单位、草稿与提交保护，版本校验及防复活状态 |
+| `references` | `entity_key + file_id` 联合主键 | 业务单位到必要文件的依赖；更新和业务保存在同一事务内 |
+| `operations` | 账号与操作标识摘要 `id`；`entity_key`、`fingerprint`、`result`、`created`、`epoch` | 幂等活动与原响应；旧操作重放不能取得较新的版本或作用到其他位置 |
+| `batches` | `id`；`kind`、`state`、`policy_version`、`epoch`、`created`、`updated`、`error`、`worker`、`lease_until` | 预览及固定批次、执行租约和部分失败状态 |
+| `batch_items` | `batch_id + kind + target` 联合主键；`version`、`state`、`bytes`、`error` | 文件和业务清理明细，保留失败定位和重试依据 |
+| `settlements` | 账号与操作标识摘要 `id`；`owner`、`amount`、`state`、`created`、`epoch` | pending/settled/refunded/unknown；与余额及账务流水事务防重，结果不明待核对 |
+| `task_attempts` | `id` 同业务 entity key；`owner`、`kind`、`task_id`、`state`、`worker`、`lease_until`、`started`、`epoch`、`result_json`、`archive_started`、`archive_attempts`、`next_attempt`、`last_error`、`manual_retry`、`recovery_version`、`recovery_at` | 提交标记、结果、归档预算和单次恢复；恢复版本仅给不早于 recovery_at 的快照，重试不续期 |
+| `request_leases` | `id`；`epoch`、`until` | 跟踪经过 Guard 的在途写请求，清空执行前检查 |
+
+`files` 使用 active/uploading/deleting/deleted。`entities` 保留删除墓碑，拒绝旧客户端覆盖；现阶段尚未完成控制元数据压缩，不能宣称所有辅助表已经按保留期收敛。`task_attempts` 区分 queued/submitting/polling/result/done/unknown/archive_failed；归档结果持久化后独立重试，未拿到结果的中断提交进入 unknown，不自动重新生成。
+
+当前业务映射与边界：
+
+| 生命周期 kind | 上游表或字段 | 清理单位及保留边界 |
+| --- | --- | --- |
+| `canvas` | `canvas_projects.project_data` | 一个项目及其当前节点、连线和必要媒体；保留防复活控制状态 |
+| `image-task` / `audio-task` / `video-task` | `canvas_image_tasks` / `canvas_audio_tasks` / `video_tasks` | 一个任务、结果、当前输入引用与恢复记录；必要账务状态保留 |
+| `image-history` / `video-history` | `image_generation_logs` / `video_generation_logs` | 一条生成历史，按自身活动与必要文件依赖处理 |
+| `user-assets` / `legacy-history` | `user_configs.asset_data` / 历史 JSON 对应字段 | 按条目 ID 清理；同表模型、存储等账号配置保留，禁止整行删除 |
+| `asset` | `assets` | 管理员素材库条目属于业务数据 |
+| `workflow` | `creative_workflows` | 用户工作流及必要媒体依赖 |
+| `skill` | 用户来源的 `agent_skills`、`agent_skill_files` | 用户自建内容纳入清理，系统预设保留；包文件路径清理尚需补齐 |
+| `ai-log` | `ai_call_logs` | 表记录已登记；既有本地日志文件还需纳入同一清理批次 |
+| `upload` / `library` / `draft` / `request` | 扩展素材、引用与实体 | 普通移除只释放对应引用；提交保护与草稿释放顺序由事务保证 |
+
+保留 `users` 中的账号、权限和余额、`settings`、`user_configs` 的配置字段、系统来源 Skill、公共 `prompts` 及维持结算一致性的控制状态。账务历史展示、旧来源归档映射、凭证身份映射、OSS 未索引对象与控制表压缩仍需完成对应的清理实现和验证，不能仅凭这张映射表开启全量清空。
+
+图片/视频历史通过扩展 `history.go` 在生命周期锁内保存/删除，历史 ID、任务 ID、输出 ID 建立 `entities` 控制别名，避免删除后换 ID 复活；跨账号主键冲突拒绝覆盖。旧 `user_configs.image_history` 迁移与字段 CAS 清空在同一事务，不整行覆盖模型及存储设置。数据库查询错误和坏 JSON 明确报错并保留原文。
+
+保留规则预览使用 `operations.entity_key=policy-preview` 的控制 receipt，15 分钟有效，绑定策略版本、epoch、候选身份/版本和 scope。缩短期限、forever 转 retention、observe 转 enforce 保存前重新核对；receipt 不可当作删除批次执行。控制记录压缩仍属 TODO。
+
+浏览器草稿使用 localforage 的 `ext_media_lifecycle_drafts`，key 包含账号和输入位置。图片/视频历史及生图分类在原 store 中使用 `ext:media-lifecycle:history:<账号>:<epoch>:` 键，按账号及代次读取/删除；旧无归属记录保留为本机恢复副本，不自动归属当前账号。清空代次不匹配时不能重放旧历史；缓存、签名刷新和无变化恢复不续期。代码回退不能恢复已删除 OSS 文件。
+
 - `ext_video_task_identity`：`extensions/taskidentity/identity.go` 按需迁移。`task_id`、`user_id` 为联合主键，`source` 为 user/admin/local，仅记录视频创建的凭证来源，不存密钥。旧任务无记录时走兼容查询；新记录冲突不覆盖原来源。
 - `ext_storage_access`：存储访问扩展的既有配置表。默认上传以 `__default_upload_provider__` 独立配置行保存 Provider ID，scope 为 default；不修改上游 Provider 表字段，也不迁移旧存储对象。
 

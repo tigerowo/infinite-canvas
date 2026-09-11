@@ -1,13 +1,18 @@
 package repository
 
-import "github.com/tigerowo/infinite-canvas/model"
+import (
+	"errors"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
+	"github.com/tigerowo/infinite-canvas/model"
+	"gorm.io/gorm"
+)
 
-func SaveCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, error) {
+func SaveCanvasAudioTask(task model.CanvasAudioTask, epoch ...int64) (model.CanvasAudioTask, error) {
 	db, err := DB()
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	return task, medialifecycle.CreateRecord(db, &task, epoch...)
 }
 
 func UpdateCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, error) {
@@ -16,10 +21,7 @@ func UpdateCanvasAudioTask(task model.CanvasAudioTask) (model.CanvasAudioTask, e
 		return task, err
 	}
 
-	return task, db.Model(&model.CanvasAudioTask{}).
-		Where("user_id = ? AND id = ?", task.UserID, task.ID).
-		Select("*").
-		Updates(&task).Error
+	return task, medialifecycle.SaveRecord(db, &task)
 }
 
 func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bool, error) {
@@ -29,8 +31,11 @@ func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bo
 	}
 	var task model.CanvasAudioTask
 	err = db.First(&task, "user_id = ? AND id = ?", userID, id).Error
-	if err != nil {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return model.CanvasAudioTask{}, false, nil
+	}
+	if err != nil {
+		return model.CanvasAudioTask{}, false, err
 	}
 	return task, true, nil
 }

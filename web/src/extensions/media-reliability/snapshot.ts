@@ -7,7 +7,7 @@ export function durableMediaSnapshot<T>(value: T): T {
     const data = record.data as Record<string, unknown> | undefined;
     const hasKey = (typeof record.storageKey === "string" && Boolean(record.storageKey)) || (data && typeof data.storageKey === "string" && Boolean(data.storageKey));
     return Object.fromEntries(Object.entries(record).map(([key, item]) => [key,
-        hasKey && ["url", "dataUrl", "coverUrl"].includes(key) && typeof item === "string" && (item.startsWith("blob:") || isSignedMediaURL(item))
+        hasKey && ["url", "dataUrl", "coverUrl", "content"].includes(key) && typeof item === "string" && (item.startsWith("blob:") || isSignedMediaURL(item))
             ? "" : durableMediaSnapshot(item),
     ])) as T;
 }

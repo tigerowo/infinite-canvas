@@ -2,7 +2,9 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -15,11 +17,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/config"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
-	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 )
 
 const (
@@ -36,9 +39,7 @@ var (
 	longDataURLPattern    = regexp.MustCompile(`data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]{512,}`)
 	longBase64TextPattern = regexp.MustCompile(`"[A-Za-z0-9+/=]{512,}"`)
 
-	aiLogCleanupCron *cron.Cron
-	aiLogCleanupOnce sync.Once
-	aiLogCleanupMu   sync.Mutex
+	aiLogFileMu sync.Mutex
 )
 
 type AICallLogInput struct {
@@ -77,15 +78,41 @@ func SaveAICallLog(input AICallLogInput) {
 		Error:           truncateLogText(errorText, aiLogErrorTextLimit),
 		CreatedAt:       now(),
 	}
-	if err := appendAICallLog(item); err != nil {
+	db, err := repository.DB()
+	if err != nil {
+		log.Printf("index ai call log failed err=%v", err)
+		return
+	}
+	lease, err := beginAILogWrite(db)
+	if err != nil {
+		log.Printf("begin ai call log write failed err=%v", err)
+		return
+	}
+	defer endAILogWrite(db, lease)
+	aiLogFileMu.Lock()
+	err = appendAICallLog(item)
+	aiLogFileMu.Unlock()
+	if err != nil {
 		log.Printf("write ai call log failed err=%v", err)
+		return
+	}
+	if err := syncAICallLogRecord(db, item, lease.Epoch); err != nil {
+		// The durable JSONL record remains the recovery source for the next sync.
+		log.Printf("index ai call log failed err=%v", err)
 	}
 }
 
 func ListAICallLogs(q model.Query) (model.AICallLogList, error) {
 	q.Normalize()
-	items, err := readAICallLogs()
+	db, err := repository.DB()
 	if err != nil {
+		return model.AICallLogList{}, err
+	}
+	if err := SyncAICallLogsToDatabase(db); err != nil {
+		return model.AICallLogList{}, err
+	}
+	items := []model.AICallLog{}
+	if err := db.Find(&items).Error; err != nil {
 		return model.AICallLogList{}, err
 	}
 	if keyword := strings.ToLower(strings.TrimSpace(q.Keyword)); keyword != "" {
@@ -112,65 +139,211 @@ func ListAICallLogs(q model.Query) (model.AICallLogList, error) {
 	return model.AICallLogList{Items: items[start:end], Total: total}, nil
 }
 
-func DeleteAICallLogsOlderThan(days int) (int, error) {
-	if days <= 0 {
-		days = 7
+func SyncAICallLogsToDatabase(db *gorm.DB) error {
+	lease, err := beginAILogWrite(db)
+	if err != nil {
+		return err
 	}
-	cutoff := time.Now().AddDate(0, 0, -days)
+	defer endAILogWrite(db, lease)
+	aiLogFileMu.Lock()
+	items, err := readAICallLogs()
+	aiLogFileMu.Unlock()
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		if err := syncAICallLogRecord(db, items[i], lease.Epoch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func beginAILogWrite(db *gorm.DB) (medialifecycle.RequestLease, error) {
+	var lease medialifecycle.RequestLease
+	err := medialifecycle.WithLock(db, func(tx *gorm.DB, policy *medialifecycle.Policy) error {
+		if err := medialifecycle.GuardEpoch(*policy, 0); err != nil {
+			return err
+		}
+		lease = medialifecycle.RequestLease{ID: medialifecycle.ID(), Epoch: policy.Epoch, Until: time.Now().UTC().UnixMilli() + medialifecycle.Day}
+		return tx.Create(&lease).Error
+	})
+	return lease, err
+}
+
+func endAILogWrite(db *gorm.DB, lease medialifecycle.RequestLease) {
+	if lease.ID == "" {
+		return
+	}
+	if err := db.Delete(&medialifecycle.RequestLease{}, "id = ?", lease.ID).Error; err != nil {
+		log.Printf("release ai call log write lease failed err=%v", err)
+	}
+}
+
+func syncAICallLogRecord(db *gorm.DB, item model.AICallLog, epoch int64) error {
+	return medialifecycle.WithLock(db, func(tx *gorm.DB, policy *medialifecycle.Policy) error {
+		if err := medialifecycle.GuardEpoch(*policy, epoch); err != nil {
+			return err
+		}
+		stored := item
+		err := tx.First(&stored, "id = ?", item.ID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			stored = item
+			if err := tx.Create(&stored).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		if err := medialifecycle.TrackRecord(tx, *policy, &stored); err != nil {
+			return err
+		}
+		created, ok := aiLogCreatedAt(stored.CreatedAt)
+		if !ok {
+			created, ok = aiLogCreatedAt(item.CreatedAt)
+		}
+		if !ok {
+			return nil
+		}
+		result := tx.Model(&medialifecycle.Entity{}).
+			Where("entity_key = ? AND state = ? AND epoch = ?", medialifecycle.Key(aiLogOwner(stored), "ai-log", stored.ID), medialifecycle.Active, policy.Epoch).
+			Update("activity", created.UTC().UnixMilli())
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return medialifecycle.ErrConflict
+		}
+		return nil
+	})
+}
+
+func ReconcileAILogFiles(ctx context.Context, db *gorm.DB, batch medialifecycle.Batch) error {
+	aiLogFileMu.Lock()
+	defer aiLogFileMu.Unlock()
 	files, err := aiLogFiles()
 	if err != nil {
-		return 0, err
+		return err
 	}
-	removed := 0
+	if batch.Kind == "clear" {
+		for _, file := range files {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+		return nil
+	}
+	var ids []string
+	if err := db.Model(&model.AICallLog{}).Pluck("id", &ids).Error; err != nil {
+		return err
+	}
+	active := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		active[id] = true
+	}
 	for _, file := range files {
-		fileDate, ok := aiLogFileDate(file)
-		if !ok || !fileDate.Before(startOfDay(cutoff)) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		lines, changed, err := retainedAILogLines(file, active)
+		if err != nil {
+			return err
+		}
+		if !changed {
 			continue
 		}
-		if err := os.Remove(file); err != nil {
-			return removed, err
+		if len(lines) == 0 {
+			if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
 		}
-		removed++
+		if err := replaceAILogFile(file, lines); err != nil {
+			return err
+		}
 	}
-	return removed, nil
+	return nil
 }
 
-func StartAILogCleanupScheduler() {
-	aiLogCleanupOnce.Do(func() {
-		aiLogCleanupCron = cron.New()
-		aiLogCleanupCron.Start()
-	})
-	RefreshAILogCleanupScheduler()
-}
-
-func RefreshAILogCleanupScheduler() {
-	aiLogCleanupMu.Lock()
-	defer aiLogCleanupMu.Unlock()
-	if aiLogCleanupCron == nil {
-		return
-	}
-	for _, entry := range aiLogCleanupCron.Entries() {
-		aiLogCleanupCron.Remove(entry.ID)
-	}
-	settings, err := repository.GetSettings()
+func retainedAILogLines(filePath string, active map[string]bool) ([]string, bool, error) {
+	file, err := os.Open(filePath)
 	if err != nil {
-		log.Printf("load ai log cleanup setting failed err=%v", err)
-		return
+		return nil, false, err
 	}
-	setting := normalizeAILogCleanupSetting(settings.Private.AILog.Cleanup)
-	if setting.Enabled == nil || !*setting.Enabled {
-		return
-	}
-	if _, err := aiLogCleanupCron.AddFunc(setting.Cron, func() {
-		removed, err := DeleteAICallLogsOlderThan(setting.RetentionDays)
-		if err != nil {
-			log.Printf("scheduled ai log cleanup failed err=%v", err)
-			return
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), aiLogScannerMax)
+	lines := []string{}
+	changed := false
+	for scanner.Scan() {
+		line := scanner.Text()
+		var item model.AICallLog
+		if json.Unmarshal([]byte(strings.TrimSpace(line)), &item) != nil || item.ID == "" || active[item.ID] {
+			lines = append(lines, line)
+			continue
 		}
-		log.Printf("scheduled ai log cleanup done removedFiles=%d retentionDays=%d", removed, setting.RetentionDays)
-	}); err != nil {
-		log.Printf("add ai log cleanup cron failed cron=%s err=%v", setting.Cron, err)
+		changed = true
 	}
+	return lines, changed, scanner.Err()
+}
+
+func replaceAILogFile(filePath string, lines []string) error {
+	temporary, err := os.CreateTemp(filepath.Dir(filePath), ".ai-log-cleanup-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	writer := bufio.NewWriter(temporary)
+	for _, line := range lines {
+		if _, err := writer.WriteString(line + "\n"); err != nil {
+			temporary.Close()
+			return err
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	backupPath := filePath + ".cleanup-backup"
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Rename(filePath, backupPath); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, filePath); err != nil {
+		if restoreErr := os.Rename(backupPath, filePath); restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("restore AI log backup: %w", restoreErr))
+		}
+		return err
+	}
+	if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func aiLogOwner(item model.AICallLog) string {
+	if owner := strings.TrimSpace(item.UserID); owner != "" {
+		return owner
+	}
+	return "@anonymous"
+}
+
+func aiLogCreatedAt(value string) (time.Time, bool) {
+	created, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	return created, err == nil
 }
 
 func normalizeAILogCleanupSetting(setting model.AILogCleanupSetting) model.AILogCleanupSetting {
@@ -224,8 +397,10 @@ func appendAICallLog(item model.AICallLog) error {
 	if err != nil {
 		return err
 	}
-	log.New(file, "", 0).Println(string(encoded))
-	return nil
+	if _, err := file.Write(append(encoded, '\n')); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func readAICallLogs() ([]model.AICallLog, error) {
@@ -275,12 +450,48 @@ func aiLogFiles() ([]string, error) {
 	if dir == "" {
 		dir = filepath.Join("data", "logs", "ai-calls")
 	}
+	if err := recoverAILogFileReplacements(dir); err != nil {
+		return nil, err
+	}
 	files, err := filepath.Glob(filepath.Join(dir, "ai-calls-*.log"))
 	if err != nil {
 		return nil, err
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(files)))
 	return files, nil
+}
+
+func recoverAILogFileReplacements(dir string) error {
+	backups, err := filepath.Glob(filepath.Join(dir, "ai-calls-*.log.cleanup-backup"))
+	if err != nil {
+		return err
+	}
+	for _, backupPath := range backups {
+		filePath := strings.TrimSuffix(backupPath, ".cleanup-backup")
+		_, targetErr := os.Stat(filePath)
+		switch {
+		case targetErr == nil:
+			if err := os.Remove(backupPath); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		case os.IsNotExist(targetErr):
+			if err := os.Rename(backupPath, filePath); err != nil {
+				return err
+			}
+		default:
+			return targetErr
+		}
+	}
+	temporaryFiles, err := filepath.Glob(filepath.Join(dir, ".ai-log-cleanup-*"))
+	if err != nil {
+		return err
+	}
+	for _, temporaryPath := range temporaryFiles {
+		if err := os.Remove(temporaryPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func aiLogFileDate(filePath string) (time.Time, bool) {

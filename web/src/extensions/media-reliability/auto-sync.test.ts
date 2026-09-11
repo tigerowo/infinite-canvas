@@ -10,6 +10,10 @@ async function withStorageFixture(run: () => Promise<void>) {
     const windowBefore = Object.getOwnPropertyDescriptor(globalThis, "window");
     const userBefore = useUserStore.getState();
     const events = new EventTarget();
+    globalThis.fetch = (async (url: string) => {
+        if (url === "/api/extensions/media-lifecycle/state") return Response.json({ code: 0, data: { epoch: 1, clearing: false } });
+        throw new Error(`Unexpected fixture request: ${url}`);
+    }) as typeof fetch;
     Object.defineProperty(globalThis, "window", { configurable: true, value: {
         dispatchEvent: events.dispatchEvent.bind(events),
         localStorage: { getItem: (key: string) => key === USER_STORAGE_PROVIDER_KEY ? JSON.stringify({ enabled: true, type: "s3", endpoint: "https://personal.example", bucket: "personal", accessKeyId: "fixture", secretAccessKey: "fixture" }) : null },
@@ -58,6 +62,7 @@ test("generated image uses the administrator default and never caches an old acc
     await withStorageFixture(async () => {
         let requests = 0;
         globalThis.fetch = (async (url: string, init?: RequestInit) => {
+            if (url === "/api/extensions/media-lifecycle/state") return Response.json({ code: 0, data: { epoch: 1, clearing: false } });
             requests++;
             if (url.startsWith("data:")) return new Response(new Blob(["fixture"], { type: "image/png" }));
             assert.equal(url, "/api/v1/files");

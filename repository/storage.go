@@ -1,6 +1,7 @@
 package repository
 
 import (
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/model"
 )
 
@@ -10,7 +11,7 @@ func SaveStorageObject(object model.StorageObject) (model.StorageObject, error) 
 	if err != nil {
 		return model.StorageObject{}, err
 	}
-	return object, db.Save(&object).Error
+	return object, medialifecycle.RegisterObject(db, object, "", 0)
 }
 
 // GetStorageObject 根据 ID 获取存储对象。

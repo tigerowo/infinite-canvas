@@ -2,6 +2,7 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { lifecycleEpoch } from "@/extensions/media-lifecycle/session";
 
 import { AUTH_TOKEN_KEY, fetchCurrentUser, login, register, type AuthPayload, type AuthUser } from "@/services/api/auth";
 
@@ -39,6 +40,7 @@ export const useUserStore = create<UserStore>()(
                         set({ token: "", user: null, isReady: true, isLoading: false });
                         return;
                     }
+                    await lifecycleEpoch(token).catch(() => undefined);
                     set({ user, isReady: true, isLoading: false });
                 } catch {
                     set({ token: "", user: null, isReady: true, isLoading: false });
@@ -48,6 +50,7 @@ export const useUserStore = create<UserStore>()(
                 set({ isLoading: true });
                 try {
                     const session = await login(payload);
+                    await lifecycleEpoch(session.token).catch(() => undefined);
                     set({ token: session.token, user: session.user, isReady: true, isLoading: false });
                     return session.user;
                 } catch (error) {
@@ -59,6 +62,7 @@ export const useUserStore = create<UserStore>()(
                 set({ isLoading: true });
                 try {
                     const session = await register(payload);
+                    await lifecycleEpoch(session.token).catch(() => undefined);
                     set({ token: session.token, user: session.user, isReady: true, isLoading: false });
                     return session.user;
                 } catch (error) {

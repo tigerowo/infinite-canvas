@@ -1,8 +1,10 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -12,7 +14,16 @@ import (
 	"github.com/tigerowo/infinite-canvas/model"
 )
 
-func newWebDAVClient(provider model.StorageProvider) (*gowebdav.Client, error) {
+type storageContextTransport struct {
+	context context.Context
+	base    http.RoundTripper
+}
+
+func (t storageContextTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(r.WithContext(t.context))
+}
+
+func newWebDAVClient(provider model.StorageProvider, requestContext ...context.Context) (*gowebdav.Client, error) {
 	parsed, err := url.Parse(strings.TrimSpace(provider.Endpoint))
 	if err != nil || parsed.Host == "" {
 		return nil, errors.New("WebDAV 地址无效")
@@ -25,6 +36,13 @@ func newWebDAVClient(provider model.StorageProvider) (*gowebdav.Client, error) {
 	}
 	client := gowebdav.NewClient(strings.TrimRight(parsed.String(), "/"), provider.Username, provider.Password)
 	client.SetTransport(SafeProxyHTTPClient().Transport)
+	if len(requestContext) > 0 {
+		transport := SafeProxyHTTPClient().Transport
+		if transport == nil {
+			transport = http.DefaultTransport
+		}
+		client.SetTransport(storageContextTransport{context: requestContext[0], base: transport})
+	}
 	client.SetTimeout(5 * time.Minute)
 	return client, nil
 }
@@ -39,8 +57,8 @@ func cleanStoragePath(value string) (string, error) {
 	return strings.Join(parts, "/"), nil
 }
 
-func putWebDAVObject(provider model.StorageProvider, objectKey string, data []byte) error {
-	client, err := newWebDAVClient(provider)
+func putWebDAVObject(provider model.StorageProvider, objectKey string, data []byte, requestContext ...context.Context) error {
+	client, err := newWebDAVClient(provider, requestContext...)
 	if err != nil {
 		return err
 	}
@@ -79,8 +97,8 @@ func getWebDAVObjectStream(provider model.StorageProvider, objectKey string, siz
 	return storageObjectStream{Body: stream, StatusCode: 200, ContentLength: size, AcceptRanges: true}, nil
 }
 
-func deleteWebDAVObject(provider model.StorageProvider, objectKey string) error {
-	client, err := newWebDAVClient(provider)
+func deleteWebDAVObject(provider model.StorageProvider, objectKey string, requestContext ...context.Context) error {
+	client, err := newWebDAVClient(provider, requestContext...)
 	if err != nil {
 		return err
 	}

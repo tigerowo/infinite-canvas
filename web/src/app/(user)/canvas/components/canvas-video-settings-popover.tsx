@@ -280,7 +280,7 @@ function KlingElementListSection({
                                 </span>
                             </div>
                             <div className="flex items-center gap-1.5">
-                                <IconButton title="新增元素" disabled={items.length >= 3} theme={theme} onClick={() => onChange([...items, { name: "", description: "", nodeIds: [] }])}>
+                                <IconButton title="新增元素" theme={theme} onClick={() => onChange([...items, { name: "", description: "", nodeIds: [] }])}>
                                     <Plus className="size-3.5" />
                                 </IconButton>
                                 <IconButton title="删除元素" disabled={items.length <= 1} danger theme={theme} onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))}>
@@ -366,7 +366,7 @@ function MultiResourcePicker({ values, options, theme, onChange }: { values: str
     const selected = values.map((nodeId) => options.find((item) => item.nodeId === nodeId)).filter((item): item is CanvasVideoResourceOption => Boolean(item));
     const toggle = (nodeId: string) => {
         if (values.includes(nodeId)) onChange(values.filter((item) => item !== nodeId));
-        else if (values.length < 4) onChange([...values, nodeId]);
+        else onChange([...values, nodeId]);
     };
     return (
         <div className="relative">
@@ -397,12 +397,10 @@ function MultiResourcePicker({ values, options, theme, onChange }: { values: str
                     {options.length ? (
                         options.map((item) => {
                             const active = values.includes(item.nodeId);
-                            const disabled = !active && values.length >= 4;
                             return (
                                 <button
                                     key={item.nodeId}
                                     type="button"
-                                    disabled={disabled}
                                     className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition disabled:opacity-35"
                                     style={{ background: active ? theme.toolbar.activeBg : "transparent", color: active ? theme.toolbar.activeText : theme.node.text }}
                                     onClick={() => toggle(item.nodeId)}
@@ -568,11 +566,11 @@ function normalizeKlingMultiPrompt(value: CanvasNodeMetadata["klingMultiPrompt"]
 }
 
 function normalizeKlingElementList(value: CanvasNodeMetadata["klingElementList"] | undefined) {
-    return Array.isArray(value) && value.length ? value.slice(0, 3).map((item) => ({ name: item.name || "", description: item.description || "", nodeIds: normalizeNodeIds(item.nodeIds, 4) })) : [{ name: "", description: "", nodeIds: [] }];
+    return Array.isArray(value) && value.length ? value.map((item) => ({ name: item.name || "", description: item.description || "", nodeIds: normalizeNodeIds(item.nodeIds) })) : [{ name: "", description: "", nodeIds: [] }];
 }
 
-function normalizeNodeIds(value: string[] | undefined, max: number) {
-    return Array.from(new Set(Array.isArray(value) ? value.filter(Boolean) : [])).slice(0, max);
+function normalizeNodeIds(value: string[] | undefined) {
+    return Array.from(new Set(Array.isArray(value) ? value.filter(Boolean) : []));
 }
 
 function boolValue(value: string | undefined) {

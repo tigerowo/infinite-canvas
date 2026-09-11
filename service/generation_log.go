@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 )
@@ -41,7 +42,7 @@ func SaveCurrentUserVideoGenerationLogs(ctx context.Context, raws []json.RawMess
 			logs = append(logs, log)
 		}
 	}
-	if err := repository.UpsertVideoGenerationLogs(user.ID, logs); err != nil {
+	if err := repository.UpsertVideoGenerationLogs(user.ID, logs, medialifecycle.Epoch(ctx)); err != nil {
 		return nil, err
 	}
 	return CurrentUserVideoGenerationLogs(ctx)
@@ -53,7 +54,7 @@ func DeleteCurrentUserVideoGenerationLog(ctx context.Context, id string) error {
 		return errors.New("请先登录")
 	}
 	cleanupGenerationLogs()
-	return repository.SoftDeleteVideoGenerationLog(user.ID, strings.TrimSpace(id), now())
+	return repository.SoftDeleteVideoGenerationLog(user.ID, strings.TrimSpace(id), now(), medialifecycle.Epoch(ctx))
 }
 
 func DeleteCurrentUserVideoGenerationLogs(ctx context.Context, ids []string) error {
@@ -62,7 +63,7 @@ func DeleteCurrentUserVideoGenerationLogs(ctx context.Context, ids []string) err
 		return errors.New("请先登录")
 	}
 	cleanupGenerationLogs()
-	return repository.SoftDeleteVideoGenerationLogs(user.ID, ids, now())
+	return repository.SoftDeleteVideoGenerationLogs(user.ID, ids, now(), medialifecycle.Epoch(ctx))
 }
 
 func CurrentUserImageGenerationLogs(ctx context.Context) ([]json.RawMessage, error) {
@@ -71,7 +72,7 @@ func CurrentUserImageGenerationLogs(ctx context.Context) ([]json.RawMessage, err
 		return nil, errors.New("请先登录")
 	}
 	cleanupGenerationLogs()
-	if err := migrateUserImageGenerationLogs(user.ID); err != nil {
+	if err := migrateUserImageGenerationLogs(ctx, user.ID); err != nil {
 		return nil, err
 	}
 	logs, err := repository.ListImageGenerationLogs(user.ID, generationLogLimit)
@@ -94,7 +95,7 @@ func SaveCurrentUserImageGenerationLogs(ctx context.Context, raws []json.RawMess
 			logs = append(logs, log)
 		}
 	}
-	if err := repository.UpsertImageGenerationLogs(user.ID, logs); err != nil {
+	if err := repository.UpsertImageGenerationLogs(user.ID, logs, medialifecycle.Epoch(ctx)); err != nil {
 		return nil, err
 	}
 	return CurrentUserImageGenerationLogs(ctx)
@@ -106,7 +107,7 @@ func DeleteCurrentUserImageGenerationLog(ctx context.Context, id string) error {
 		return errors.New("请先登录")
 	}
 	cleanupGenerationLogs()
-	return repository.SoftDeleteImageGenerationLog(user.ID, strings.TrimSpace(id), now())
+	return repository.SoftDeleteImageGenerationLog(user.ID, strings.TrimSpace(id), now(), medialifecycle.Epoch(ctx))
 }
 
 func DeleteCurrentUserImageGenerationLogs(ctx context.Context, ids []string) error {
@@ -115,7 +116,7 @@ func DeleteCurrentUserImageGenerationLogs(ctx context.Context, ids []string) err
 		return errors.New("请先登录")
 	}
 	cleanupGenerationLogs()
-	return repository.SoftDeleteImageGenerationLogs(user.ID, ids, now())
+	return repository.SoftDeleteImageGenerationLogs(user.ID, ids, now(), medialifecycle.Epoch(ctx))
 }
 
 func videoGenerationPayloads(logs []model.VideoGenerationLog) []json.RawMessage {
@@ -246,7 +247,7 @@ func cleanupGenerationLogs() {
 	_ = repository.CleanupDeletedImageGenerationLogs(before)
 }
 
-func migrateUserImageGenerationLogs(userID string) error {
+func migrateUserImageGenerationLogs(ctx context.Context, userID string) error {
 	config, found, err := repository.GetUserConfig(userID)
 	if err != nil || !found || strings.TrimSpace(config.ImageHistory) == "" {
 		return err
@@ -254,10 +255,8 @@ func migrateUserImageGenerationLogs(userID string) error {
 	var legacy struct {
 		Logs []json.RawMessage `json:"logs"`
 	}
-	if err := json.Unmarshal([]byte(config.ImageHistory), &legacy); err != nil || len(legacy.Logs) == 0 {
-		config.ImageHistory = ""
-		_, saveErr := repository.SaveUserConfig(config)
-		return saveErr
+	if err := json.Unmarshal([]byte(config.ImageHistory), &legacy); err != nil {
+		return medialifecycle.Error("旧生成历史格式异常，原始记录已保留，请核对后再迁移")
 	}
 	logs := make([]model.ImageGenerationLog, 0, len(legacy.Logs))
 	for _, raw := range legacy.Logs {
@@ -266,11 +265,14 @@ func migrateUserImageGenerationLogs(userID string) error {
 			logs = append(logs, log)
 		}
 	}
-	if err := repository.UpsertImageGenerationLogs(userID, logs); err != nil {
+	db, err := repository.DB()
+	if err != nil {
 		return err
 	}
-	config.ImageHistory = ""
-	_, err = repository.SaveUserConfig(config)
-	return err
+	rows := make([]any, 0, len(logs))
+	for i := range logs {
+		logs[i].UserID = userID
+		rows = append(rows, &logs[i])
+	}
+	return medialifecycle.MigrateLegacyImageHistory(db, userID, config.ImageHistory, rows, medialifecycle.Epoch(ctx))
 }
-

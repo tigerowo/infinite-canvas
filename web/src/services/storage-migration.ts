@@ -1,11 +1,14 @@
 import localforage from "localforage";
+import { createHistoryStore } from "@/extensions/media-lifecycle/history-store";
 import { uploadImage } from "./image-storage";
 import { uploadMediaBlob } from "./file-storage";
 import { useCanvasStore } from "@/app/(user)/canvas/stores/use-canvas-store";
-import { useAssetStore, mergeAssets } from "@/stores/use-asset-store";
+import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
-import { fetchUserConfig, syncUserAssetData, syncUserImageHistory } from "./api/user-config";
+import { syncUserImageHistory } from "./api/user-config";
 import { saveVideoGenerationLogs } from "./api/generation-logs";
+import { assertMediaSession, mediaSession } from "@/extensions/media-reliability/cache";
+import { knownLifecycleEpoch, lifecycleEpoch } from "@/extensions/media-lifecycle/session";
 
 export async function checkLocalAssetsExist(): Promise<boolean> {
     const imageStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
@@ -38,10 +41,13 @@ export async function migrateLocalAssetsToCloud(
 ): Promise<void> {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("请先登录");
-
-    // 先拉取云端已存的数据
-    const userConfig = await fetchUserConfig(token).catch(() => null);
-    const remoteAssets = userConfig?.assetData as { assets?: any[] } | undefined;
+    const session = mediaSession();
+    const epoch = await lifecycleEpoch(token);
+    const check = () => {
+        assertMediaSession(session);
+        if (knownLifecycleEpoch(token) !== epoch) throw new Error("云端数据范围已变化，请刷新后重试；本机原件仍保留");
+    };
+    check();
 
     const imageStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_files" });
     const mediaStore = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
@@ -69,12 +75,15 @@ export async function migrateLocalAssetsToCloud(
 
     // 2. Upload images to S3
     for (const item of imagesToUpload) {
+        check();
         try {
             const result = await uploadImage(item.blob);
+            check();
             if (result.storageKey && result.storageKey.startsWith("server:")) {
                 keyMapping.set(item.key, { serverKey: result.storageKey, url: result.url });
             }
         } catch (e) {
+            check();
             console.error(`Failed to migrate image ${item.key}`, e);
         }
         current++;
@@ -83,14 +92,17 @@ export async function migrateLocalAssetsToCloud(
 
     // 3. Upload media to S3
     for (const item of mediaToUpload) {
+        check();
         try {
             const ext = item.blob.type.split("/")[1] || "mp4";
             const filename = `media-${item.key.replace(":", "-")}.${ext}`;
             const result = await uploadMediaBlob(item.blob, filename);
+            check();
             if (result.storageKey && result.storageKey.startsWith("server:")) {
                 keyMapping.set(item.key, { serverKey: result.storageKey, url: result.url });
             }
         } catch (e) {
+            check();
             console.error(`Failed to migrate media ${item.key}`, e);
         }
         current++;
@@ -98,6 +110,7 @@ export async function migrateLocalAssetsToCloud(
     }
 
     if (keyMapping.size === 0) return;
+    check();
 
     // Helper to replace keys and blob URLs in any text/json
     const replaceKeysInString = async (jsonStr: string): Promise<string> => {
@@ -135,6 +148,7 @@ export async function migrateLocalAssetsToCloud(
             const replacedCanvasStr =
                 await replaceKeysInString(canvasStr);
             const nextCanvas = JSON.parse(replacedCanvasStr);
+            check();
             const finalCanvas = {
                 projects: nextCanvas.projects || [],
             };
@@ -170,24 +184,21 @@ export async function migrateLocalAssetsToCloud(
             const assetsStr = JSON.stringify({ assets });
             const replacedAssetsStr = await replaceKeysInString(assetsStr);
             const nextAssets = JSON.parse(replacedAssetsStr);
-            // 与云端已存的资产执行智能合并，防止覆盖云端其它设备的数据
-            const mergedAssets = mergeAssets(remoteAssets?.assets || [], nextAssets.assets);
-            const finalAssets = { assets: mergedAssets };
-            // Save locally
-            await localforage.createInstance({ name: "infinite-canvas", storeName: "app_state" })
-                .setItem("infinite-canvas:asset_store", JSON.stringify({ state: finalAssets }));
-            // Set in Zustand store
+            check();
+            const migrated = new Map<string, typeof assets[number]>((nextAssets.assets as typeof assets).map((asset) => [asset.id, asset]));
+            const original = new Map(assets.map((asset) => [asset.id, asset]));
+            const finalAssets = { assets: useAssetStore.getState().assets.map((asset) => asset === original.get(asset.id) ? migrated.get(asset.id)! : asset) };
             useAssetStore.setState(finalAssets);
-            // Sync to server
-            await syncUserAssetData(token, finalAssets);
+            await useAssetStore.getState().syncAccountAssets(token);
         } catch (e) {
             console.error("Failed to migrate assets", e);
         }
     }
 
     // 6. Update Image Generation Logs
-    const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-    const imageCategoryStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_categories" });
+    const imageLogStore = createHistoryStore("image_generation_logs");
+    check();
+    const imageCategoryStore = createHistoryStore("image_generation_categories");
     const localLogs: any[] = [];
     await imageLogStore.iterate((value) => {
         localLogs.push(value);
@@ -199,6 +210,7 @@ export async function migrateLocalAssetsToCloud(
             const logsStr = JSON.stringify({ logs: localLogs, categories: localCategories });
             const replacedLogsStr = await replaceKeysInString(logsStr);
             const nextLogsData = JSON.parse(replacedLogsStr);
+            check();
 
             // Save locally
             await imageLogStore.clear();
@@ -215,7 +227,8 @@ export async function migrateLocalAssetsToCloud(
     }
 
     // 7. Update Video Generation Logs
-    const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+    const videoLogStore = createHistoryStore("video_generation_logs");
+    check();
     const localVideoLogs: any[] = [];
     await videoLogStore.iterate((value) => {
         localVideoLogs.push(value);
@@ -226,6 +239,7 @@ export async function migrateLocalAssetsToCloud(
             const videoLogsStr = JSON.stringify({ logs: localVideoLogs });
             const replacedVideoLogsStr = await replaceKeysInString(videoLogsStr);
             const nextVideoLogsData = JSON.parse(replacedVideoLogsStr);
+            check();
 
             // Save locally
             await videoLogStore.clear();
@@ -242,17 +256,18 @@ export async function migrateLocalAssetsToCloud(
 
     // 8. Cache old local files under the new server keys
     for (const [localKey, value] of keyMapping.entries()) {
+        check();
         if (localKey.startsWith("image:")) {
             const blob = await imageStore.getItem<Blob>(localKey);
             if (blob) {
-                await imageStore.setItem(value.serverKey, blob);
-                await imageStore.removeItem(localKey);
+                check();
+                await imageStore.setItem(`ext:media-reliability:user:${session.userId}:${value.serverKey}`, blob);
             }
         } else if (localKey.startsWith("file:") || localKey.startsWith("video:") || localKey.startsWith("asset-video:") || localKey.startsWith("asset-audio:")) {
             const blob = await mediaStore.getItem<Blob>(localKey);
             if (blob) {
-                await mediaStore.setItem(value.serverKey, blob);
-                await mediaStore.removeItem(localKey);
+                check();
+                await mediaStore.setItem(`ext:media-reliability:user:${session.userId}:${value.serverKey}`, blob);
             }
         }
     }

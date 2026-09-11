@@ -1,18 +1,20 @@
 package repository
 
 import (
+	"errors"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
 )
 
-func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {
+func SaveCanvasImageTask(task model.CanvasImageTask, epoch ...int64) (model.CanvasImageTask, error) {
 	db, err := DB()
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	return task, medialifecycle.CreateRecord(db, &task, epoch...)
 }
 
 func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {
@@ -21,10 +23,7 @@ func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, e
 		return task, err
 	}
 
-	return task, db.Model(&model.CanvasImageTask{}).
-		Where("user_id = ? AND id = ?", task.UserID, task.ID).
-		Select("*").
-		Updates(&task).Error
+	return task, medialifecycle.SaveRecord(db, &task)
 }
 
 func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bool, error) {
@@ -34,8 +33,11 @@ func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bo
 	}
 	var task model.CanvasImageTask
 	err = db.First(&task, "user_id = ? AND id = ?", userID, id).Error
-	if err != nil {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return model.CanvasImageTask{}, false, nil
+	}
+	if err != nil {
+		return model.CanvasImageTask{}, false, err
 	}
 	return task, true, nil
 }
@@ -54,7 +56,6 @@ func ListUserCanvasImageTasks(userID string, sources []string, limit int) ([]mod
 		query = query.Where("source IN ?", sources)
 	}
 	err = query.
-		Where("status IN ?", []string{"queued", "processing", "running", "in_progress"}).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&tasks).Error
@@ -80,7 +81,9 @@ func DeleteUserCanvasImageTask(userID string, id string) error {
 	if err != nil {
 		return err
 	}
-	return db.Where("user_id = ? AND id = ?", userID, strings.TrimSpace(id)).Delete(&model.CanvasImageTask{}).Error
+	return medialifecycle.Release(db, userID, "image-task", strings.TrimSpace(id), 0, func(tx *gorm.DB) error {
+		return tx.Where("user_id = ? AND id = ?", userID, strings.TrimSpace(id)).Delete(&model.CanvasImageTask{}).Error
+	})
 }
 
 func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) error {
@@ -91,8 +94,11 @@ func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) err
 
 	nodeIDs = uniqueTrimmedValues(nodeIDs...)
 
-	return db.Transaction(func(tx *gorm.DB) error {
-		deleteTasks := func(task any) error {
+	return medialifecycle.WithLock(db, func(tx *gorm.DB, p *medialifecycle.Policy) error {
+		if err := medialifecycle.GuardEpoch(*p, 0); err != nil {
+			return err
+		}
+		deleteTasks := func(task any, kind string) error {
 			query := tx.Where(
 				"user_id = ? AND source = ? AND source_id = ?",
 				userID,
@@ -102,13 +108,25 @@ func DeleteUserCanvasTasks(userID string, sourceID string, nodeIDs []string) err
 			if len(nodeIDs) > 0 {
 				query = query.Where("node_id IN ?", nodeIDs)
 			}
+			var ids []string
+			if err := query.Model(task).Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			for _, id := range ids {
+				if err := medialifecycle.ReleaseLocked(tx, *p, userID, kind, id, nil); err != nil {
+					return err
+				}
+			}
 			return query.Delete(task).Error
 		}
 
-		if err := deleteTasks(&model.CanvasImageTask{}); err != nil {
+		if err := deleteTasks(&model.CanvasImageTask{}, "image-task"); err != nil {
 			return err
 		}
-		return deleteTasks(&model.CanvasAudioTask{})
+		if err := deleteTasks(&model.CanvasAudioTask{}, "audio-task"); err != nil {
+			return err
+		}
+		return deleteTasks(&model.VideoTask{}, "video-task")
 	})
 }
 

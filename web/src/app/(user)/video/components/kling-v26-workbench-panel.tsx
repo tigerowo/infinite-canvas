@@ -6,10 +6,11 @@ import { ModelPicker } from "@/components/model-picker";
 import { boolConfig } from "@/lib/seedance-video";
 import type { AiConfig, VideoElementItem, VideoElementReference, VideoMultiPromptItem } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
+import { writeAssetDrag } from "@/extensions/media-reliability/asset-dnd";
 
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 type WorkbenchLayout = "side" | "bottom";
-type AssetPickerTarget = "general" | "image" | "video" | "audio" | "firstFrame" | "lastFrame";
+type AssetPickerTarget = "general" | "image" | "video" | "audio";
 
 const TEXT = {
     prompt: "提示词",
@@ -58,7 +59,7 @@ const TEXT = {
     elementList: "元素列表",
     elementName: "元素名称，在提示词中使用@前缀引用",
     elementDescription: "元素描述",
-    elementEmpty: "暂无参考图，最多 2-4 张\n暂无参考视频，有效长度需至少 3-8 秒\n暂无参考音频，音频时长必须为 5-30 秒",
+    elementEmpty: "暂无参考图\n暂无参考视频，有效长度需至少 3-8 秒\n暂无参考音频",
     addElement: "新增元素",
     deleteElement: "删除元素",
 };
@@ -147,7 +148,7 @@ export function KlingV26WorkbenchPanel({
     const showsReferenceImages = klingOmniVariant !== "text-to-video";
     const showsElements = klingOmniVariant !== "transformation";
     const usesFrameImages = !klingOmniVariant || klingOmniVariant === "image-to-video";
-    const audioDisabled = (!isKlingV3 && (mode !== "pro" || references.length > 1)) || (klingOmniVariant === "reference-to-video" && referenceVideoCount > 0);
+    const audioDisabled = (!isKlingV3 && mode !== "pro") || (klingOmniVariant === "reference-to-video" && referenceVideoCount > 0);
     const multiShot = isKlingV3 && supportsMultiShot && boolConfig(config.videoMultiShot, false);
     const shotType = config.videoShotType === "customize" ? "customize" : "intelligence";
     const multiPrompts = normalizeMultiPrompts(config.videoMultiPrompt);
@@ -198,7 +199,6 @@ export function KlingV26WorkbenchPanel({
     };
 
     const addElement = () => {
-        if (elementList.length >= 3) return;
         updateElementList([...elementList, defaultElementItem()]);
     };
 
@@ -369,8 +369,8 @@ function KlingHeader({ currentLayout, onLayoutChange }: { currentLayout: Workben
         <div className="flex items-center justify-between gap-3">
             <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{TEXT.title}</h1>
             <div className="flex shrink-0 rounded-lg border border-stone-200 bg-stone-50 p-1 dark:border-stone-800 dark:bg-stone-900">
-                <Button size="small" type={currentLayout === "side" ? "primary" : "text"} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>{TEXT.side}</Button>
-                <Button size="small" type={currentLayout === "bottom" ? "primary" : "text"} icon={<PanelBottom className="size-3.5" />} onClick={() => onLayoutChange("bottom")}>{TEXT.bottom}</Button>
+                <Button size="small" type={currentLayout === "side" ? "primary" : "text"} className={currentLayout === "side" ? "!border-sky-600 !bg-sky-600 !text-white" : "!bg-transparent"} icon={<PanelLeft className="size-3.5" />} onClick={() => onLayoutChange("side")}>{TEXT.side}</Button>
+                <Button size="small" type={currentLayout === "bottom" ? "primary" : "text"} className={currentLayout === "bottom" ? "!border-sky-600 !bg-sky-600 !text-white" : "!bg-transparent"} icon={<PanelBottom className="size-3.5" />} onClick={() => onLayoutChange("bottom")}>{TEXT.bottom}</Button>
             </div>
         </div>
     );
@@ -405,8 +405,8 @@ function OptionGrid({ options, value, onChange, columns = 2 }: { options: { valu
 
 function optionClass(active: boolean) {
     return [
-        "h-9 rounded-full border bg-transparent px-2 text-sm font-medium transition hover:opacity-80",
-        active ? "border-stone-950 text-stone-950 dark:border-stone-100 dark:text-stone-100" : "border-stone-200 text-stone-700 dark:border-stone-800 dark:text-stone-200",
+        "h-9 rounded-full border px-2 text-sm font-medium transition hover:opacity-80",
+        active ? "border-sky-600 bg-sky-600 text-white dark:border-sky-400 dark:bg-sky-400 dark:text-stone-950" : "border-stone-200 bg-background text-stone-700 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-200",
     ].join(" ");
 }
 
@@ -422,7 +422,7 @@ function KlingElementListSection({ items, onAddElement, onRemoveElement, onUpdat
                                 <Tag className="m-0 text-xs">{item.references.length}</Tag>
                             </div>
                             <div className="flex items-center gap-1">
-                                <Button size="small" type="text" title={TEXT.addElement} className="!h-6 !w-6 !p-0" icon={<Plus className="size-3.5" />} disabled={items.length >= 3} onClick={onAddElement} />
+                                <Button size="small" type="text" title={TEXT.addElement} className="!h-6 !w-6 !p-0" icon={<Plus className="size-3.5" />} onClick={onAddElement} />
                                 <Button size="small" type="text" danger title={TEXT.deleteElement} className="!h-6 !w-6 !p-0" icon={<Trash2 className="size-3.5" />} disabled={items.length <= 1} onClick={() => onRemoveElement(index)} />
                             </div>
                         </div>
@@ -451,7 +451,11 @@ function KlingElementReferenceStrip({ references, onRemoveReference, onMoveRefer
     return (
         <div className="hover-scrollbar hover-scrollbar-hint flex w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden min-h-24 rounded-lg border border-dashed border-stone-300 p-2 pb-3 overscroll-x-contain dark:border-stone-700">
             {references.map((item, index) => (
-                <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900">
+                <div key={item.id} draggable onDragStart={(event) => {
+                    if (item.kind === "image") writeAssetDrag(event, { kind: "image", dataUrl: item.dataUrl || item.url || "", storageKey: item.storageKey, title: item.name, mimeType: item.type, source: "asset" });
+                    else if (item.kind === "video") writeAssetDrag(event, { kind: "video", url: item.url || "", storageKey: item.storageKey, title: item.name, mimeType: item.type, source: "asset" });
+                    else writeAssetDrag(event, { kind: "audio", url: item.url || "", storageKey: item.storageKey, title: item.name, mimeType: item.type, source: "asset" });
+                }} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 bg-stone-50 dark:border-stone-800 dark:bg-stone-900">
                     {item.kind === "image" ? <img src={item.dataUrl || item.url} alt={item.name} className="size-full object-cover" /> : item.kind === "video" ? <video src={item.url} className="size-full object-cover" muted preload="metadata" /> : <div className="flex size-full flex-col items-center justify-center gap-1 px-1 text-center text-xs text-stone-500"><Music2 className="size-5" /><span className="line-clamp-2">{item.name}</span></div>}
                     {item.kind === "video" ? <VideoIcon className="absolute bottom-1 left-1 size-3.5 text-white drop-shadow" /> : null}
                     <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
@@ -470,7 +474,7 @@ function KlingReferenceImageStrip({ references, emptyText = TEXT.emptyImages, on
     return (
         <div className="hover-scrollbar hover-scrollbar-hint flex w-full min-w-0 max-w-full gap-2 overflow-x-scroll overflow-y-hidden min-h-24 rounded-lg border border-dashed border-stone-300 p-2 pb-3 overscroll-x-contain dark:border-stone-700">
             {references.map((item, index) => (
-                <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
+                <div key={item.id} draggable onDragStart={(event) => writeAssetDrag(event, { kind: "image", dataUrl: item.dataUrl, storageKey: item.storageKey, title: item.name, mimeType: item.type, source: "asset" })} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
                     <img src={item.dataUrl} alt={item.name} className="size-full object-cover" />
                     <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{TEXT.image}{index + 1}</span>
                     <KlingReferenceOrderButtons index={index} total={references.length} onMove={(offset) => onMoveReference(index, offset)} />
@@ -529,7 +533,7 @@ function defaultElementItem(): VideoElementItem {
 
 function normalizeElementList(value: VideoElementItem[] | undefined): VideoElementItem[] {
     if (!Array.isArray(value) || !value.length) return [defaultElementItem()];
-    return value.slice(0, 3).map((item) => ({ name: item?.name || "", description: item?.description || "", references: Array.isArray(item?.references) ? item.references.slice(0, 4) : [] }));
+    return value.map((item) => ({ name: item?.name || "", description: item?.description || "", references: Array.isArray(item?.references) ? item.references : [] }));
 }
 
 function normalizeMultiPrompts(value: VideoMultiPromptItem[] | undefined): VideoMultiPromptItem[] {

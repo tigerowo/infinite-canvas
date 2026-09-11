@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"io"
 	"log"
 	"mime"
@@ -71,7 +72,7 @@ func AIVideo(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	if isClientVideoTaskID(id) {
-		OK(w, map[string]any{"id": id, "task_id": id, "object": "video", "status": "queued", "progress": 0})
+		Fail(w, "未找到视频任务记录，可能尚未提交完成或创建已中断；正在重新查询")
 		return
 	}
 	proxyAIGetRequest(w, r, "/videos/"+id)
@@ -130,6 +131,14 @@ func proxyAIGetRequest(w http.ResponseWriter, r *http.Request, path string) {
 }
 
 func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
+	operation := strings.TrimSpace(r.Header.Get("X-Operation-ID"))
+	if operation == "" {
+		operation = medialifecycle.ID()
+	}
+	if len(operation) > 128 {
+		Fail(w, "操作标识无效")
+		return
+	}
 	startedAt := time.Now()
 	body, contentType, modelName, err := readAIRequest(r)
 	if err != nil {
@@ -173,7 +182,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	body, contentType, upstreamPath = prepared.body, prepared.contentType, prepared.path
-	request, err := http.NewRequest(http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
+	request, err := http.NewRequestWithContext(r.Context(), http.MethodPost, service.BuildModelChannelURL(channel, upstreamPath), bytes.NewReader(body))
 	if err != nil {
 		log.Printf("AI proxy build request failed: url=%s err=%v", service.BuildModelChannelURL(channel, upstreamPath), err)
 		Fail(w, "AI 接口请求失败")
@@ -183,11 +192,9 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
-	if credits > 0 {
-		if err := service.ConsumeUserCredits(user.ID, modelName, credits, upstreamPath); err != nil {
-			FailError(w, err)
-			return
-		}
+	if err := service.ConsumeUserCredits(user.ID, modelName, credits, upstreamPath, operation, medialifecycle.Epoch(r.Context())); err != nil {
+		FailError(w, err)
+		return
 	}
 	copyAIResponse(w, request, channel, aiLogContext{
 		StartedAt:       startedAt,
@@ -198,10 +205,11 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		UserID:          user.ID,
 		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
 		Credits:         credits,
+		OperationID:     operation,
 		RequestBody:     summarizeAIRequest(body, contentType),
 	}, func() {
 		if credits > 0 {
-			if err := service.RefundUserCredits(user.ID, modelName, credits, upstreamPath); err != nil {
+			if err := service.RefundUserCredits(user.ID, modelName, credits, upstreamPath, operation); err != nil {
 				log.Printf("AI proxy refund credits failed: user=%s model=%s credits=%d err=%v", user.ID, modelName, credits, err)
 			}
 		}
@@ -216,6 +224,7 @@ func geminiStreamRequested(body []byte) bool {
 }
 
 type aiLogContext struct {
+	OperationID     string
 	StartedAt       time.Time
 	Endpoint        string
 	Method          string
@@ -231,19 +240,25 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 	response, err := service.HTTPClientForChannel(channel).Do(request)
 	if err != nil {
 		log.Printf("AI proxy request failed: url=%s err=%v", request.URL.String(), err)
-		if onFailure != nil {
-			onFailure()
+		if logContext.OperationID != "" {
+			if settleErr := service.SetTaskSettlement(logContext.UserID, logContext.OperationID, "unknown"); settleErr != nil {
+				log.Printf("mark uncertain settlement: %v", settleErr)
+			}
 		}
 		saveAIProxyLog(logContext, 0, "", err.Error())
 		Fail(w, "AI 接口请求失败")
 		return
 	}
 	defer response.Body.Close()
+	observed := &observedAIResponse{ReadCloser: response.Body}
+	response.Body = observed
 
 	if response.StatusCode >= http.StatusBadRequest {
 		payload, _ := io.ReadAll(io.LimitReader(response.Body, 256*1024))
 		log.Printf("AI upstream error: url=%s status=%d body=%s", request.URL.String(), response.StatusCode, strings.TrimSpace(string(payload)))
-		if onFailure != nil {
+		if response.StatusCode >= 500 || response.StatusCode == http.StatusRequestTimeout || observed.failure != nil {
+			finishAISettlement(logContext, "unknown")
+		} else if onFailure != nil {
 			onFailure()
 		}
 		saveAIProxyLog(logContext, response.StatusCode, string(payload), strings.TrimSpace(string(payload)))
@@ -252,6 +267,11 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 	}
 
 	if copyAIProtocolResponse(w, response, request, channel, logContext, onFailure) {
+		state := "settled"
+		if observed.failure != nil || request.Context().Err() != nil {
+			state = "unknown"
+		}
+		finishAISettlement(logContext, state)
 		return
 	}
 
@@ -264,11 +284,37 @@ func copyAIResponse(w http.ResponseWriter, request *http.Request, channel model.
 		}
 	}
 	w.WriteHeader(response.StatusCode)
-	responseBody := copyAIResponseBody(w, response.Body, !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "video/"))
-	saveAIProxyLog(logContext, response.StatusCode, responseBody, "")
+	responseBody, copyErr := copyAIResponseBody(w, response.Body, !strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "video/"))
+	state, copyMessage := "settled", ""
+	if copyErr != nil {
+		state = "unknown"
+		copyMessage = copyErr.Error()
+	}
+	saveAIProxyLog(logContext, response.StatusCode, responseBody, copyMessage)
+	finishAISettlement(logContext, state)
 }
 
-func copyAIResponseBody(w http.ResponseWriter, body io.Reader, capture bool) string {
+type observedAIResponse struct {
+	io.ReadCloser
+	failure error
+}
+
+func (r *observedAIResponse) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		r.failure = err
+	}
+	return n, err
+}
+func finishAISettlement(logContext aiLogContext, state string) {
+	if logContext.OperationID != "" {
+		if err := service.SetTaskSettlement(logContext.UserID, logContext.OperationID, state); err != nil {
+			log.Printf("AI settlement %s: %v", state, err)
+		}
+	}
+}
+
+func copyAIResponseBody(w http.ResponseWriter, body io.Reader, capture bool) (string, error) {
 	flusher, canFlush := w.(http.Flusher)
 	buffer := make([]byte, 32*1024)
 	var logBuffer strings.Builder
@@ -276,7 +322,7 @@ func copyAIResponseBody(w http.ResponseWriter, body io.Reader, capture bool) str
 		n, err := body.Read(buffer)
 		if n > 0 {
 			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
-				return logBuffer.String()
+				return logBuffer.String(), writeErr
 			}
 			if capture && logBuffer.Len() < 64*1024 {
 				_, _ = logBuffer.Write(buffer[:min(n, 64*1024-logBuffer.Len())])
@@ -286,7 +332,10 @@ func copyAIResponseBody(w http.ResponseWriter, body io.Reader, capture bool) str
 			}
 		}
 		if err != nil {
-			return logBuffer.String()
+			if err == io.EOF {
+				err = nil
+			}
+			return logBuffer.String(), err
 		}
 	}
 }

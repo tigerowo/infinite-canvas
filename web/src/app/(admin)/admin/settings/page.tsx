@@ -46,6 +46,7 @@ const emptySettings: AdminSettings = {
             defaultImageModel: "",
             defaultVideoModel: "",
             defaultTextModel: "",
+            defaultAudioModel: "",
             systemPrompt: "",
             systemPrompts: { image: "", video: "", text: "", workflow: "", workflowAgent: "" },
             allowCustomChannel: true,
@@ -95,6 +96,7 @@ export default function AdminSettingsPage() {
     const publicImageModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "image"))), [publicModels, modelPolicy]);
     const publicVideoModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "video"))), [publicModels, modelPolicy]);
     const publicTextModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "text"))), [publicModels, modelPolicy]);
+    const publicAudioModelOptions = useMemo(() => modelOptions(publicModels.filter((model) => modelMatchesCapability(model, "audio"))), [publicModels, modelPolicy]);
     const storageProviders = Form.useWatch(["private", "storage", "providers"], form) || [];
     const storageProviderOptions = useMemo<StorageAccessProviderOption[]>(() => storageProviders.map((provider: AdminStorageProvider, draftIndex: number) => ({ ...provider, clientKey: provider.clientKey || storageAccessProviderKey(provider), draftIndex })), [storageProviders]);
     const channelProtocol = Form.useWatch("protocol", channelForm);
@@ -469,23 +471,23 @@ export default function AdminSettingsPage() {
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
-                                        <Form.Item name={["public", "modelChannel", "defaultModel"]} label="默认模型">
-                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear placeholder="自动选择" options={publicTextModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
-                                        </Form.Item>
-                                    </Col>
-                                    <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultImageModel"]} label="默认图片模型">
-                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear placeholder="自动选择" options={publicImageModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} placeholder="未配置图片模型" options={publicImageModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultVideoModel"]} label="默认视频模型">
-                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear placeholder="自动选择" options={publicVideoModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} placeholder="未配置视频模型" options={publicVideoModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col xs={24} md={6}>
                                         <Form.Item name={["public", "modelChannel", "defaultTextModel"]} label="默认文本模型">
-                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} allowClear placeholder="自动选择" options={publicTextModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} placeholder="未配置文本模型" options={publicTextModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
+                                        </Form.Item>
+                                    </Col>
+                                    <Col xs={24} md={6}>
+                                        <Form.Item name={["public", "modelChannel", "defaultAudioModel"]} label="默认音频模型">
+                                            <Select showSearch={{ optionFilterProp: ["label", "value"] }} placeholder="未配置音频模型" options={publicAudioModelOptions.map((item) => ({ ...item, label: publicModelLabel(item.value) }))} />
                                         </Form.Item>
                                     </Col>
                                     <Col span={24}>
@@ -637,25 +639,13 @@ export default function AdminSettingsPage() {
                                 </Card>
                                 <Card size="small" title="AI 调用日志">
                                     <Row gutter={16}>
-                                        <Col xs={24} md={6}>
-                                            <Form.Item name={["private", "aiLog", "localDirectReportEnabled"]} label="本地直连日志上报" valuePropName="checked" extra="关闭后本地直连不上报；云端渠道仍默认记录。">
+                                        <Col xs={24} md={12}>
+                                            <Form.Item name={["private", "aiLog", "localDirectReportEnabled"]} label="本地直连日志上报" valuePropName="checked" extra="关闭后本地直连不上报；云端渠道仍默认记录。日志保留时间由统一的数据保留规则管理。">
                                                 <Switch />
                                             </Form.Item>
                                         </Col>
-                                        <Col xs={24} md={6}>
-                                            <Form.Item name={["private", "aiLog", "cleanup", "enabled"]} label="开启自动清理" valuePropName="checked" extra="日志按天写入本地文件，不保存到 SQLite。">
-                                                <Switch />
-                                            </Form.Item>
-                                        </Col>
-                                        <Col xs={24} md={6}>
-                                            <Form.Item name={["private", "aiLog", "cleanup", "retentionDays"]} label="保留天数" extra="默认保留 14 天，超过后定时删除对应日期日志文件。">
-                                                <InputNumber min={1} precision={0} className="!w-full" />
-                                            </Form.Item>
-                                        </Col>
-                                        <Col xs={24} md={6}>
-                                            <Form.Item name={["private", "aiLog", "cleanup", "cron"]} label="清理 Cron">
-                                                <Input placeholder="0 3 * * *" />
-                                            </Form.Item>
+                                        <Col xs={24} md={12} className="flex items-center md:justify-end">
+                                            <Button href="/admin/retention">打开数据保留与清理</Button>
                                         </Col>
                                     </Row>
                                 </Card>
@@ -1120,6 +1110,7 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             defaultImageModel: normalizeDefaultModel(setting.modelChannel?.defaultImageModel, availableModels, "image"),
             defaultVideoModel: normalizeDefaultModel(setting.modelChannel?.defaultVideoModel, availableModels, "video"),
             defaultTextModel: normalizeDefaultModel(setting.modelChannel?.defaultTextModel, availableModels, "text"),
+            defaultAudioModel: normalizeDefaultModel(setting.modelChannel?.defaultAudioModel, availableModels, "audio"),
             systemPrompts: {
                 ...emptySettings.public.modelChannel.systemPrompts,
                 image: setting.modelChannel?.systemPrompts?.image || setting.modelChannel?.systemPrompt || "",
@@ -1189,11 +1180,11 @@ function normalizeNewAPIBaseURL(value: string) {
     return trimmed.replace(/\/v1$/i, "");
 }
 
-function normalizeDefaultModel(value: string | undefined, availableModels: string[], capability?: "image" | "video" | "text") {
+function normalizeDefaultModel(value: string | undefined, availableModels: string[], capability?: "image" | "video" | "text" | "audio") {
     const model = (value || "").trim();
-    if (!model || model === "all" || model === "全部") return "";
-    if (!availableModels.includes(model)) return "";
-    return capability && !modelMatchesCapability(model, capability) ? "" : model;
+    const candidates = capability ? availableModels.filter((item) => modelMatchesCapability(item, capability)) : availableModels;
+    if (model && candidates.includes(model)) return model;
+    return candidates[0] || "";
 }
 
 function normalizeStorageProvider(item: Partial<AdminStorageProvider> = {}): AdminStorageProvider {
@@ -1287,7 +1278,7 @@ function stripStorageDraftKeys(settings: AdminSettings): AdminSettings {
 }
 
 function modelOptions(models: string[]) {
-    return [{ label: "自动选择", value: "" }, ...uniqueModels(models).map((model) => ({ label: model, value: model }))];
+    return uniqueModels(models).map((model) => ({ label: model, value: model }));
 }
 
 function filterModels(models: string[], options: string[]) {

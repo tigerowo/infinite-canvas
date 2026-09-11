@@ -29,6 +29,11 @@ test("private S3 and EdgeOne media downloads bypass the application proxy", () =
 
 test("signed media requests deduplicate and discard cache on account change", async () => {
     const previousAdapter = axios.defaults.adapter;
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+        assert.equal(url, "/api/extensions/media-lifecycle/state");
+        return Response.json({ code: 0, data: { epoch: 1, clearing: false } });
+    }) as typeof fetch;
     let requests = 0;
     axios.defaults.adapter = async (config) => {
         requests++;
@@ -43,5 +48,5 @@ test("signed media requests deduplicate and discard cache on account change", as
         assert.notEqual(await privateMediaURL("object-1"), a); assert.equal(requests, 2);
         useUserStore.setState({ token: "" });
         assert.equal(await privateMediaURL("object-1"), ""); assert.equal(requests, 2);
-    } finally { axios.defaults.adapter = previousAdapter; useUserStore.setState({ token: "", user: null }); }
+    } finally { axios.defaults.adapter = previousAdapter; globalThis.fetch = previousFetch; useUserStore.setState({ token: "", user: null }); }
 });

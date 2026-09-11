@@ -8,6 +8,7 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { cn } from "@/lib/utils";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
+import { libraryAssetDragPayload, writeAssetDrag } from "@/extensions/media-reliability/asset-dnd";
 
 const PAGE_SIZE = 12;
 
@@ -248,6 +249,8 @@ function LibraryCard({ asset, onOpen, onAdd }: { asset: AssetLibraryItem; onOpen
     return (
         <Card
             hoverable
+            draggable
+            onDragStart={(event) => writeAssetDrag(event, libraryAssetDragPayload(asset))}
             className="overflow-hidden"
             styles={{ body: { padding: 0 } }}
             cover={

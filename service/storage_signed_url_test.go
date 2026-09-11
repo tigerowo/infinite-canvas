@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 )
 
 func TestPrivateStorageOwnership(t *testing.T) {
-	object := model.StorageObject{CreatedBy: "owner"}
+	object := model.StorageObject{ID:"private-owner-test",ObjectKey:"private-owner-test",CreatedBy: "owner"}
+	if _,err:=repository.SaveStorageObject(object);err!=nil{t.Fatal(err)}
 	if err := requireStorageObjectOwner(context.Background(), object); err == nil {
 		t.Fatal("anonymous read allowed")
 	}

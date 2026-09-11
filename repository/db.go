@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/tigerowo/infinite-canvas/config"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/model"
 	gormmysql "gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -83,6 +84,15 @@ func DB() (*gorm.DB, error) {
 			&model.CanvasAudioTask{},
 			&model.CanvasProject{},
 		)
+		if dbErr == nil {
+			dbErr = medialifecycle.Migrate(db)
+		}
+		if dbErr == nil {
+			dbErr = medialifecycle.Backfill(db)
+		}
+		if dbErr == nil {
+			dbErr = medialifecycle.BackfillTaskAttempts(db)
+		}
 	})
 	return db, dbErr
 }

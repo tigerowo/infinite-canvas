@@ -2,10 +2,12 @@ import type { AiConfig } from "@/stores/use-config-store";
 import type { ReferenceImage } from "@/types/image";
 import { imageToDataUrl } from "@/services/image-storage";
 import { newAPIImageFile } from "./request";
+import { assertReferenceLimit } from "@/extensions/media-reliability/reference-limit";
 
 type ImageParams = { n: number; size?: string; quality: string; streamPartialImages: number };
 
 export async function createNewAPIImageBody(config: AiConfig, text: string, references: ReferenceImage[], params: ImageParams): Promise<{ endpoint: string; body: Record<string, unknown> | FormData }> {
+    assertReferenceLimit(references.length);
     if (config.apiMode === "responses" || config.apiMode === "chat") {
         if (params.n > 1) throw new Error("NewAPI Chat/Responses 生图每个任务仅支持一张图片");
         const images = await Promise.all(references.map(imageToDataUrl));

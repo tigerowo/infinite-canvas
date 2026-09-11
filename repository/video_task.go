@@ -1,13 +1,26 @@
 package repository
 
-import "github.com/tigerowo/infinite-canvas/model"
+import (
+	"errors"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
+	"github.com/tigerowo/infinite-canvas/model"
+	"gorm.io/gorm"
+)
 
 func SaveVideoTask(task model.VideoTask) (model.VideoTask, error) {
 	db, err := DB()
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	return task, medialifecycle.SaveRecord(db, &task)
+}
+
+func CreateVideoTask(task model.VideoTask, epoch ...int64) (model.VideoTask, error) {
+	db, err := DB()
+	if err != nil {
+		return task, err
+	}
+	return task, medialifecycle.CreateRecord(db, &task, epoch...)
 }
 
 func GetVideoTask(id string) (model.VideoTask, bool, error) {
@@ -18,7 +31,10 @@ func GetVideoTask(id string) (model.VideoTask, bool, error) {
 	var task model.VideoTask
 	err = db.First(&task, "id = ?", id).Error
 	if err != nil {
-		return model.VideoTask{}, false, nil
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.VideoTask{}, false, nil
+		}
+		return model.VideoTask{}, false, err
 	}
 	return task, true, nil
 }
@@ -31,7 +47,10 @@ func GetUserVideoTask(userID string, id string) (model.VideoTask, bool, error) {
 	var task model.VideoTask
 	err = db.First(&task, "user_id = ? AND (id = ? OR upstream_task_id = ? OR upstream_video_id = ?)", userID, id, id, id).Error
 	if err != nil {
-		return model.VideoTask{}, false, nil
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return model.VideoTask{}, false, nil
+		}
+		return model.VideoTask{}, false, err
 	}
 	return task, true, nil
 }
@@ -54,7 +73,6 @@ func ListUserVideoTasks(userID string, source string, limit int) ([]model.VideoT
 		}
 	}
 	err = query.
-		Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).
 		Order("created_at DESC").
 		Limit(limit).
 		Find(&tasks).Error
@@ -66,7 +84,16 @@ func DeleteUserVideoTask(userID string, id string) error {
 	if err != nil {
 		return err
 	}
-	return db.Where("user_id = ? AND (id = ? OR upstream_task_id = ? OR upstream_video_id = ?)", userID, id, id, id).Delete(&model.VideoTask{}).Error
+	var task model.VideoTask
+	if err := db.Where("user_id = ? AND (id = ? OR upstream_task_id = ? OR upstream_video_id = ?)", userID, id, id, id).First(&task).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	return medialifecycle.Release(db, userID, "video-task", task.ID, 0, func(tx *gorm.DB) error {
+		return tx.Where("user_id = ? AND id = ?", userID, task.ID).Delete(&model.VideoTask{}).Error
+	})
 }
 
 func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
@@ -79,6 +106,7 @@ func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
 	}
 	var tasks []model.VideoTask
 	err = db.Where("status IN ?", []string{"queued", "in_progress", "processing", "running"}).
+		Where("NOT EXISTS (SELECT 1 FROM ext_media_lifecycle_task_attempts a WHERE a.task_id = video_tasks.id AND a.owner = video_tasks.user_id AND a.state IN ?)", []string{"submitting", "result", "archive_failed", "unknown"}).
 		Order("created_at ASC").
 		Limit(limit).
 		Find(&tasks).Error
@@ -86,12 +114,6 @@ func ListDueVideoTasks(limit int) ([]model.VideoTask, error) {
 }
 
 func DeleteFinishedVideoTasksBefore(before string) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-	return db.
-		Where("completed_at <> ? AND completed_at < ?", "", before).
-		Where("status IN ?", []string{"completed", "failed", "cancelled", "canceled"}).
-		Delete(&model.VideoTask{}).Error
+	// EXT-0045: all terminal history now follows the unified retention policy.
+	return nil
 }

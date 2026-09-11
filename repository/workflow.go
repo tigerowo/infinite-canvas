@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 
 	"github.com/tigerowo/infinite-canvas/model"
 	"gorm.io/gorm"
@@ -38,7 +39,7 @@ func SaveCreativeWorkflow(workflow model.CreativeWorkflow) (model.CreativeWorkfl
 	if err != nil {
 		return workflow, err
 	}
-	return workflow, db.Save(&workflow).Error
+	return workflow, medialifecycle.SaveRecord(db,&workflow)
 }
 
 func DeleteCreativeWorkflow(id string) error {
@@ -46,5 +47,7 @@ func DeleteCreativeWorkflow(id string) error {
 	if err != nil {
 		return err
 	}
-	return db.Delete(&model.CreativeWorkflow{}, "id = ?", id).Error
+	var workflow model.CreativeWorkflow
+	if err:=db.First(&workflow,"id = ?",id).Error;err!=nil{if errors.Is(err,gorm.ErrRecordNotFound){return nil};return err}
+	return medialifecycle.Release(db,workflow.OwnerUserID,"workflow",id,0,func(tx *gorm.DB)error{return tx.Delete(&model.CreativeWorkflow{},"id = ?",id).Error})
 }

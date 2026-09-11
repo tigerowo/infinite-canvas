@@ -1,6 +1,7 @@
 package router
 
 import (
+	lifecyclehttp "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle/http"
 	"github.com/tigerowo/infinite-canvas/extensions/mediaarchive"
 	"github.com/tigerowo/infinite-canvas/extensions/modelcapabilities"
 	"github.com/tigerowo/infinite-canvas/extensions/publicmedia"
@@ -53,12 +54,15 @@ func New() *gin.Engine {
 	anonymousFiles.DELETE("/:id", func(c *gin.Context) {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
 	})
-	v1 := api.Group("/v1", middleware.UserAuth)
+	v1 := api.Group("/v1", middleware.UserAuth, lifecyclehttp.Guard)
+	if err := lifecyclehttp.Register(api.Group("/extensions/media-lifecycle", middleware.UserAuth, lifecyclehttp.Guard), api.Group("/extensions/media-lifecycle/admin", middleware.AdminAuth)); err != nil {
+		panic(err)
+	}
 	v1.GET("/files/:id/signed-url", func(c *gin.Context) {
 		handler.SignedFileURL(c.Writer, c.Request, c.Param("id"))
 	})
 	publicmedia.Register(api.Group("/extensions/public-media", middleware.UserAuth))
-	if err := mediaarchive.Register(api.Group("/extensions/media-archive", middleware.UserAuth)); err != nil {
+	if err := mediaarchive.Register(api.Group("/extensions/media-archive", middleware.UserAuth, lifecyclehttp.Guard)); err != nil {
 		panic(err)
 	}
 	v1.POST("/images/generations", gin.WrapF(handler.AIImagesGenerations))
@@ -161,7 +165,6 @@ func New() *gin.Engine {
 		handler.AdminDeleteCreditLog(c.Writer, c.Request, c.Param("id"))
 	})
 	admin.GET("/ai-logs", gin.WrapF(handler.AdminAICallLogs))
-	admin.DELETE("/ai-logs", gin.WrapF(handler.AdminDeleteAICallLogs))
 	admin.GET("/settings", gin.WrapF(handler.AdminSettings))
 	admin.POST("/settings", gin.WrapF(handler.AdminSaveSettings))
 	admin.POST("/settings/channel-models", gin.WrapF(handler.AdminChannelModels))

@@ -13,11 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tigerowo/infinite-canvas/config"
-	"github.com/tigerowo/infinite-canvas/model"
-	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/tigerowo/infinite-canvas/config"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
+	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -329,54 +330,28 @@ func AdjustUserCredits(id string, credits int) (model.User, error) {
 	return user, err
 }
 
-func ConsumeUserCredits(userID string, modelName string, credits int, path string) error {
-	if credits <= 0 {
-		return nil
-	}
-	user, ok, err := repository.ConsumeUserCredits(userID, credits, now())
+func ConsumeUserCredits(userID string, modelName string, credits int, path, operation string, epoch ...int64) error {
+	db, err := repository.DB()
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return safeMessageError{message: "算力点不足"}
-	}
-	extra, _ := json.Marshal(map[string]string{"model": modelName, "path": path})
-	_, err = repository.SaveCreditLog(model.CreditLog{
-		ID:        newID("credit"),
-		UserID:    userID,
-		Type:      model.CreditLogTypeAIConsume,
-		Amount:    -credits,
-		Balance:   user.Credits,
-		Remark:    "调用模型 " + modelName,
-		Extra:     string(extra),
-		CreatedAt: now(),
-	})
-	return err
+	return medialifecycle.Debit(db, userID, operation, modelName, path, credits, epoch...)
 }
 
-func RefundUserCredits(userID string, modelName string, credits int, path string) error {
-	if credits <= 0 {
-		return nil
-	}
-	user, ok, err := repository.RefundUserCredits(userID, credits, now())
+func RefundUserCredits(userID string, modelName string, credits int, path, operation string) error {
+	db, err := repository.DB()
 	if err != nil {
 		return err
 	}
-	if !ok {
-		return safeMessageError{message: "用户不存在"}
+	return medialifecycle.Refund(db, userID, operation, modelName, path, credits)
+}
+
+func SetTaskSettlement(userID, operation, state string) error {
+	db, err := repository.DB()
+	if err != nil {
+		return err
 	}
-	extra, _ := json.Marshal(map[string]string{"model": modelName, "path": path})
-	_, err = repository.SaveCreditLog(model.CreditLog{
-		ID:        newID("credit"),
-		UserID:    userID,
-		Type:      model.CreditLogTypeAIRefund,
-		Amount:    credits,
-		Balance:   user.Credits,
-		Remark:    "模型调用失败返还 " + modelName,
-		Extra:     string(extra),
-		CreatedAt: now(),
-	})
-	return err
+	return medialifecycle.SettlementState(db, userID, operation, state)
 }
 
 func ListCreditLogs(q model.Query) (model.CreditLogList, error) {

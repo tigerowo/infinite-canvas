@@ -33,8 +33,8 @@ func TestNormalizeReferenceMediaTypeSupportsAudio(t *testing.T) {
 }
 
 func TestReferenceMediaTypeMaxBytes(t *testing.T) {
-	if got := referenceMediaTypeMaxBytes("audio/mpeg"); got != referenceAudioMaxBytes {
-		t.Fatalf("audio max bytes = %d, want %d", got, referenceAudioMaxBytes)
+	if got := referenceMediaTypeMaxBytes("audio/mpeg"); got != 0 {
+		t.Fatalf("audio max bytes = %d, want unlimited", got)
 	}
 	if got := referenceMediaTypeMaxBytes("video/mp4"); got != referenceVideoMaxBytes {
 		t.Fatalf("video max bytes = %d, want %d", got, referenceVideoMaxBytes)

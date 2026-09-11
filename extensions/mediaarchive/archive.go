@@ -3,8 +3,8 @@ package mediaarchive
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	ml "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/extensions/mediaidentity"
 	"github.com/tigerowo/infinite-canvas/extensions/s3compat"
 	"github.com/tigerowo/infinite-canvas/model"
@@ -51,7 +52,59 @@ func sourceIdentity(owner, source string) string {
 	return mediaidentity.Digest(owner, source)
 }
 
+// ArchiveVideo runs under the task owner's identity, independent of a browser session.
+func ArchiveVideo(owner, source, filename string) (service.UploadedStorageObject, error) {
+	return ArchiveMedia(context.Background(), owner, source, filename)
+}
+
+func ArchiveMedia(ctx context.Context, owner, source, filename string) (service.UploadedStorageObject, error) {
+	user, found, err := repository.GetUserByID(owner)
+	if err != nil || !found || user.Status == model.UserStatusBan {
+		return service.UploadedStorageObject{}, errors.New("视频任务所属账号不可用")
+	}
+	db, err := repository.DB()
+	if err != nil {
+		return service.UploadedStorageObject{}, err
+	}
+	ctx = service.WithUser(ctx, model.AuthUser{ID: user.ID, Role: user.Role})
+	if ml.Epoch(ctx) > 0 {
+		p, err := ml.GetPolicy(db)
+		if err != nil {
+			return service.UploadedStorageObject{}, err
+		}
+		if err := ml.GuardEpoch(p, ml.Epoch(ctx)); err != nil {
+			return service.UploadedStorageObject{}, err
+		}
+	}
+	if strings.HasPrefix(source, "data:") {
+		header, encoded, ok := strings.Cut(strings.TrimPrefix(source, "data:"), ",")
+		if !ok || !strings.HasSuffix(header, ";base64") || len(encoded) > maxMediaBytes*4/3+4 {
+			return service.UploadedStorageObject{}, errors.New("生成素材格式或大小无效")
+		}
+		mime := strings.TrimSuffix(header, ";base64")
+		if !strings.HasPrefix(mime, "image/") && !strings.HasPrefix(mime, "audio/") && !strings.HasPrefix(mime, "video/") {
+			return service.UploadedStorageObject{}, errors.New("生成素材类型无效")
+		}
+		data, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return service.UploadedStorageObject{}, errors.New("生成素材编码无效")
+		}
+		return service.UploadStorageObject(ctx, filename, mime, data)
+	}
+	return importRemote(ctx, db, service.SafeProxyHTTPClient(), owner, source, filename)
+}
+
 func importRemote(ctx context.Context, db *gorm.DB, client *http.Client, owner, source, filename string) (service.UploadedStorageObject, error) {
+	p, err := ml.GetPolicy(db)
+	if err != nil {
+		return service.UploadedStorageObject{}, err
+	}
+	if ml.Epoch(ctx) == 0 {
+		ctx = ml.WithEpoch(ctx, p.Epoch)
+	}
+	if err := ml.GuardEpoch(p, ml.Epoch(ctx)); err != nil {
+		return service.UploadedStorageObject{}, err
+	}
 	u, err := url.Parse(source)
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil {
 		return service.UploadedStorageObject{}, errors.New("媒体来源必须是 HTTP(S) 地址")
@@ -90,25 +143,17 @@ func importRemote(ctx context.Context, db *gorm.DB, client *http.Client, owner, 
 	if response.StatusCode != http.StatusOK {
 		return service.UploadedStorageObject{}, errors.New("媒体来源未返回完整文件")
 	}
-	if response.ContentLength > maxMediaBytes {
-		return service.UploadedStorageObject{}, errors.New("媒体文件超过 256 MiB 限制")
-	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxMediaBytes+1))
-	if err != nil || len(data) == 0 || len(data) > maxMediaBytes {
-		return service.UploadedStorageObject{}, errors.New("媒体文件为空、过大或下载中断")
-	}
-	mime := strings.TrimSpace(strings.Split(response.Header.Get("Content-Type"), ";")[0])
-	if mime == "" || mime == "application/octet-stream" {
-		mime = http.DetectContentType(data)
-	}
-	if !strings.HasPrefix(mime, "image/") && !strings.HasPrefix(mime, "video/") && !strings.HasPrefix(mime, "audio/") {
-		return service.UploadedStorageObject{}, errors.New("来源不是图片、视频或音频文件")
+	data, mime, err := readMediaBody(response)
+	if err != nil {
+		return service.UploadedStorageObject{}, err
 	}
 	saved, err := service.UploadStorageObject(ctx, filename, mime, data)
 	if err != nil {
 		return saved, err
 	}
-	err = db.Clauses(clause.OnConflict{UpdateAll: true}).Create(&sourceRecord{ID: id, ObjectID: saved.ID}).Error
+	err = ml.SaveFileIndex(db, owner, saved.ID, ml.Epoch(ctx), func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{UpdateAll: true}).Create(&sourceRecord{ID: id, ObjectID: saved.ID}).Error
+	})
 	return saved, err
 }
 

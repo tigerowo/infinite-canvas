@@ -76,7 +76,6 @@ func SaveSettings(settings model.Settings) (model.Settings, error) {
 	if err == nil {
 		RefreshPromptSyncScheduler()
 		RefreshStorageCapacityScheduler()
-		RefreshAILogCleanupScheduler()
 	}
 	return hidePrivateAPIKeys(result), err
 }
@@ -208,6 +207,7 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 	setting.ModelChannel.DefaultTextModel = repairDefaultModel(setting.ModelChannel.DefaultTextModel, setting.ModelChannel.AvailableModels, isTextModelName)
 	setting.ModelChannel.DefaultImageModel = repairDefaultModel(setting.ModelChannel.DefaultImageModel, setting.ModelChannel.AvailableModels, isImageModelName)
 	setting.ModelChannel.DefaultVideoModel = repairDefaultModel(setting.ModelChannel.DefaultVideoModel, setting.ModelChannel.AvailableModels, isVideoModelName)
+	setting.ModelChannel.DefaultAudioModel = repairDefaultModel(setting.ModelChannel.DefaultAudioModel, setting.ModelChannel.AvailableModels, isAudioModelName)
 	setting.ModelChannel.DefaultModel = repairDefaultModel(setting.ModelChannel.DefaultModel, setting.ModelChannel.AvailableModels, isTextModelName)
 	return setting
 }
@@ -429,7 +429,12 @@ func repairDefaultModel(current string, models []string, preferred func(string) 
 			return current
 		}
 	}
-	// Empty or unavailable defaults stay automatic; clients resolve by capability.
+	for _, item := range models {
+		if preferred(item) {
+			return item
+		}
+	}
+	// A default cannot be invented when no enabled public model has this capability.
 	return ""
 }
 
@@ -469,6 +474,22 @@ func isTextModelName(modelName string) bool {
 		}
 	}
 	return AutoDLModelKind(modelName) != "audio" && !isImageModelName(modelName) && !isVideoModelName(modelName)
+}
+
+func isAudioModelName(modelName string) bool {
+	if kind := modelcapabilities.Override(modelName); kind != "" {
+		return kind == "audio"
+	}
+	if kind := AutoDLModelKind(modelName); kind != "unsupported" {
+		return kind == "audio"
+	}
+	name := strings.ToLower(strings.TrimSpace(modelName))
+	for _, hint := range []string{"audio", "tts", "speech", "voice", "music", "sound", "elevenlabs", "suno", "lyrics", "vocal", "midi", "wav"} {
+		if strings.Contains(name, hint) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {

@@ -81,7 +81,7 @@ export function CanvasAssistantComposer({
     const submit = (nextPrompt = prompt, referenceIds = references.map((reference) => reference.id)) => onSubmit(nextPrompt, referenceIds);
 
     return (
-        <div className="px-2 pb-2" onWheelCapture={(event) => event.stopPropagation()}>
+        <div data-media-assistant-draft className="px-2 pb-2" onWheelCapture={(event) => event.stopPropagation()}>
             <div className="glass-surface-strong rounded-2xl border px-3 pb-3 pt-3" style={{ color: theme.node.text }}>
                 <CanvasPromptChipInput
                     value={prompt}

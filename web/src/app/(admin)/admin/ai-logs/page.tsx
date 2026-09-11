@@ -1,10 +1,10 @@
 "use client";
 
-import { DeleteOutlined, EyeOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { App, Button, Card, Flex, Form, Input, InputNumber, Modal, Space, Switch, Table, Tag, Typography } from "antd";
+import { EyeOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { App, Button, Card, Flex, Form, Input, Modal, Space, Switch, Table, Tag, Typography } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
-import { deleteAdminAICallLogs, fetchAdminAICallLogs, fetchAdminSettings, saveAdminSettings, type AdminAICallLog } from "@/services/api/admin";
+import { fetchAdminAICallLogs, fetchAdminSettings, saveAdminSettings, type AdminAICallLog } from "@/services/api/admin";
 import { useUserStore } from "@/stores/use-user-store";
 
 export default function AdminAICallLogsPage() {
@@ -16,8 +16,6 @@ export default function AdminAICallLogsPage() {
     const [total, setTotal] = useState(0);
     const [logs, setLogs] = useState<AdminAICallLog[]>([]);
     const [loading, setLoading] = useState(false);
-    const [clearDays, setClearDays] = useState(7);
-    const [clearing, setClearing] = useState(false);
     const [detail, setDetail] = useState<{ title: string; value: string } | null>(null);
     const [localDirectReportEnabled, setLocalDirectReportEnabled] = useState(false);
     const [savingLocalDirectReport, setSavingLocalDirectReport] = useState(false);
@@ -46,21 +44,6 @@ export default function AdminAICallLogsPage() {
             .then((settings) => setLocalDirectReportEnabled(settings.private.aiLog?.localDirectReportEnabled === true))
             .catch(() => undefined);
     }, [token]);
-
-    const clearLogs = async () => {
-        if (!token) return;
-        setClearing(true);
-        try {
-            const result = await deleteAdminAICallLogs(token, clearDays);
-            message.success(`已清理 ${result.removedFiles} 个日志文件`);
-            setPage(1);
-            await loadLogs();
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "清理 AI 调用日志失败");
-        } finally {
-            setClearing(false);
-        }
-    };
 
     const updateLocalDirectReport = async (checked: boolean) => {
         if (!token) return;
@@ -141,13 +124,11 @@ export default function AdminAICallLogsPage() {
                                 <Typography.Text className="whitespace-nowrap text-sm">本地直连日志</Typography.Text>
                                 <Switch size="small" checked={localDirectReportEnabled} loading={savingLocalDirectReport} onChange={(checked) => void updateLocalDirectReport(checked)} />
                             </div>
-                            <div className="flex h-8 items-center gap-2">
-                                <Typography.Text className="whitespace-nowrap text-sm">清理超过</Typography.Text>
-                                <InputNumber min={1} value={clearDays} className="!w-24" onChange={(value) => setClearDays(Number(value) || 7)} />
-                                <Typography.Text type="secondary" className="shrink-0">天前</Typography.Text>
-                            </div>
-                            <Button danger icon={<DeleteOutlined />} loading={clearing} onClick={() => void clearLogs()} className="ml-0 lg:ml-auto">
-                                清理旧日志
+                            <Typography.Text type="secondary" className="text-sm lg:ml-auto">
+                                AI 日志与其他业务数据共用统一保留规则
+                            </Typography.Text>
+                            <Button href="/admin/retention">
+                                保留与清理设置
                             </Button>
                         </div>
                     </Form>

@@ -3,12 +3,13 @@ package service
 import (
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
 )
 
 type CanvasAudioTaskCreateInput struct {
+	Epoch           int64
 	UserID          string
 	UserDisplayName string
 	SourceID        string
@@ -46,7 +47,7 @@ func CreateCanvasAudioTask(input CanvasAudioTaskCreateInput) (model.CanvasAudioT
 		CreatedAt:       current,
 		UpdatedAt:       current,
 	}
-	return repository.SaveCanvasAudioTask(task)
+	return repository.SaveCanvasAudioTask(task, input.Epoch)
 }
 
 func GetUserCanvasAudioTask(userID string, id string) (model.CanvasAudioTask, bool, error) {
@@ -76,16 +77,21 @@ func CanvasAudioTaskResponse(task model.CanvasAudioTask) map[string]any {
 		"createdAt":    task.CreatedAt,
 		"updatedAt":    task.UpdatedAt,
 	}
-	if task.AudioURL != "" {
+	if task.AudioURL != "" && task.Status == "completed" {
 		result["url"] = task.AudioURL
 		result["audio_url"] = task.AudioURL
 		result["storageKey"] = task.StorageKey
 		result["mimeType"] = task.MimeType
 		result["bytes"] = task.Bytes
 	}
-	if task.Error != "" || task.ErrorDetail != "" {
+	if strings.HasPrefix(task.ErrorDetail, "内容已生成，") {
+		result["archive_error"] = task.ErrorDetail
+		result["generation_status"] = "completed"
+	}
+	if task.Status == "failed" && (task.Error != "" || task.ErrorDetail != "") {
 		result["error"] = map[string]any{"message": firstVideoTaskValue(task.Error, task.ErrorDetail)}
 		result["error_detail"] = task.ErrorDetail
 	}
+	attachTaskRecovery(result, task.UserID, "audio-task", task.ID, task.UpdatedAt)
 	return result
 }

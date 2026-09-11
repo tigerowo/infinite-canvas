@@ -3,12 +3,13 @@ package service
 import (
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
-	"github.com/google/uuid"
 )
 
 type CanvasImageTaskCreateInput struct {
+	Epoch           int64
 	UserID          string
 	UserDisplayName string
 	Source          string
@@ -49,7 +50,7 @@ func CreateCanvasImageTask(input CanvasImageTaskCreateInput) (model.CanvasImageT
 		CreatedAt:       current,
 		UpdatedAt:       current,
 	}
-	return repository.SaveCanvasImageTask(task)
+	return repository.SaveCanvasImageTask(task, input.Epoch)
 }
 
 func GetUserCanvasImageTask(userID string, id string) (model.CanvasImageTask, bool, error) {
@@ -112,7 +113,7 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		"createdAt":      task.CreatedAt,
 		"updatedAt":      task.UpdatedAt,
 	}
-	if task.ImageURL != "" {
+	if task.ImageURL != "" && task.Status == "completed" {
 		result["url"] = task.ImageURL
 		result["image_url"] = task.ImageURL
 		if len(task.ImageURLs) > 0 {
@@ -124,10 +125,15 @@ func CanvasImageTaskResponse(task model.CanvasImageTask) map[string]any {
 		result["mimeType"] = task.MimeType
 		result["bytes"] = task.Bytes
 	}
-	if task.Error != "" || task.ErrorDetail != "" {
+	if strings.HasPrefix(task.ErrorDetail, "内容已生成，") {
+		result["archive_error"] = task.ErrorDetail
+		result["generation_status"] = "completed"
+	}
+	if task.Status == "failed" && (task.Error != "" || task.ErrorDetail != "") {
 		result["error"] = map[string]any{"message": firstVideoTaskValue(task.Error, task.ErrorDetail)}
 		result["error_detail"] = task.ErrorDetail
 	}
+	attachTaskRecovery(result, task.UserID, "image-task", task.ID, task.UpdatedAt)
 	return result
 }
 
@@ -156,4 +162,3 @@ func normalizeCanvasImageTaskSources(sources []string) []string {
 	}
 	return result
 }
-

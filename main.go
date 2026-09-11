@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"log"
+	lifecyclehttp "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle/http"
 
 	"github.com/tigerowo/infinite-canvas/config"
 	"github.com/tigerowo/infinite-canvas/handler"
@@ -22,5 +24,6 @@ func main() {
 	service.StartPromptSyncScheduler()
 	service.StartCanvasProjectCleanupScheduler()
 	handler.StartVideoTaskPoller()
+	lifecyclehttp.Start(context.Background())
 	log.Fatal(router.New().Run(":" + config.Cfg.Port))
 }

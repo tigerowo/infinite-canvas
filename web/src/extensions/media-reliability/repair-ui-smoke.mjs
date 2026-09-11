@@ -11,7 +11,7 @@ const { chromium } = require(process.env.EXT_MEDIA_RELIABILITY_PLAYWRIGHT_MODULE
 const browser = await chromium.launch({headless:true, executablePath:process.env.EXT_MEDIA_RELIABILITY_CHROMIUM || undefined});
 const context = await browser.newContext({ viewport:{width:1038,height:912} });
 const user = {id:'repair-fixture',username:'fixture',displayName:'Fixture',role:'admin',credits:100,avatarUrl:'',createdAt:'',updatedAt:''};
-const models = ['gpt-5.5','gemini-3.1-pro-preview','gpt-image-1','wan3.0-image','sora-2'];
+const models = ['gpt-5.5','gemini-3.1-pro-preview','gpt-image-1','wan3.0-image','sora-2','gpt-4o-mini-tts'];
 const channel = {id:'fixture',name:'Test channel with a long name',protocol:'newapi',baseUrl:'https://fixture.invalid',apiKey:'fixture-only',models,enabled:true,weight:1,timeout:600};
 const config = {channelMode:'local',localChannels:[channel],models,textModel:'gpt-5.5',textChannelId:'fixture',imageModel:'gpt-image-1',imageChannelId:'fixture',videoModel:'sora-2',videoChannelId:'fixture',model:'gpt-image-1',apiMode:'images'};
 const providers = ['火山 TOS','七牛云'].map((name,index)=>({id:'oss-'+index,type:'s3',name,enabled:true,endpoint:'https://s3.fixture.invalid',region:'fixture',bucket:'test-'+index,accessKeyId:'fixture',secretAccessKey:'',weight:1}));
@@ -22,6 +22,10 @@ const videoTasks = new Map();
 let storageOnline=false,historyOnline=false,deleteOnline=false;
 const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC1kAAAAASUVORK5CYII=';
 const project={id:'fixture',title:'Fixture Canvas',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),nodes:[{id:'fixture-node',type:'image',title:'生成图片',position:{x:100,y:100},width:240,height:240,metadata:{content:png,status:'success',prompt:'A fixture image',model:'gpt-image-1',naturalWidth:240,naturalHeight:240}}],connections:[],chatSessions:[],activeChatId:null,agentConfig:null,autoTitlePending:false,backgroundMode:'dots',showImageInfo:true,viewport:{x:0,y:0,k:1},sidePanel:{open:false,width:280},agentPanel:{open:true,width:400}};
+const bodyField=(body,name)=>{
+ if(body.trim().startsWith('{')) return JSON.parse(body)[name];
+ return body.match(new RegExp(`name="${name}"\\r?\\n\\r?\\n([^\\r\\n]+)`))?.[1];
+};
 await context.route('**/api/**', async route=>{
  const req=route.request(), path=new URL(req.url()).pathname;
  requests.push({method:req.method(),path,body:req.postData()?.slice(0,1000)});
@@ -32,9 +36,9 @@ await context.route('**/api/**', async route=>{
   return route.fulfill({json:{code:0,data:task}});
  }
  if(path.startsWith('/api/v1/videos/')) return route.fulfill({json:{code:0,data:[...videoTasks.values()][0]}});
- if(path==='/api/v1/canvas/image-tasks'&&req.method()==='POST') {
-  const body=req.postDataJSON(), id=body.clientTaskId;
-  const task={id,status:'completed',progress:100,image_url:png,width:1,height:1,mimeType:'image/png',source:'image-workbench',source_id:body.sourceId,createdAt:new Date().toISOString()};imageTasks.set(id,task);
+	 if(path==='/api/v1/canvas/image-tasks'&&req.method()==='POST') {
+	  const body=req.postData() || '', id=bodyField(body,'clientTaskId') || bodyField(body,'_canvas_task_id');
+	  const task={id,status:'completed',progress:100,image_url:png,width:1,height:1,mimeType:'image/png',source:'image-workbench',source_id:bodyField(body,'sourceId') || bodyField(body,'_canvas_source_id'),createdAt:new Date().toISOString()};imageTasks.set(id,task);
   return route.fulfill({json:{code:0,data:task}});
  }
  if(path==='/api/v1/canvas/image-tasks/status') return route.fulfill({json:{code:0,data:[...imageTasks.values()]}});
@@ -47,8 +51,11 @@ await context.route('**/api/**', async route=>{
   return route.fulfill({json:{code:0,data:[...histories.values()]}});
  }
  if(req.method()==='DELETE'||path.endsWith('/delete')) return route.fulfill(deleteOnline?{json:{code:0,data:{deleted:true}}}:{status:503,json:{code:1,msg:'Fixture delete offline'}});
- let data={};
- if(path==='/api/auth/me') data=user;
+	 let data={};
+	 if(path==='/api/auth/me') data=user;
+	 else if(path==='/api/extensions/media-lifecycle/state') data={mode:'retention',days:30,execution:'observe',version:1,epoch:1,clearing:false,storageReviewed:false,migratedAt:Date.now()};
+	 else if(path.startsWith('/api/extensions/media-lifecycle/draft/')) data={entity:{version:0,lastUsedAt:Date.now()},expiresAt:Date.now()+2592000000,epoch:1,missing:[]};
+	 else if(path==='/api/extensions/media-lifecycle/activity'||path==='/api/extensions/media-lifecycle/promote') data={entity:{version:1,lastUsedAt:Date.now()},expiresAt:Date.now()+2592000000,epoch:1,missing:[]};
  else if(path==='/api/extensions/model-policy') data={imageTransfer:'url',overrides:{},newapiVideoProfiles:{}};
  else if(path==='/api/v1/canvas/projects') data=process.argv[2]?.startsWith('/canvas/')?[project]:[];
  else if(path==='/api/settings') data={modelChannel:{enabled:true,availableModels:models,allowUserRemoteChannel:true,channels:[channel],modelCosts:[],systemPrompt:'',systemPrompts:{image:'',video:'',text:'',audio:'',workflow:'',workflowAgent:''}},site:{}};
@@ -70,6 +77,19 @@ await context.addInitScript(({config})=>{
 },{config});
 const page=await context.newPage();
 const errors=[];page.on('pageerror',error=>errors.push(error.message));
+const dropFile=async(name,type,base64)=>{
+ const dataTransfer=await page.evaluateHandle(({name,type,base64})=>{
+  const bytes=Uint8Array.from(atob(base64),char=>char.charCodeAt(0));
+  const transfer=new DataTransfer();
+  transfer.items.add(new File([bytes],name,{type}));
+  return transfer;
+ },{name,type,base64});
+ const target=page.locator('main').first();
+ await target.dispatchEvent('dragover',{dataTransfer});
+ await target.dispatchEvent('drop',{dataTransfer});
+	 await dataTransfer.dispose();
+};
+const requestField=(request,name)=>bodyField(request?.body || '',name);
 process.on('uncaughtException',async error=>{console.error(error.stack);console.log(JSON.stringify({requests,errors,body:(await page.locator('body').innerText()).slice(-5000)},null,2));await page.screenshot({path:artifact('huabu-ui-failure.png'),fullPage:true});await browser.close();process.exit(1);});
 await page.goto((process.env.EXT_MEDIA_RELIABILITY_TEST_URL || 'http://127.0.0.1:3001')+(process.argv[2]||'/'),{waitUntil:'networkidle',timeout:120000});
 console.log(JSON.stringify({url:page.url(),buttons:await page.getByRole('button').allTextContents(),comboboxes:await page.getByRole('combobox').evaluateAll(xs=>xs.map(x=>({text:x.textContent,label:x.getAttribute('aria-label')}))),editable:await page.locator('[contenteditable],textarea').evaluateAll(xs=>xs.map(x=>({tag:x.tagName,role:x.getAttribute('role'),placeholder:x.getAttribute('placeholder')}))),errors},null,2));
@@ -138,9 +158,14 @@ if(!process.argv[2]) {
  console.log('home: independent Skill beside settings, tool controls and guest visibility passed');
 }
 if(process.argv[2]==='/image') {
- await page.getByRole('button',{name:'底部',exact:true}).click();
- await page.screenshot({path:artifact('huabu-image-bottom.png'),fullPage:true});
- console.log('workbench colors',await page.locator('[class*="workbench"]').evaluateAll(xs=>xs.map(x=>getComputedStyle(x).backgroundColor)));
+	 await page.getByRole('button',{name:'底部',exact:true}).click();
+	 await page.screenshot({path:artifact('huabu-image-bottom.png'),fullPage:true});
+	 console.log('workbench colors',await page.locator('[class*="workbench"]').evaluateAll(xs=>xs.map(x=>getComputedStyle(x).backgroundColor)));
+	 storageOnline=true;
+	 await dropFile('dragged-image.png','image/png',png.split(',')[1]);
+	 await page.getByAltText('dragged-image.png').first().waitFor();
+	 storageOnline=false;
+	 console.log('image: operating-system file drop adds a reference image');
  await page.getByText('chat',{exact:true}).click();
  await page.getByRole('combobox',{name:/^质量/}).waitFor({state:'hidden'});
  assert.equal(await page.getByRole('combobox',{name:/^质量/}).count(),0);
@@ -175,7 +200,15 @@ if(process.argv[2]==='/image') {
  console.log('image: failed deletion retains history and reports failure');
 }
 if(process.argv[2]==='/admin/settings') {
- await page.getByRole('tab',{name:'私有配置（不会对外暴露）',exact:true}).click();
+	 for(const [name,expected] of Object.entries({'默认图片模型':'gpt-image-1','默认视频模型':'sora-2','默认文本模型':'gpt-5.5','默认音频模型':'gpt-4o-mini-tts'})) {
+	  const item=page.getByText(name,{exact:true}).locator('xpath=ancestor::div[contains(concat(" ",normalize-space(@class)," ")," ant-form-item ")][1]');
+	  await item.getByText(expected,{exact:true}).waitFor();
+	  await item.locator('.ant-select').click();
+	  const optionTexts=await page.getByRole('option').allTextContents();
+	  assert.ok(optionTexts.length>0&&optionTexts.every(text=>text.trim()),`${name} must not contain a blank option`);
+	  await page.keyboard.press('Escape');
+	 }
+	 await page.getByRole('tab',{name:'私有配置（不会对外暴露）',exact:true}).click();
  await page.getByText('云存储与访问',{exact:true}).waitFor();
  await page.getByText('云存储与访问',{exact:true}).scrollIntoViewIfNeeded();
  console.log('private controls',await page.getByRole('button').allTextContents());
@@ -242,13 +275,22 @@ if(process.argv[2]==='/video') {
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
   await page.screenshot({path:`${artifactDir}/huabu-video-${width}.png`,fullPage:true});
  }
- await page.setViewportSize({width:1038,height:912});
- await page.locator('textarea').first().fill('A fixture video');
+	 await page.setViewportSize({width:1038,height:912});
+	 storageOnline=true;
+	 await dropFile('dragged-video-reference.png','image/png',png.split(',')[1]);
+	 await page.getByAltText('dragged-video-reference.png').waitFor();
+	 storageOnline=false;
+	 console.log('video: operating-system file drop adds a reference image');
+	 await page.locator('textarea').first().fill('A fixture video');
  await page.getByRole('button',{name:'开始创作',exact:true}).click();
- await page.getByText('云端保存失败',{exact:true}).first().waitFor({timeout:30000});
- assert.equal(videoTasks.size,1);
- assert.equal(JSON.parse(requests.find(request=>request.path==='/api/v1/videos'&&request.method==='POST').body).seconds,'30');
- console.log('video: result survives storage failure');
+	 await page.getByText('云端保存失败',{exact:true}).first().waitFor({timeout:30000});
+	 assert.equal(videoTasks.size,1);
+	 const referenceStrips=page.getByLabel('参考素材');
+	 await referenceStrips.first().waitFor();
+	 assert.equal(await referenceStrips.evaluateAll(items=>items.every(item=>!item.classList.contains('absolute'))),true,'video references must stay in the information area');
+		 assert.equal(requestField(requests.find(request=>request.path==='/api/v1/videos'&&request.method==='POST'),'seconds'),'30');
+	 console.log('video: result survives storage failure');
+	 await page.screenshot({path:artifact('huabu-video-result.png'),fullPage:true});
  console.log('video controls',await page.getByRole('button').allTextContents());
  historyOnline=true;
  await page.getByRole('button',{name:'重新同步',exact:true}).click();

@@ -1,6 +1,7 @@
 import localforage from "localforage";
 import { apiGet, apiPost } from "@/services/api/request";
 import { assertMediaSession, mediaSession } from "./cache";
+import { lifecycleEpoch } from "@/extensions/media-lifecycle/session";
 
 type Kind = "images" | "videos";
 type RecordWithId = { id: string };
@@ -12,7 +13,14 @@ function withHistory<T>(kind: Kind, token: string, run: (key: string, check: () 
     if (!session.userId || session.token !== token) return Promise.reject(new Error("账号尚未就绪，请稍后重试同步"));
     const key = `${session.userId}:${kind}`;
     const check = () => assertMediaSession(session);
-    const task = (chains.get(key) || Promise.resolve()).catch(() => undefined).then(() => { check(); return run(key, check); });
+    const task = (chains.get(key) || Promise.resolve()).catch(() => undefined).then(async () => {
+        check();
+        const epoch = await lifecycleEpoch(token);
+        check();
+        // The previous generation stays on disk as a recovery copy. Never replay
+        // an old queue under a new epoch after an administrator's clear.
+        return run(epoch === 1 ? key : `${key}:epoch:${epoch}`, check);
+    });
     chains.set(key, task);
     void task.finally(() => { if (chains.get(key) === task) chains.delete(key); }).catch(() => undefined);
     return task;

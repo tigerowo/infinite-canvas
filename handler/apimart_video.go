@@ -31,7 +31,6 @@ type apimartInputConfig struct {
 	minResolution       string
 	hasCount            bool
 	hasQuality          bool
-	maxImageRefs        int
 	hasOutput           bool
 	modeFromRes         bool
 	dropAspectWithImage bool
@@ -201,12 +200,10 @@ func apimartVideoConfig(modelName string) apimartInputConfig {
 	case strings.Contains(model, "sora-2-pro"):
 		config.aspectField = "aspect_ratio"
 		config.dropAspectWithImage = true
-		config.maxImageRefs = 1
 	case strings.Contains(model, "sora-2"):
 		config.aspectField = "aspect_ratio"
 		config.maxResolution = "720p"
 		config.dropAspectWithImage = true
-		config.maxImageRefs = 1
 	case strings.Contains(model, "veo") && strings.Contains(model, "official"):
 		config.aspectField = "aspect_ratio"
 		config.imageRefField = "first_frame_image"
@@ -335,7 +332,6 @@ func apimartVideoConfig(modelName string) apimartInputConfig {
 		config.aspectField = "aspect_ratio"
 		config.hasResolution = true
 		config.resolutionCase = "video"
-		config.maxImageRefs = 10
 		config.imageRefField = "image_urls"
 		config.imageRefKind = "array"
 		config.videoRefField = "video_url"
@@ -476,17 +472,11 @@ func normalizeAPIMartKlingV3ElementList(payload map[string]any, channel model.Mo
 		if len(values) == 0 {
 			continue
 		}
-		if len(values) > 4 {
-			values = values[:4]
-		}
 		result = append(result, map[string]any{
 			"name":               strings.TrimSpace(toStringSafe(record["name"])),
 			"description":        strings.TrimSpace(toStringSafe(record["description"])),
 			"element_input_urls": values,
 		})
-		if len(result) >= 3 {
-			break
-		}
 	}
 	if len(result) == 0 {
 		delete(payload, "element_list")
@@ -698,9 +688,6 @@ func validateAPIMartVideoRequiredInputs(payload map[string]any, modelName string
 	case model == "kling-3-0-turbo":
 		return requireAPIMartAnyInput(payload, "prompt", "first_frame_image")
 	case model == "happyhorse-1-1":
-		if len(normalizeAPIMartReferenceStringList(payload["image_urls"])) > 9 {
-			return errors.New("图片数量最多9张")
-		}
 		return requireAPIMartAnyInput(payload, "prompt", "first_frame_image", "image_urls")
 	case strings.Contains(model, "motion-control"):
 		if isEmptyValue(payload["image_url"]) || isEmptyValue(payload["video_url"]) {
@@ -868,9 +855,6 @@ func setAPIMartImageReference(payload map[string]any, config apimartInputConfig,
 	}
 	if field == "" || len(values) == 0 {
 		return
-	}
-	if config.maxImageRefs > 0 && len(values) > config.maxImageRefs {
-		values = values[:config.maxImageRefs]
 	}
 	if (config.imageRefKind == "seedance2" || config.imageRefKind == "roles") && isAPIMartFirstLastSource(sourceKey) {
 		appendAPIMartImageRole(payload, sourceKey, values[0])

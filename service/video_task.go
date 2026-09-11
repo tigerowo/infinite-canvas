@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	ml "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/extensions/taskidentity"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
+	"gorm.io/gorm"
 )
 
 const videoTaskPollInterval = 5 * time.Second
@@ -27,6 +29,7 @@ var (
 )
 
 type VideoTaskCreateInput struct {
+	Epoch            int64
 	CredentialSource string
 	UserID           string
 	UserDisplayName  string
@@ -104,16 +107,20 @@ func CreateVideoTask(input VideoTaskCreateInput) (model.VideoTask, error) {
 		task.Status = "failed"
 		task.CompletedAt = current
 	}
-	if input.CredentialSource != "" {
-		db, err := repository.DB()
-		if err != nil {
-			return model.VideoTask{}, err
-		}
-		if err := taskidentity.Save(db, task.ID, task.UserID, input.CredentialSource); err != nil {
-			return model.VideoTask{}, err
-		}
+	db, err := repository.DB()
+	if err != nil {
+		return task, err
 	}
-	saved, err := repository.SaveVideoTask(task)
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := ml.CreateRecord(tx, &task, input.Epoch); err != nil {
+			return err
+		}
+		if input.CredentialSource != "" {
+			return taskidentity.Save(tx, task.ID, task.UserID, input.CredentialSource)
+		}
+		return nil
+	})
+	saved := task
 	if err == nil && !IsCompletedVideoTaskStatus(saved.Status) && !IsFailedVideoTaskStatus(saved.Status) {
 		WakeVideoTaskPoller()
 	}
@@ -164,15 +171,23 @@ func VideoTaskResponse(task model.VideoTask) map[string]any {
 		"updatedAt":     task.UpdatedAt,
 		"request_body":  task.RequestBody,
 	}
-	if task.VideoURL != "" {
+	if task.VideoURL != "" && task.Status == "completed" {
+		if strings.HasPrefix(task.VideoURL, "/api/files/") && strings.HasSuffix(task.VideoURL, "/content") {
+			result["storageKey"] = "server:" + strings.TrimSuffix(strings.TrimPrefix(task.VideoURL, "/api/files/"), "/content")
+		}
 		result["url"] = task.VideoURL
 		result["video_url"] = task.VideoURL
 		result["data"] = []map[string]any{{"url": task.VideoURL}}
+	}
+	if strings.HasPrefix(task.ErrorDetail, "视频已生成，保存到 OSS 失败") || strings.HasPrefix(task.ErrorDetail, "内容已生成，") {
+		result["archive_error"] = task.ErrorDetail
+		result["generation_status"] = "completed"
 	}
 	if IsFailedVideoTaskStatus(task.Status) && (task.Error != "" || task.ErrorDetail != "") {
 		result["error"] = map[string]any{"message": firstVideoTaskValue(task.Error, task.ErrorDetail)}
 		result["error_detail"] = task.ErrorDetail
 	}
+	attachTaskRecovery(result, task.UserID, "video-task", task.ID, task.UpdatedAt)
 	return result
 }
 
@@ -243,6 +258,20 @@ func runVideoTaskPoller() {
 				}
 				go func(task model.VideoTask) {
 					defer inFlight.Delete(task.ID)
+					db, err := repository.DB()
+					if err != nil {
+						log.Printf("video poll database: %v", err)
+						return
+					}
+					attempt, err := ml.BeginTaskPoll(db, task.UserID, task.ID)
+					if err != nil {
+						return
+					}
+					defer func() {
+						if err := ml.EndTaskPoll(db, attempt); err != nil {
+							log.Printf("video poll release: %v", err)
+						}
+					}()
 					poll := currentVideoTaskPoller()
 					if poll == nil {
 						return
@@ -251,7 +280,7 @@ func runVideoTaskPoller() {
 					if err != nil {
 						update = VideoTaskPollUpdate{Status: task.Status, ErrorDetail: err.Error()}
 					}
-					if err := UpdateVideoTaskFromPoll(task, update); err != nil {
+					if err := UpdateVideoTaskFromPoll(task, update, attempt); err != nil {
 						log.Printf("update video task failed id=%s err=%v", task.ID, err)
 					}
 				}(task)
@@ -271,7 +300,7 @@ func waitForNextVideoTaskPoll() {
 	time.Sleep(videoTaskPollInterval)
 }
 
-func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) error {
+func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate, lease ...ml.TaskAttempt) error {
 	current := now()
 	task.Status = NormalizeVideoTaskStatus(firstVideoTaskValue(update.Status, task.Status))
 	if task.Status == "" {
@@ -309,6 +338,13 @@ func UpdateVideoTaskFromPoll(task model.VideoTask, update VideoTaskPollUpdate) e
 	} else if task.Error != "" || IsFailedVideoTaskStatus(task.Status) {
 		task.Status = "failed"
 		task.CompletedAt = current
+	}
+	if len(lease) > 0 || IsCompletedVideoTaskStatus(task.Status) || IsFailedVideoTaskStatus(task.Status) {
+		db, err := repository.DB()
+		if err != nil {
+			return err
+		}
+		return ml.StageTaskResult(db, &task, lease...)
 	}
 	_, err := repository.SaveVideoTask(task)
 	return err

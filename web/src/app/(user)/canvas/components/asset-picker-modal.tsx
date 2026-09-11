@@ -10,6 +10,7 @@ import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
 import { uploadAssetMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
+import { libraryAssetDragPayload, userAssetDragPayload, writeAssetDrag } from "@/extensions/media-reliability/asset-dnd";
 import type { InsertAssetPayload } from "../types";
 
 export type { InsertAssetPayload } from "../types";
@@ -134,7 +135,15 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
             ) : items.length ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {items.map((asset) => (
-                        <PickerCard key={asset.id} title={asset.title} kind={asset.type} cover={asset.coverUrl} loading={inserting === asset.id} onClick={() => void handleInsert(asset)} />
+                        <PickerCard
+                            key={asset.id}
+                            title={asset.title}
+                            kind={asset.type}
+                            cover={asset.coverUrl}
+                            dragPayload={libraryAssetDragPayload(asset)}
+                            loading={inserting === asset.id}
+                            onClick={() => void handleInsert(asset)}
+                        />
                     ))}
                 </div>
             ) : (
@@ -150,7 +159,7 @@ function LibraryTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => v
     );
 }
 
-function PickerCard({ title, kind, cover, loading, onClick }: { title: string; kind: string; cover: string; loading?: boolean; onClick: () => void }) {
+function PickerCard({ title, kind, cover, dragPayload, loading, onClick }: { title: string; kind: string; cover: string; dragPayload?: InsertAssetPayload; loading?: boolean; onClick: () => void }) {
     const normalizedCover = cover.trim();
     const [coverFailed, setCoverFailed] = useState(false);
 
@@ -161,6 +170,8 @@ function PickerCard({ title, kind, cover, loading, onClick }: { title: string; k
     return (
         <button
             type="button"
+            draggable={Boolean(dragPayload)}
+            onDragStart={(event) => { if (dragPayload) writeAssetDrag(event, dragPayload); }}
             className="group relative cursor-pointer overflow-hidden rounded-lg border border-stone-200 bg-white text-left transition hover:border-stone-400 hover:shadow-md dark:border-stone-700 dark:bg-stone-900 dark:hover:border-stone-500"
             onClick={onClick}
             disabled={loading}
@@ -347,7 +358,14 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             {visible.length ? (
                 <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                     {visible.map((asset) => (
-                        <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")} onClick={() => handleInsert(asset)} />
+                        <PickerCard
+                            key={asset.id}
+                            title={asset.title}
+                            kind={asset.kind}
+                            cover={asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "")}
+                            dragPayload={userAssetDragPayload(asset)}
+                            onClick={() => handleInsert(asset)}
+                        />
                     ))}
                 </div>
             ) : (

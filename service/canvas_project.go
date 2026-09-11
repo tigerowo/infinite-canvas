@@ -76,6 +76,7 @@ func CurrentUserCanvasProjects(
 func SaveCurrentUserCanvasProject(
 	ctx context.Context,
 	raw json.RawMessage,
+	baseUpdatedAt ...*string,
 ) (json.RawMessage, error) {
 	user, ok := UserFromContext(ctx)
 	if !ok || user.ID == "" {
@@ -86,7 +87,7 @@ func SaveCurrentUserCanvasProject(
 	if err != nil {
 		return nil, err
 	}
-	saved, err := repository.SaveUserCanvasProject(project)
+	saved, err := repository.SaveUserCanvasProject(project, baseUpdatedAt...)
 	if err != nil {
 		return nil, err
 	}

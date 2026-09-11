@@ -1,4 +1,5 @@
 import { channelIdForActiveModel, type AiConfig } from "@/stores/use-config-store";
+import { assertReferenceLimit, countMediaReferences } from "@/extensions/media-reliability/reference-limit";
 import { loadModelPolicy } from "@/extensions/model-capabilities/policy";
 import { publicImageURL, publicMediaURL } from "@/extensions/public-media/references";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -41,6 +42,7 @@ export function newAPIVideoSize(size: string, quality: string) {
 }
 
 export async function createNewAPIVideoRequest(config: AiConfig, model: string, prompt: string, input: Required<VideoReferenceInput>) {
+    assertReferenceLimit(countMediaReferences(input));
     model = model.trim();
     if (!model) throw new Error("模型名称不能为空，请先选择可用的视频模型");
     const seconds = Number(config.videoSeconds);
@@ -80,6 +82,14 @@ export function parseNewAPIVideoResponse(payload: unknown): VideoResponse {
     if (!task.id || typeof task.id !== "string") throw new Error(task.error?.message || "NewAPI 没有返回网关任务 ID");
     const states = ["queued", "pending", "processing", "in_progress", "completed", "failed", "cancelled", "canceled"];
     if (!task.status || !states.includes(task.status)) throw new Error(`NewAPI 返回未知视频状态：${task.status || "空"}`);
+    const result = (task as VideoResponse & { metadata?: { canvas_video_result?: { version?: number; url?: string } } }).metadata?.canvas_video_result;
+    let directURL: string | undefined;
+    if (task.status === "completed" && result?.version === 1 && typeof result.url === "string") {
+        try {
+            const parsed = new URL(result.url);
+            if (["https:", "http:"].includes(parsed.protocol) && !parsed.username && !parsed.password) directURL = result.url;
+        } catch { /* Invalid result URLs cannot be downloaded. */ }
+    }
     // Never infer completion from a URL or replace the gateway ID with video_id.
-    return { ...task, video_url: task.status === "completed" ? task.video_url : undefined, url: task.status === "completed" ? task.url : undefined };
+    return { ...task, video_url: task.status === "completed" ? directURL || task.video_url : undefined, url: task.status === "completed" ? directURL || task.url : undefined };
 }

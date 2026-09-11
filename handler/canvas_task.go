@@ -22,7 +22,9 @@ import (
 	"strings"
 	"time"
 
+	ml "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/model"
+	"github.com/tigerowo/infinite-canvas/repository"
 	"github.com/tigerowo/infinite-canvas/service"
 )
 
@@ -55,6 +57,7 @@ func CreateCanvasImageTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, err := service.CreateCanvasImageTask(service.CanvasImageTaskCreateInput{
+		Epoch:           ml.Epoch(r.Context()),
 		UserID:          user.ID,
 		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
 		Source:          source,
@@ -208,6 +211,7 @@ func CreateCanvasAudioTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, err := service.CreateCanvasAudioTask(service.CanvasAudioTaskCreateInput{
+		Epoch:           ml.Epoch(r.Context()),
 		UserID:          user.ID,
 		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
 		SourceID:        sourceID,
@@ -251,13 +255,24 @@ func GetCanvasAudioTask(w http.ResponseWriter, r *http.Request, id string) {
 }
 
 func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+	ctx, stop, err := beginCanvasSubmission(task.UserID, "image-task", task.ID)
+	if err != nil {
+		log.Printf("begin image submission %s: %v", task.ID, err)
+		return
+	}
+	defer stop()
 	current := taskTime()
 	task.Status = "processing"
 	task.Progress = 10
 	task.StartedAt = current
-	task, _ = service.SaveCanvasImageTask(task)
+	var saveErr error
+	task, saveErr = service.SaveCanvasImageTask(task)
+	if saveErr != nil {
+		log.Printf("start canvas image task %s: %v", task.ID, saveErr)
+		return
+	}
 
-	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequestContext(ctx, user, task.Endpoint, body, contentType, channelID, userChannelID, task.ID)
 	if err != nil {
 		saveFailedCanvasImageTask(task, err.Error(), err.Error())
 		return
@@ -292,17 +307,28 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 	task.Height = 0
 	task.Error = ""
 	task.ErrorDetail = ""
-	_, _ = service.SaveCanvasImageTask(task)
+	persistCanvasTaskResult(&task)
 }
 
 func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []byte, contentType string, channelID string, userChannelID string) {
+	ctx, stop, err := beginCanvasSubmission(task.UserID, "audio-task", task.ID)
+	if err != nil {
+		log.Printf("begin audio submission %s: %v", task.ID, err)
+		return
+	}
+	defer stop()
 	current := taskTime()
 	task.Status = "processing"
 	task.Progress = 10
 	task.StartedAt = current
-	task, _ = service.SaveCanvasAudioTask(task)
+	var saveErr error
+	task, saveErr = service.SaveCanvasAudioTask(task)
+	if saveErr != nil {
+		log.Printf("start canvas audio task %s: %v", task.ID, saveErr)
+		return
+	}
 
-	payload, status, responseContentType, err := executeCanvasAIRequest(user, task.Endpoint, body, contentType, channelID, userChannelID)
+	payload, status, responseContentType, err := executeCanvasAIRequestContext(ctx, user, task.Endpoint, body, contentType, channelID, userChannelID, task.ID)
 	if err != nil {
 		saveFailedCanvasAudioTask(task, err.Error(), err.Error())
 		return
@@ -330,7 +356,7 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 			task.Status, task.Progress, task.CompletedAt = "completed", 100, taskTime()
 			task.AudioURL, task.MimeType, task.ResponseBody = result.AudioURL, result.MimeType, string(payload)
 			task.Error, task.ErrorDetail = "", ""
-			_, _ = service.SaveCanvasAudioTask(task)
+			persistCanvasTaskResult(&task)
 			return
 		}
 		saveFailedCanvasAudioTask(task, "音频接口没有返回音频文件", string(payload))
@@ -349,12 +375,54 @@ func runCanvasAudioTask(task model.CanvasAudioTask, user model.AuthUser, body []
 	task.Bytes = int64(len(payload))
 	task.Error = ""
 	task.ErrorDetail = ""
-	_, _ = service.SaveCanvasAudioTask(task)
+	persistCanvasTaskResult(&task)
 }
 
-func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string) ([]byte, int, string, error) {
+func beginCanvasSubmission(owner, kind, id string) (context.Context, context.CancelFunc, error) {
+	db, err := repository.DB()
+	if err != nil {
+		return nil, nil, err
+	}
+	attempt, err := ml.BeginTaskSubmission(db, owner, kind, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithDeadline(ml.WithEpoch(context.Background(), attempt.Epoch), time.UnixMilli(attempt.Started+ml.Day))
+	go ml.KeepTaskSubmission(ctx, db, attempt)
+	return ctx, cancel, nil
+}
+
+func persistCanvasTaskResult(row any) {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		var dbErr error
+		db, loadErr := repository.DB()
+		dbErr = loadErr
+		if dbErr == nil {
+			dbErr = ml.StageTaskResult(db, row)
+		}
+		if dbErr == nil {
+			return
+		}
+		err = dbErr
+		if errors.Is(err, ml.ErrConflict) || errors.Is(err, ml.ErrClearing) {
+			break
+		}
+		time.Sleep(time.Duration(attempt+1) * 100 * time.Millisecond)
+	}
+	log.Printf("persist canvas result failed, retained submission requires recovery: %v", err)
+}
+
+func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string, operation ...string) ([]byte, int, string, error) {
+	return executeCanvasAIRequestContext(context.Background(), user, endpoint, body, contentType, channelID, userChannelID, operation...)
+}
+
+func executeCanvasAIRequestContext(ctx context.Context, user model.AuthUser, endpoint string, body []byte, contentType string, channelID string, userChannelID string, operation ...string) ([]byte, int, string, error) {
 	request := httptest.NewRequest(http.MethodPost, "http://canvas.local/api/v1"+endpoint, bytes.NewReader(body))
-	request = request.WithContext(service.WithUser(context.Background(), user))
+	request = request.WithContext(service.WithUser(ctx, user))
+	if len(operation) > 0 {
+		request.Header.Set("X-Operation-ID", operation[0])
+	}
 	if contentType != "" {
 		request.Header.Set("Content-Type", contentType)
 	}
@@ -367,8 +435,11 @@ func executeCanvasAIRequest(user model.AuthUser, endpoint string, body []byte, c
 	proxyAIRequest(recorder, request, endpoint)
 	response := recorder.Result()
 	defer response.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
-	return payload, response.StatusCode, response.Header.Get("Content-Type"), nil
+	payload, err := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024+1))
+	if len(payload) > 32*1024*1024 {
+		return nil, response.StatusCode, response.Header.Get("Content-Type"), errors.New("生成结果超过服务端可接收大小，需核对上游结果")
+	}
+	return payload, response.StatusCode, response.Header.Get("Content-Type"), err
 }
 
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
@@ -376,7 +447,7 @@ func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detai
 	task.CompletedAt = taskTime()
 	task.Error = firstNonEmpty(message, "图片生成失败")
 	task.ErrorDetail = detail
-	_, _ = service.SaveCanvasImageTask(task)
+	persistCanvasTaskResult(&task)
 }
 
 func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detail string) {
@@ -384,7 +455,7 @@ func saveFailedCanvasAudioTask(task model.CanvasAudioTask, message string, detai
 	task.CompletedAt = taskTime()
 	task.Error = firstNonEmpty(message, "音频生成失败")
 	task.ErrorDetail = detail
-	_, _ = service.SaveCanvasAudioTask(task)
+	persistCanvasTaskResult(&task)
 }
 
 func readCanvasTaskAIRequest(r *http.Request, fallbackEndpoint string) ([]byte, string, string, string, string, string, string, string, string, error) {

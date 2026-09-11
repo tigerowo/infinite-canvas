@@ -32,7 +32,7 @@ export function ModelPicker({ config, value, channelId, capability, onChange, cl
         return channelOptions.find((item) => item.model === value && item.channelId === channelId) || channelOptions.find((item) => item.model === value);
     }, [channelId, channelOptions, value]);
     const options = channelOptions;
-    const current = value || "";
+    const current = currentOption ? value || "" : "";
     const currentValue = current && currentOption ? currentOption.key : "";
     const displayLabel = current || (options.length ? placeholder : "暂无模型");
 

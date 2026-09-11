@@ -1,4 +1,6 @@
 import axios from "axios";
+import { lifecycleHeaders } from "@/extensions/media-lifecycle/session";
+import { assertReferenceLimit } from "@/extensions/media-reliability/reference-limit";
 import { isNewAPIConfig } from "@/extensions/newapi/config";
 import { createNewAPIImageBody } from "@/extensions/newapi/image";
 import { responsesImageState } from "@/extensions/newapi/response-state";
@@ -44,6 +46,7 @@ type ChatImagesApiResponse = {
 type GeneratedImage = { id: string; dataUrl: string; seed?: number } & Partial<UploadedImage>;
 export type CanvasImageTask = {
     id: string;
+    archiveRecovery?: number;
     parent_task_id?: string;
     object?: string;
     source?: string;
@@ -518,6 +521,7 @@ export function aiHeaders(config: AiConfig, contentType?: string) {
     if (config.channelMode === "remote") {
         return {
             Authorization: `Bearer ${token}`,
+            ...lifecycleHeaders(token),
             ...(channelIdForActiveModel(config) ? { "X-Model-Channel-ID": channelIdForActiveModel(config) } : {}),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
@@ -526,6 +530,7 @@ export function aiHeaders(config: AiConfig, contentType?: string) {
         const userChannelId = channelIdForActiveModel(config);
         return {
             Authorization: `Bearer ${token}`,
+            ...lifecycleHeaders(token),
             ...(userChannelId ? { "X-User-Model-Channel-ID": userChannelId } : {}),
             ...(contentType ? { "Content-Type": contentType } : {}),
         };
@@ -932,6 +937,7 @@ async function requestAndParseImages(config: AiConfig, endpoint: string, request
 }
 
 async function requestImages(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[]): Promise<GeneratedImage[]> {
+    assertReferenceLimit(references.length);
     if (isNewAPIConfig(config)) {
         const params = createImageRequestParams(config);
         const { endpoint, body } = await createNewAPIImageBody(config, withPromptGuard(config, withSystemPrompt(config, prompt)), references, params);
@@ -1009,6 +1015,7 @@ export async function requestEdit(config: AiConfig & { seedIndex?: number; seedC
 }
 
 export async function createCanvasImageTask(config: AiConfig & { seedIndex?: number; seedCount?: number }, prompt: string, references: ReferenceImage[], options: CanvasImageTaskOptions = {}): Promise<CanvasImageTask> {
+    assertReferenceLimit(references.length);
     if (!usesAccountProxy(config)) {
         const images = await requestImages({ ...config, count: "1" }, prompt, references);
         const [image] = images;

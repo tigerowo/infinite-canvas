@@ -1,6 +1,7 @@
 package repository
 
 import (
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"strings"
 
 	"github.com/tigerowo/infinite-canvas/model"
@@ -29,83 +30,34 @@ func HasAnyVideoGenerationLog(userID string) (bool, error) {
 	return count > 0, err
 }
 
-func UpsertVideoGenerationLogs(userID string, logs []model.VideoGenerationLog) error {
+func UpsertVideoGenerationLogs(userID string, logs []model.VideoGenerationLog, epoch ...int64) error {
 	db, err := DB()
 	if err != nil {
 		return err
 	}
-	for _, log := range logs {
-		log.UserID = userID
-		if strings.TrimSpace(log.ID) == "" || isDeletedVideoGenerationLog(userID, log) {
-			continue
-		}
-		var existing model.VideoGenerationLog
-		found := false
-		if err := db.Where("user_id = ? AND id = ?", userID, log.ID).First(&existing).Error; err == nil {
-			found = true
-		} else if log.TaskID != "" {
-			if err := db.Where("user_id = ? AND deleted_at = ? AND task_id = ?", userID, "", log.TaskID).First(&existing).Error; err == nil {
-				found = true
-			}
-		}
-		if !found && log.VideoID != "" {
-			if err := db.Where("user_id = ? AND deleted_at = ? AND video_id = ?", userID, "", log.VideoID).First(&existing).Error; err == nil {
-				found = true
-			}
-		}
-		if found {
-			log.ID = existing.ID
-			log.UserID = userID
-			log.DeletedAt = ""
-		}
-		if err := db.Save(&log).Error; err != nil {
-			return err
-		}
+	rows := make([]any, 0, len(logs))
+	for i := range logs {
+		logs[i].UserID = userID
+		rows = append(rows, &logs[i])
 	}
-	return nil
+	return medialifecycle.SaveHistory(db, userID, "video-history", rows, generationLogEpoch(epoch))
 }
 
-func SoftDeleteVideoGenerationLog(userID string, id string, deletedAt string) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-	var log model.VideoGenerationLog
-	err = db.Where("user_id = ? AND (id = ? OR task_id = ? OR video_id = ?)", userID, id, id, id).First(&log).Error
-	if err != nil {
-		return nil
-	}
-	return db.Model(&log).Updates(map[string]any{
-		"deleted_at":   deletedAt,
-		"updated_at":   deletedAt,
-		"payload_json": "",
-	}).Error
+func SoftDeleteVideoGenerationLog(userID string, id string, deletedAt string, epoch ...int64) error {
+	return SoftDeleteVideoGenerationLogs(userID, []string{id}, deletedAt, epoch...)
 }
 
-func SoftDeleteVideoGenerationLogs(userID string, ids []string, deletedAt string) error {
+func SoftDeleteVideoGenerationLogs(userID string, ids []string, deletedAt string, epoch ...int64) error {
 	db, err := DB()
 	if err != nil {
 		return err
 	}
-	keys := generationLogIdentityValues(ids...)
-	if len(keys) == 0 {
-		return nil
-	}
-	return db.Model(&model.VideoGenerationLog{}).
-		Where("user_id = ? AND (id IN ? OR task_id IN ? OR video_id IN ?)", userID, keys, keys, keys).
-		Updates(map[string]any{
-			"deleted_at":   deletedAt,
-			"updated_at":   deletedAt,
-			"payload_json": "",
-		}).Error
+	return medialifecycle.DeleteHistory(db, userID, "video-history", generationLogIdentityValues(ids...), deletedAt, generationLogEpoch(epoch))
 }
 
 func CleanupDeletedVideoGenerationLogs(before string) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-	return db.Where("deleted_at <> ? AND deleted_at < ?", "", before).Delete(&model.VideoGenerationLog{}).Error
+	// Tombstones are compacted together with the lifecycle sync boundary.
+	return nil
 }
 
 func ListImageGenerationLogs(userID string, limit int) ([]model.ImageGenerationLog, error) {
@@ -131,115 +83,33 @@ func HasAnyImageGenerationLog(userID string) (bool, error) {
 	return count > 0, err
 }
 
-func UpsertImageGenerationLogs(userID string, logs []model.ImageGenerationLog) error {
+func UpsertImageGenerationLogs(userID string, logs []model.ImageGenerationLog, epoch ...int64) error {
 	db, err := DB()
 	if err != nil {
 		return err
 	}
-	for _, log := range logs {
-		log.UserID = userID
-		if strings.TrimSpace(log.ID) == "" || isDeletedImageGenerationLog(userID, log) {
-			continue
-		}
-		var existing model.ImageGenerationLog
-		found := false
-		if err := db.Where("user_id = ? AND id = ?", userID, log.ID).First(&existing).Error; err == nil {
-			found = true
-		} else if log.TaskID != "" {
-			if err := db.Where("user_id = ? AND deleted_at = ? AND task_id = ?", userID, "", log.TaskID).First(&existing).Error; err == nil {
-				found = true
-			}
-		}
-		if !found && log.ImageID != "" {
-			if err := db.Where("user_id = ? AND deleted_at = ? AND image_id = ?", userID, "", log.ImageID).First(&existing).Error; err == nil {
-				found = true
-			}
-		}
-		if found {
-			log.ID = existing.ID
-			log.UserID = userID
-			log.DeletedAt = ""
-		}
-		if err := db.Save(&log).Error; err != nil {
-			return err
-		}
+	rows := make([]any, 0, len(logs))
+	for i := range logs {
+		logs[i].UserID = userID
+		rows = append(rows, &logs[i])
 	}
-	return nil
+	return medialifecycle.SaveHistory(db, userID, "image-history", rows, generationLogEpoch(epoch))
 }
 
-func SoftDeleteImageGenerationLog(userID string, id string, deletedAt string) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-	var log model.ImageGenerationLog
-	err = db.Where("user_id = ? AND (id = ? OR task_id = ? OR image_id = ?)", userID, id, id, id).First(&log).Error
-	if err != nil {
-		return nil
-	}
-	return db.Model(&log).Updates(map[string]any{
-		"deleted_at":   deletedAt,
-		"updated_at":   deletedAt,
-		"payload_json": "",
-	}).Error
+func SoftDeleteImageGenerationLog(userID string, id string, deletedAt string, epoch ...int64) error {
+	return SoftDeleteImageGenerationLogs(userID, []string{id}, deletedAt, epoch...)
 }
 
-func SoftDeleteImageGenerationLogs(userID string, ids []string, deletedAt string) error {
+func SoftDeleteImageGenerationLogs(userID string, ids []string, deletedAt string, epoch ...int64) error {
 	db, err := DB()
 	if err != nil {
 		return err
 	}
-	keys := generationLogIdentityValues(ids...)
-	if len(keys) == 0 {
-		return nil
-	}
-	return db.Model(&model.ImageGenerationLog{}).
-		Where("user_id = ? AND (id IN ? OR task_id IN ? OR image_id IN ?)", userID, keys, keys, keys).
-		Updates(map[string]any{
-			"deleted_at":   deletedAt,
-			"updated_at":   deletedAt,
-			"payload_json": "",
-		}).Error
+	return medialifecycle.DeleteHistory(db, userID, "image-history", generationLogIdentityValues(ids...), deletedAt, generationLogEpoch(epoch))
 }
 
 func CleanupDeletedImageGenerationLogs(before string) error {
-	db, err := DB()
-	if err != nil {
-		return err
-	}
-	return db.Where("deleted_at <> ? AND deleted_at < ?", "", before).Delete(&model.ImageGenerationLog{}).Error
-}
-
-func isDeletedVideoGenerationLog(userID string, log model.VideoGenerationLog) bool {
-	db, err := DB()
-	if err != nil {
-		return false
-	}
-	keys := generationLogIdentityValues(log.ID, log.TaskID, log.VideoID)
-	if len(keys) == 0 {
-		return false
-	}
-	var count int64
-	_ = db.Model(&model.VideoGenerationLog{}).
-		Where("user_id = ? AND deleted_at <> ? AND (id IN ? OR task_id IN ? OR video_id IN ?)", userID, "", keys, keys, keys).
-		Count(&count).Error
-	return count > 0
-}
-
-func isDeletedImageGenerationLog(userID string, log model.ImageGenerationLog) bool {
-	db, err := DB()
-	if err != nil {
-		return false
-	}
-	keys := generationLogIdentityValues(log.ID, log.TaskID, log.ImageID)
-	if len(keys) == 0 {
-		return false
-	}
-	var count int64
-	_ = db.Model(&model.ImageGenerationLog{}).
-		Where("user_id = ? AND deleted_at <> ? AND (id IN ? OR task_id IN ? OR image_id IN ?)", userID, "", keys, keys, keys).
-		Count(&count).Error
-	return count > 0
+	return nil
 }
 
 func generationLogIdentityValues(values ...string) []string {
@@ -255,3 +125,9 @@ func generationLogIdentityValues(values ...string) []string {
 	return result
 }
 
+func generationLogEpoch(epoch []int64) int64 {
+	if len(epoch) > 0 {
+		return epoch[0]
+	}
+	return 0
+}

@@ -53,7 +53,7 @@ func TestArchiveRetryIsolationAndRecovery(t *testing.T) {
 			paths[r.URL.Path] = true
 		} else if r.Method == "GET" {
 			gets++
-		} else {
+		} else if r.Method != "HEAD" {
 			return nil, errors.New("unexpected network method")
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"image/png"}}, Body: io.NopCloser(bytes.NewBufferString("fixture"))}, nil
@@ -94,8 +94,8 @@ func TestArchiveRetryIsolationAndRecovery(t *testing.T) {
 	}
 	otherCtx := service.WithUser(context.Background(), model.AuthUser{ID: "b", Role: "admin"})
 	other, err := service.UploadStorageObject(otherCtx, "other.png", "image/png", []byte("fixture"))
-	if err != nil || other.StorageKey == identity {
-		t.Fatalf("owner isolation: %v", err)
+	if err != nil || other.StorageKey != identity {
+		t.Fatalf("shared physical file with independent ownership: %v", err)
 	}
 	// Recovery must match both the exact origin/path and the authenticated owner.
 	router := gin.New()
@@ -142,8 +142,8 @@ func TestArchiveRetryIsolationAndRecovery(t *testing.T) {
 	}
 	beforePaths := len(paths)
 	_, err = service.UploadStorageObject(ctx, "first.png", "image/png", []byte("recovery"))
-	if err == nil {
-		t.Fatal("expected database failure")
+	if err != nil {
+		t.Fatal("metadata recovery failed",err)
 	}
 	recovered, err := service.UploadStorageObject(ctx, "retry.png", "image/png", []byte("recovery"))
 	if err != nil || recovered.ID == "" || len(paths) != beforePaths+1 {

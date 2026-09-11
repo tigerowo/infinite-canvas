@@ -1,16 +1,20 @@
 "use client";
+import { createHistoryStore } from "@/extensions/media-lifecycle/history-store";
 
 import { create } from "zustand";
 import { persist, type PersistStorage, type StorageValue } from "zustand/middleware";
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { cleanupUnusedImages, resolveImageUrl } from "@/services/image-storage";
 import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
 import { fetchUserAssetData, syncUserAssetData } from "@/services/api/user-config";
 import { useUserStore } from "@/stores/use-user-store";
 import { durableMediaSnapshot, mapMedia } from "@/extensions/media-reliability/snapshot";
 import { assertMediaSession, mediaSession } from "@/extensions/media-reliability/cache";
+import { knownLifecycleEpoch, lifecycleEpoch } from "@/extensions/media-lifecycle/session";
+import { mergeAssetCollection, synchronizeAssetCollection, type AssetCollection } from "@/extensions/media-lifecycle/asset-sync";
+import { createHistoryWriteQueue } from "@/extensions/media-lifecycle/history-write";
 
 export type AssetKind = "text" | "image" | "video" | "audio";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -34,6 +38,8 @@ type AssetBase<T extends AssetKind> = {
 
 type AssetStore = {
     assets: Asset[];
+    remoteSnapshot: AssetCollection<Asset> | null;
+    syncError: string;
     addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
     removeAsset: (id: string) => void;
@@ -46,10 +52,13 @@ type AssetStore = {
 const ASSET_STORE_KEY = "infinite-canvas:asset_store";
 let activeAssetSyncToken = "";
 let accountAssetSyncEnabled = false;
-let isHydratingAccountAssets = false;
 let syncTimer: number | null = null;
-
-type AssetSnapshot = { assets: Asset[] };
+let activeAssetStorageScope = "";
+let assetScopeLoading = false;
+let assetScopeLoad: Promise<void> = Promise.resolve();
+let assetScopeGeneration = 0;
+const enqueueAssetSync = createHistoryWriteQueue();
+const enqueueAssetStorage = createHistoryWriteQueue();
 
 async function resolveStoredAsset(asset: Asset): Promise<Asset> {
     if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
@@ -61,48 +70,65 @@ async function resolveStoredAsset(asset: Asset): Promise<Asset> {
             coverUrl: await resolveImageUrl(asset.data.storageKey, asset.coverUrl),
             data: { ...asset.data, dataUrl: await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl) },
         };
-    if (!asset.data.dataUrl.startsWith("data:image/")) return asset;
-    const image = await uploadImage(asset.data.dataUrl);
-    return { ...asset, coverUrl: asset.coverUrl.startsWith("data:image/") ? image.url : asset.coverUrl, data: { ...asset.data, dataUrl: image.url, storageKey: image.storageKey, bytes: image.bytes, mimeType: image.mimeType } };
+    return asset;
 }
 
 const assetStorage: PersistStorage<AssetStore> = {
-    getItem: async (name) => {
-        const value = await localForageStorage.getItem(name);
+    getItem: async () => {
+        if (!activeAssetStorageScope) return null;
+        const value = await localForageStorage.getItem(activeAssetStorageScope);
         if (!value) return null;
         const parsed = JSON.parse(value) as StorageValue<AssetStore>;
         parsed.state.assets = await mapMedia(parsed.state.assets, (asset) => resolveStoredAsset(asset).catch(() => durableMediaSnapshot(asset)));
         return parsed;
     },
-    setItem: (name, value) => localForageStorage.setItem(name, JSON.stringify(durableMediaSnapshot(value))),
-    removeItem: (name) => localForageStorage.removeItem(name),
+    setItem: (_name, value) => {
+        if (!assetScopeLoading && activeAssetStorageScope) {
+            const key = activeAssetStorageScope, encoded = JSON.stringify(durableMediaSnapshot(value));
+            return enqueueAssetStorage(async () => { await localForageStorage.setItem(key, encoded); });
+        }
+    },
+    removeItem: () => activeAssetStorageScope ? localForageStorage.removeItem(activeAssetStorageScope) : undefined,
 };
 
 export const useAssetStore = create<AssetStore>()(
     persist(
         (set, get) => ({
             assets: [],
+            remoteSnapshot: null,
+            syncError: "",
             addAsset: (asset) => {
+                assertAssetScopeReady();
                 const now = new Date().toISOString();
                 const id = nanoid();
                 set((state) => ({ assets: [{ ...asset, id, createdAt: now, updatedAt: now } as Asset, ...state.assets] }));
                 scheduleAssetSync(get);
                 return id;
             },
-            updateAsset: (id, patch) =>
+            updateAsset: (id, patch) => {
+                assertAssetScopeReady();
                 set((state) => {
                     const assets = state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset));
                     window.setTimeout(() => scheduleAssetSync(get), 0);
                     return { assets };
-                }),
-            removeAsset: (id) =>
+                });
+            },
+            removeAsset: (id) => {
+                assertAssetScopeReady();
                 set((state) => {
                     const deletedAsset = state.assets.find((asset) => asset.id === id);
                     const assets = state.assets.filter((asset) => asset.id !== id);
 
                     if (deletedAsset && deletedAsset.kind !== "text" && deletedAsset.data.storageKey) {
                         const key = deletedAsset.data.storageKey;
+                        const deletedBy = mediaSession();
                         window.setTimeout(async () => {
+                            if (deletedBy.token !== useUserStore.getState().token) return;
+                            if (deletedBy.token) {
+                                try { await get().syncAccountAssets(deletedBy.token); } catch { return; }
+                                // Server references and the retention worker own cloud deletion.
+                                return;
+                            }
                             const { useCanvasStore } = await import("@/app/(user)/canvas/stores/use-canvas-store");
                             const usedKeys = new Set<string>();
                             // 收集其余资产的 storageKey
@@ -118,8 +144,7 @@ export const useAssetStore = create<AssetStore>()(
 
                             // 收集本地/云端生图历史与视频历史中的 storageKey，避免生成结果卡片失效
                             try {
-                                const localforage = (await import("localforage")).default;
-                                const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+                                const imageLogStore = createHistoryStore("image_generation_logs");
                                 await imageLogStore.iterate((log: any) => {
                                     if (log) {
                                         if (Array.isArray(log.images)) {
@@ -139,8 +164,7 @@ export const useAssetStore = create<AssetStore>()(
                             }
 
                             try {
-                                const localforage = (await import("localforage")).default;
-                                const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+                                const videoLogStore = createHistoryStore("video_generation_logs");
                                 await videoLogStore.iterate((log: any) => {
                                     if (log) {
                                         if (log.video && log.video.storageKey) {
@@ -158,6 +182,7 @@ export const useAssetStore = create<AssetStore>()(
                             }
 
                             // 若全站没有其他地方再引用此 storageKey，则执行真正的物理删除
+                            if (deletedBy.token !== useUserStore.getState().token) return;
                             if (!usedKeys.has(key)) {
                                 if (key.startsWith("image:") || key.startsWith("server:")) {
                                     const { deleteStoredImages } = await import("@/services/image-storage");
@@ -173,36 +198,53 @@ export const useAssetStore = create<AssetStore>()(
 
                     window.setTimeout(() => scheduleAssetSync(get), 0);
                     return { assets };
-                }),
+                });
+            },
             hydrateAccountAssets: async (token, syncEnabled = false) => {
-                if (!token) return;
+                if (!token || useUserStore.getState().token !== token) return;
+                await assetScopeLoad;
+                if (!activeAssetStorageScope) { loadAssetScope(); await assetScopeLoad; }
+                if (useUserStore.getState().token !== token) return;
                 activeAssetSyncToken = token;
                 accountAssetSyncEnabled = syncEnabled;
-                isHydratingAccountAssets = true;
-                try {
-                    const remote = await fetchUserAssetData<AssetSnapshot>(token);
-                    const remoteAssets = await mapMedia(Array.isArray(remote?.assets) ? remote.assets : [], (asset) => resolveStoredAsset(asset).catch(() => durableMediaSnapshot(asset)));
-                    if (activeAssetSyncToken !== token || useUserStore.getState().token !== token) return;
-                    if (syncEnabled) {
-                        set({ assets: remoteAssets });
-                    } else {
-                        const localHasAssets = get().assets.length > 0;
-                        if (!localHasAssets && remoteAssets.length) {
-                            set({ assets: remoteAssets });
-                        }
-                    }
-                } finally {
-                    if (activeAssetSyncToken === token) isHydratingAccountAssets = false;
-                }
+                await get().syncAccountAssets(token);
             },
             syncAccountAssets: async (token) => {
                 if (!token || !accountAssetSyncEnabled) return;
-                await syncUserAssetData(token, { assets: durableMediaSnapshot(get().assets) });
+                const session = mediaSession();
+                const generation = assetScopeGeneration;
+                if (session.token !== token) return;
+                await enqueueAssetSync(async () => {
+                    await assetScopeLoad;
+                    const epoch = await lifecycleEpoch(token);
+                    const check = () => {
+                        assertMediaSession(session);
+                        assertAssetScopeReady();
+                        if (generation !== assetScopeGeneration) throw new Error("素材账号已切换，请重新载入");
+                        if (knownLifecycleEpoch(token) !== epoch || activeAssetSyncToken !== token) throw new Error("素材同步范围已变化，请重新载入；本机副本仍保留");
+                    };
+                    try {
+                        check();
+                        const submitted = durableMediaSnapshot(get().assets);
+                        const accepted = await synchronizeAssetCollection({ base: get().remoteSnapshot, local: submitted, check,
+                            read: () => fetchUserAssetData<AssetCollection<Asset>>(token),
+                            write: (data) => syncUserAssetData(token, data),
+                        });
+                        const resolved = await mapMedia(accepted.assets, (asset) => resolveStoredAsset(asset).catch(() => durableMediaSnapshot(asset)));
+                        check();
+                        const merged = mergeAssetCollection(submitted, durableMediaSnapshot(get().assets), accepted.assets);
+                        const resolvedByID = new Map(resolved.map((asset) => [asset.id, asset]));
+                        const acceptedByID = new Map(accepted.assets.map((asset) => [asset.id, asset]));
+                        set({ assets: merged.map((asset) => asset === acceptedByID.get(asset.id) ? resolvedByID.get(asset.id)! : asset), remoteSnapshot: accepted, syncError: "" });
+                    } catch (error) {
+                        if (generation === assetScopeGeneration && useUserStore.getState().token === token) set({ syncError: error instanceof Error ? error.message : "素材同步失败，本机修改已保留" });
+                        throw error;
+                    }
+                });
             },
             stopAccountAssetSync: () => {
                 activeAssetSyncToken = "";
                 accountAssetSyncEnabled = false;
-                isHydratingAccountAssets = false;
                 if (syncTimer) window.clearTimeout(syncTimer);
                 syncTimer = null;
             },
@@ -214,8 +256,7 @@ export const useAssetStore = create<AssetStore>()(
                     const { loadLocalAgentSkills, useAgentSkillStore } = await import("@/stores/use-agent-skill-store");
                     const logKeys: string[] = [];
                     try {
-                        const localforage = (await import("localforage")).default;
-                        const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+                        const imageLogStore = createHistoryStore("image_generation_logs");
                         await imageLogStore.iterate((log: any) => {
                             if (log) {
                                 if (Array.isArray(log.images)) {
@@ -230,7 +271,7 @@ export const useAssetStore = create<AssetStore>()(
                                 }
                             }
                         });
-                        const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+                        const videoLogStore = createHistoryStore("video_generation_logs");
                         await videoLogStore.iterate((log: any) => {
                             if (log) {
                                 if (log.video && log.video.storageKey) {
@@ -266,13 +307,57 @@ export const useAssetStore = create<AssetStore>()(
         {
             name: ASSET_STORE_KEY,
             storage: assetStorage,
-            partialize: (state) => ({ assets: state.assets }) as StorageValue<AssetStore>["state"],
+            skipHydration: true,
+            partialize: (state) => ({ assets: state.assets, remoteSnapshot: state.remoteSnapshot }) as StorageValue<AssetStore>["state"],
         },
     ),
 );
 
+function assetScopeKey() {
+    const { token, userId } = mediaSession();
+    const epoch = token ? knownLifecycleEpoch(token) : 1;
+    if (!useUserStore.getState().isReady || (token && !userId) || !epoch) return "";
+    return `ext:media-lifecycle:assets:${token ? `user:${encodeURIComponent(userId!)}` : "guest"}:${epoch}`;
+}
+
+function assertAssetScopeReady() {
+    if (assetScopeLoading || !activeAssetStorageScope || activeAssetStorageScope !== assetScopeKey()) throw new Error("正在载入当前账号的素材，请稍后重试；原有本机副本仍保留");
+}
+
+function loadAssetScope() {
+    const session = mediaSession();
+    const generation = ++assetScopeGeneration;
+    assetScopeLoading = true;
+    activeAssetStorageScope = "";
+    useAssetStore.getState().stopAccountAssetSync();
+    useAssetStore.setState({ assets: [], remoteSnapshot: null, syncError: "" });
+    assetScopeLoad = (async () => {
+        if (!useUserStore.getState().isReady) return;
+        if (session.token) await lifecycleEpoch(session.token);
+        if (generation !== assetScopeGeneration) return;
+        assertMediaSession(session);
+        const key = assetScopeKey();
+        if (!key) return;
+        const raw = await enqueueAssetStorage(async () => localForageStorage.getItem(key));
+        if (generation !== assetScopeGeneration) return;
+        assertMediaSession(session);
+        if (key !== assetScopeKey()) return;
+        const saved = raw ? JSON.parse(raw) as StorageValue<AssetStore> : null;
+        activeAssetStorageScope = key;
+        useAssetStore.setState({ assets: saved?.state.assets || [], remoteSnapshot: saved ? saved.state.remoteSnapshot || null : { assets: [], revision: "initial" } });
+        assetScopeLoading = false;
+    })().catch((error) => {
+        if (generation === assetScopeGeneration) useAssetStore.setState({ syncError: error instanceof Error ? error.message : "本机素材载入失败" });
+    });
+}
+
+useUserStore.subscribe((next, previous) => {
+    if (next.token !== previous.token || next.user?.id !== previous.user?.id || next.isReady !== previous.isReady) loadAssetScope();
+});
+if (typeof window !== "undefined") loadAssetScope();
+
 function scheduleAssetSync(get: () => AssetStore) {
-    if (isHydratingAccountAssets || !activeAssetSyncToken || !accountAssetSyncEnabled || typeof window === "undefined") return;
+    if (!activeAssetSyncToken || !accountAssetSyncEnabled || typeof window === "undefined") return;
     if (syncTimer) window.clearTimeout(syncTimer);
     syncTimer = window.setTimeout(() => {
         void get().syncAccountAssets(activeAssetSyncToken).catch(() => {});

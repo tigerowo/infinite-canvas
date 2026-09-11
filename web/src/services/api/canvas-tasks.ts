@@ -9,10 +9,11 @@ export async function listCanvasProjects(token: string) {
 export async function saveCanvasProject(
     token: string,
     project: CanvasProject,
+    baseUpdatedAt?: string,
 ) {
     return apiPost<CanvasProject>(
         "/api/v1/canvas/projects",
-        { data: project },
+        { data: project, base_updated_at: baseUpdatedAt },
         token,
     );
 }

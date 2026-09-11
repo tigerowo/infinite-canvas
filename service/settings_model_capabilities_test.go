@@ -2,11 +2,11 @@ package service
 
 import "testing"
 
-func TestAutomaticDefaultsStayEmptyAndManualDefaultsMatchCapability(t *testing.T) {
+func TestMissingDefaultsUseFirstMatchingCapability(t *testing.T) {
 	models := []string{"gpt-image-2", "sora-video", "gpt-5.5"}
 	for _, value := range []string{"", "all", "missing-video", "gpt-image-2"} {
-		if got := repairDefaultModel(value, models, isVideoModelName); got != "" {
-			t.Errorf("default %q: got %q, want automatic", value, got)
+		if got := repairDefaultModel(value, models, isVideoModelName); got != "sora-video" {
+			t.Errorf("default %q: got %q, want first video model", value, got)
 		}
 	}
 	if got := repairDefaultModel(" sora-video ", models, isVideoModelName); got != "sora-video" {
@@ -27,8 +27,14 @@ func TestVerifiedVideoAliases(t *testing.T) {
 
 func TestAudioModelsCannotRemainTextDefaults(t *testing.T) {
 	for _, name := range []string{"gpt-4o-mini-tts", "gemini-tts", "suno-music", "speech-01", "voice-clone", "audio-model"} {
-		if got := repairDefaultModel(name, []string{name, "gpt-5.5"}, isTextModelName); got != "" {
-			t.Errorf("audio model %q remained a text default", got)
+		if got := repairDefaultModel(name, []string{name, "gpt-5.5"}, isTextModelName); got != "gpt-5.5" {
+			t.Errorf("audio model %q did not fall back to the text model", name)
 		}
+	}
+}
+
+func TestDefaultModelStaysEmptyWithoutMatchingCapability(t *testing.T) {
+	if got := repairDefaultModel("", []string{"gpt-image-2", "sora-video"}, isAudioModelName); got != "" {
+		t.Fatalf("default without audio candidates: got %q, want empty", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/model"
 	"github.com/tigerowo/infinite-canvas/repository"
 )
@@ -248,7 +249,10 @@ func CurrentUserConfig(ctx context.Context) (UserConfigPayload, error) {
 		result.ImageHistory = json.RawMessage(config.ImageHistory)
 	}
 	if strings.TrimSpace(config.AssetData) != "" {
-		result.AssetData = json.RawMessage(config.AssetData)
+		result.AssetData, err = medialifecycle.AssetCollectionSnapshot(config.AssetData)
+		if err != nil {
+			return UserConfigPayload{}, err
+		}
 	}
 	return result, nil
 }
@@ -277,7 +281,11 @@ func SaveCurrentUserModelConfig(ctx context.Context, raw json.RawMessage) (UserC
 	}
 	config.ModelConfig = string(raw)
 	config.UpdatedAt = current
-	if _, err := repository.SaveUserConfig(config); err != nil {
+	db, err := repository.DB()
+	if err != nil {
+		return UserConfigPayload{}, err
+	}
+	if err := medialifecycle.SaveConfigField(db, user.ID, "model_config", config.ModelConfig, 0); err != nil {
 		return UserConfigPayload{}, err
 	}
 	return CurrentUserConfig(ctx)
@@ -295,9 +303,7 @@ func CurrentUserImageHistory(ctx context.Context) (json.RawMessage, error) {
 }
 
 func SaveCurrentUserImageHistory(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
-	config, err := saveCurrentUserConfigField(ctx, func(config *model.UserConfig) {
-		config.ImageHistory = string(raw)
-	})
+	config, err := saveCurrentUserConfigField(ctx, "image_history", string(raw))
 	if err != nil {
 		return nil, err
 	}
@@ -309,20 +315,15 @@ func CurrentUserAssetData(ctx context.Context) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(config.AssetData) == "" {
-		return json.RawMessage(`{"assets":[]}`), nil
-	}
-	return json.RawMessage(config.AssetData), nil
+	return medialifecycle.AssetCollectionSnapshot(config.AssetData)
 }
 
 func SaveCurrentUserAssetData(ctx context.Context, raw json.RawMessage) (json.RawMessage, error) {
-	config, err := saveCurrentUserConfigField(ctx, func(config *model.UserConfig) {
-		config.AssetData = string(raw)
-	})
+	config, err := saveCurrentUserConfigField(ctx, "asset_data", string(raw))
 	if err != nil {
 		return nil, err
 	}
-	return json.RawMessage(config.AssetData), nil
+	return medialifecycle.AssetCollectionSnapshot(config.AssetData)
 }
 
 func currentUserConfig(ctx context.Context) (model.UserConfig, error) {
@@ -340,21 +341,18 @@ func currentUserConfig(ctx context.Context) (model.UserConfig, error) {
 	return config, nil
 }
 
-func saveCurrentUserConfigField(ctx context.Context, patch func(config *model.UserConfig)) (model.UserConfig, error) {
+func saveCurrentUserConfigField(ctx context.Context, column, raw string) (model.UserConfig, error) {
 	user, ok := UserFromContext(ctx)
 	if !ok || user.ID == "" {
 		return model.UserConfig{}, errors.New("请先登录")
 	}
-	config, _, err := repository.GetUserConfig(user.ID)
+	db, err := repository.DB()
 	if err != nil {
 		return model.UserConfig{}, err
 	}
-	current := now()
-	if config.UserID == "" {
-		config.UserID = user.ID
-		config.CreatedAt = current
+	if err := medialifecycle.SaveConfigField(db, user.ID, column, raw, medialifecycle.Epoch(ctx)); err != nil {
+		return model.UserConfig{}, err
 	}
-	patch(&config)
-	config.UpdatedAt = current
-	return repository.SaveUserConfig(config)
+	config, _, err := repository.GetUserConfig(user.ID)
+	return config, err
 }

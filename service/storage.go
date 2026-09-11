@@ -24,7 +24,7 @@ import (
 	awsSigner "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
-	"github.com/tigerowo/infinite-canvas/extensions/mediaidentity"
+	medialifecycle "github.com/tigerowo/infinite-canvas/extensions/media-lifecycle"
 	"github.com/tigerowo/infinite-canvas/extensions/s3compat"
 	"github.com/tigerowo/infinite-canvas/extensions/storageaccess"
 	"github.com/tigerowo/infinite-canvas/model"
@@ -165,7 +165,14 @@ func StorageObjectInfo(id string) (model.StorageObject, error) {
 func CanReadStorageObject(ctx context.Context, object model.StorageObject) error {
 	provider, ok := StorageProviderForObject(object)
 	if object.DeletedAt != "" {
-		return errors.New("对象已删除")
+		return medialifecycle.ErrUnavailable
+	}
+	db, err := repository.DB()
+	if err != nil {
+		return err
+	}
+	if _, err := medialifecycle.ReadWindow(db, object.ID); err != nil {
+		return err
 	}
 	if (ok && provider.Type == model.StorageProviderTypeWebDAV) || (object.PublicURL != "" && (!ok || provider.PublicBaseURL != "")) {
 		return nil
@@ -178,10 +185,18 @@ func requireStorageObjectOwner(ctx context.Context, object model.StorageObject) 
 	if !ok || user.ID == "" || user.Role == model.UserRoleGuest {
 		return errors.New("请先登录")
 	}
-	if object.DeletedAt != "" || (object.CreatedBy != user.ID && user.Role != model.UserRoleAdmin) {
-		return errors.New("无权读取该对象")
+	if object.DeletedAt != "" {
+		return medialifecycle.ErrUnavailable
 	}
-	return nil
+	db, err := repository.DB()
+	if err != nil {
+		return err
+	}
+	owner := user.ID
+	if user.Role == model.UserRoleAdmin {
+		owner = object.CreatedBy
+	}
+	return medialifecycle.CheckAccess(db, owner, object.ID)
 }
 
 func SignedStorageObjectURLForUser(ctx context.Context, id string) (SignedStorageObjectURL, error) {
@@ -200,10 +215,25 @@ func SignedStorageObjectURLForUser(ctx context.Context, id string) (SignedStorag
 	if !ok || provider.Type != model.StorageProviderTypeS3 || provider.PublicBaseURL != "" || !storageProviderConfigured(provider) {
 		return SignedStorageObjectURL{}, errors.New("该对象没有可用的私有 S3 存储配置")
 	}
-	const lifetime = 5 * time.Minute
+	lifetime := 5 * time.Minute
+	db, err := repository.DB()
+	if err != nil {
+		return SignedStorageObjectURL{}, err
+	}
+	until, err := medialifecycle.ReadWindow(db, id)
+	if err != nil {
+		return SignedStorageObjectURL{}, err
+	}
+	if until > 0 {
+		remaining := time.Until(time.UnixMilli(until)).Truncate(time.Second)
+		if remaining < time.Second {
+			return SignedStorageObjectURL{}, medialifecycle.Error("素材保留期已到，请主动打开或使用素材以续期")
+		}
+		lifetime = min(lifetime, remaining)
+	}
 	if cdnURL, expires, used, err := storageaccess.CDNURL(provider, object.ObjectKey, time.Now()); err != nil {
 		return SignedStorageObjectURL{}, errors.New("读取私有 CDN 配置失败")
-	} else if used {
+	} else if used && (until == 0 || expires.UnixMilli() <= until) {
 		return SignedStorageObjectURL{URL: cdnURL, ExpiresAt: expires.Format(time.RFC3339), MimeType: object.MimeType, Bytes: object.Bytes}, nil
 	}
 	urlValue, err := presignS3GetURL(provider, object.ObjectKey, lifetime)
@@ -248,7 +278,11 @@ func SaveCurrentUserStorageProvider(ctx context.Context, incoming UserStoragePro
 	}
 	config.StorageProvider = string(raw)
 	config.UpdatedAt = current
-	if _, err := repository.SaveUserConfig(config); err != nil {
+	db, err := repository.DB()
+	if err != nil {
+		return UserConfigPayload{}, err
+	}
+	if err := medialifecycle.SaveConfigField(db, user.ID, "storage_provider", config.StorageProvider, 0); err != nil {
 		return UserConfigPayload{}, err
 	}
 	return CurrentUserConfig(ctx)
@@ -289,36 +323,8 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	if user, ok := UserFromContext(ctx); ok && user.ID != "" {
 		userID = user.ID
 	}
-	sum := sha256.Sum256(data)
 	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
-	objectID := mediaidentity.Digest(userID, provider.ID, provider.Endpoint, provider.Bucket, provider.PathPrefix, contentType, hex.EncodeToString(sum[:]))
-	if userID == "anonymous" {
-		objectID = uuid.NewString()
-	}
-	unlock := mediaidentity.Lock(objectID)
-	defer unlock()
-	if prior, err := repository.GetStorageObject(objectID); err == nil {
-		if prior.DeletedAt != "" {
-			return UploadedStorageObject{}, errors.New("该文件已删除")
-		}
-		return uploadedStorageObject(prior), nil
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return UploadedStorageObject{}, err
-	}
-	// Stable path also recovers an OSS success followed by a failed database save.
-	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/ext-media/"+objectID+extensionForContentType(contentType), "/")
-	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
-		return UploadedStorageObject{}, err
-	}
-	publicURL := objectURL(provider, objectKey)
-	object := model.StorageObject{
-		ID: objectID, ProviderID: provider.ID, Bucket: provider.Bucket, ObjectKey: objectKey, PublicURL: publicURL,
-		MimeType: contentType, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), CreatedBy: userID, CreatedAt: now(),
-	}
-	if _, err := repository.SaveStorageObject(object); err != nil {
-		return UploadedStorageObject{}, err
-	}
-	return uploadedStorageObject(object), nil
+	return uploadLifecycleObject(ctx, provider, usingUserProvider, userID, filename, contentType, data)
 }
 
 func uploadedStorageObject(object model.StorageObject) UploadedStorageObject {
@@ -367,7 +373,11 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 		ID: objectID, ProviderID: provider.ID, ObjectKey: objectKey, MimeType: contentType,
 		Bytes: input.Bytes, Direct: true, CreatedBy: user.ID, CreatedAt: now(),
 	}
-	if _, err := repository.SaveStorageObject(object); err != nil {
+	db, err := repository.DB()
+	if err != nil {
+		return UploadedStorageObject{}, err
+	}
+	if err := medialifecycle.RegisterObject(db, object, medialifecycle.StorageScope(provider, user.ID), medialifecycle.Epoch(ctx)); err != nil {
 		return UploadedStorageObject{}, err
 	}
 	return UploadedStorageObject{
@@ -378,41 +388,19 @@ func RegisterDirectStorageObject(ctx context.Context, input DirectStorageObjectI
 
 // DeleteStorageObject 删除存储对象。
 func DeleteStorageObject(ctx context.Context, id string, providerInput *StorageObjectProviderInput) error {
-	object, err := repository.GetStorageObject(id)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		return err
+	user, ok := UserFromContext(ctx)
+	if !ok || user.ID == "" {
+		return errors.New("请先登录")
 	}
-	if user, ok := UserFromContext(ctx); ok && object.CreatedBy != "" && object.CreatedBy != user.ID {
-		return errors.New("无权删除该对象")
-	}
-	settings, err := repository.GetSettings()
+	db, err := repository.DB()
 	if err != nil {
 		return err
 	}
-	storage := normalizePrivateStorageSetting(settings.Private.Storage)
-	providers := storage.Providers
-	if object.CreatedBy != "" && object.CreatedBy != "anonymous" {
-		if config, found, loadErr := repository.GetUserConfig(object.CreatedBy); loadErr == nil && found {
-			providers = append(userStorageProvidersForOwner(config.StorageProvider, object.CreatedBy), providers...)
-		}
-	}
-	if providerInput != nil && storage.AllowUserProvider {
-		providers = append([]model.StorageProvider{normalizeUserStorageProvider(*providerInput, ctx)}, providers...)
-	}
-	provider, ok := findStorageProviderForObject(object, providers)
-	if !ok {
-		return errors.New("对象存储配置不存在")
-	}
-	if err := deleteStorageObjectData(provider, object.ObjectKey); err != nil {
-		return err
-	}
-	return repository.DeleteStorageObjectRecord(id)
+	return medialifecycle.Detach(db, user.ID, id)
 }
 
-// DeleteDirectStorageObjectRecord 删除已由浏览器直接删除的 WebDAV 对象索引。
+// DeleteDirectStorageObjectRecord 删除已由浏览器直接删除的 WebDAV 对象引用。
+// 保留生命周期文件索引，后续清理批次可以确认远端对象已不存在并完成收敛。
 func DeleteDirectStorageObjectRecord(ctx context.Context, id string) error {
 	object, err := repository.GetStorageObject(id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -425,7 +413,11 @@ func DeleteDirectStorageObjectRecord(ctx context.Context, id string) error {
 	if !ok || user.ID == "" || object.CreatedBy != user.ID || !object.Direct {
 		return errors.New("无权删除该对象记录")
 	}
-	return repository.DeleteStorageObjectRecord(id)
+	db, err := repository.DB()
+	if err != nil {
+		return err
+	}
+	return medialifecycle.Detach(db, user.ID, id)
 }
 
 // MeasureUserStorageProvider 统计用户存储提供商的已用容量。
@@ -713,23 +705,23 @@ func storageProviderConfigured(provider model.StorageProvider) bool {
 	}
 }
 
-func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
+func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte, requestContext ...context.Context) error {
 	switch provider.Type {
 	case model.StorageProviderTypeS3:
-		return putS3Object(provider, objectKey, contentType, data)
+		return putS3Object(provider, objectKey, contentType, data, requestContext...)
 	case model.StorageProviderTypeWebDAV:
-		return putWebDAVObject(provider, objectKey, data)
+		return putWebDAVObject(provider, objectKey, data, requestContext...)
 	default:
 		return errors.New("存储类型不支持")
 	}
 }
 
-func deleteStorageObjectData(provider model.StorageProvider, objectKey string) error {
+func deleteStorageObjectData(provider model.StorageProvider, objectKey string, requestContext ...context.Context) error {
 	switch provider.Type {
 	case model.StorageProviderTypeS3:
-		return deleteS3Object(provider, objectKey)
+		return deleteS3Object(provider, objectKey, requestContext...)
 	case model.StorageProviderTypeWebDAV:
-		return deleteWebDAVObject(provider, objectKey)
+		return deleteWebDAVObject(provider, objectKey, requestContext...)
 	default:
 		return errors.New("存储类型不支持")
 	}
@@ -747,12 +739,15 @@ func measureStorageProvider(provider model.StorageProvider) (int64, error) {
 }
 
 // putS3Object 上传对象到 S3 兼容存储。
-func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
+func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte, requestContext ...context.Context) error {
 	request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Content-Type", contentType)
+	if len(requestContext) > 0 {
+		request = request.WithContext(requestContext[0])
+	}
 	response, err := SafeProxyHTTPClient().Do(request)
 	if err != nil {
 		return err
@@ -786,10 +781,13 @@ func getS3ObjectStream(provider model.StorageProvider, objectKey string, rangeHe
 }
 
 // deleteS3Object 从 S3 兼容存储删除对象。
-func deleteS3Object(provider model.StorageProvider, objectKey string) error {
+func deleteS3Object(provider model.StorageProvider, objectKey string, requestContext ...context.Context) error {
 	request, err := newS3Request(http.MethodDelete, provider, objectKey, nil, 0)
 	if err != nil {
 		return err
+	}
+	if len(requestContext) > 0 {
+		request = request.WithContext(requestContext[0])
 	}
 	response, err := SafeProxyHTTPClient().Do(request)
 	if err != nil {

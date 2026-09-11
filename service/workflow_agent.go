@@ -14,6 +14,7 @@ import (
 )
 
 func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftRequest) (WorkflowAgentDraftResponse, error) {
+	operation := newID("workflow-draft")
 	startedAt := time.Now()
 	user, ok := UserFromContext(ctx)
 	if !ok || user.ID == "" {
@@ -39,13 +40,13 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	credits, _ := ModelCost(modelName)
 	chargedCredits := request.ChannelMode != "local"
 	if chargedCredits {
-		if err := ConsumeUserCredits(user.ID, modelName, credits, "/workflows/agent-draft"); err != nil {
+		if err := ConsumeUserCredits(user.ID, modelName, credits, "/workflows/agent-draft", operation); err != nil {
 			return WorkflowAgentDraftResponse{}, err
 		}
 	}
 	refundCredits := func() {
 		if chargedCredits {
-			_ = RefundUserCredits(user.ID, modelName, credits, "/workflows/agent-draft")
+			_ = RefundUserCredits(user.ID, modelName, credits, "/workflows/agent-draft", operation)
 		}
 	}
 
@@ -81,7 +82,7 @@ func DraftCreativeWorkflow(ctx context.Context, request WorkflowAgentDraftReques
 	client := &http.Client{Timeout: time.Duration(maxInt(channel.Timeout, 600)) * time.Second}
 	response, err := client.Do(httpRequest)
 	if err != nil {
-		refundCredits()
+		_ = SetTaskSettlement(user.ID, operation, "unknown")
 		SaveAICallLog(AICallLogInput{
 			UserID:          user.ID,
 			UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
@@ -339,5 +340,3 @@ func maxInt(a, b int) int {
 	}
 	return b
 }
-
-

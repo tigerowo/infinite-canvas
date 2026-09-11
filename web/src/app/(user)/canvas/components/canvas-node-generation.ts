@@ -1,4 +1,5 @@
 import type { ChatCompletionMessage } from "@/services/api/image";
+import { countMediaReferences, referenceLimitError } from "@/extensions/media-reliability/reference-limit";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { seedanceReferenceLabel } from "@/lib/seedance-video";
 import type { ReferenceImage } from "@/types/image";
@@ -33,8 +34,12 @@ export type NodeGenerationInput = {
     audio?: ReferenceAudio;
 };
 
-export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string): NodeGenerationContext {
-    const inputs = buildNodeGenerationInputs(nodeId, nodes, connections);
+export function canvasReferenceLimitError(context: NodeGenerationContext) {
+    return referenceLimitError(countMediaReferences({ references: context.referenceImages, videoReferences: context.referenceVideos, audioReferences: context.referenceAudios, firstFrame: context.firstFrame, lastFrame: context.lastFrame }, context.videoElementList));
+}
+
+export function buildNodeGenerationContext(nodeId: string, nodes: CanvasNodeData[], connections: CanvasConnection[], prompt: string, draftInputs: NodeGenerationInput[] = []): NodeGenerationContext {
+    const inputs = [...buildNodeGenerationInputs(nodeId, nodes, connections), ...draftInputs];
     const sourceNode = nodes.find((node) => node.id === nodeId);
     if (sourceNode?.type === CanvasNodeType.Config && Boolean(sourceNode.metadata?.composerContent?.trim())) {
         return buildComposerGenerationContext(inputs, prompt, sourceNode);
@@ -155,10 +160,8 @@ function buildCanvasVideoAdvancedContext(sourceNode: CanvasNodeData | undefined,
         })
         .filter((item): item is VideoMultiPromptItem => Boolean(item));
     const videoElementList = (sourceNode?.metadata?.klingElementList || [])
-        .slice(0, 3)
         .map((item) => {
             const references = (item.nodeIds || [])
-                .slice(0, 4)
                 .map((nodeId) => {
                     referenceNodeIds.add(nodeId);
                     return inputToElementReference(inputByNodeId.get(nodeId));
