@@ -15,8 +15,12 @@ func sortWorkflowList(items []jsonMap) {
 	})
 }
 
-func discoverWorkflowFields(workflow jsonMap, capability string) []any {
+func discoverWorkflowFields(workflow jsonMap, capability string, objectInfos ...jsonMap) []any {
 	fields := make([]any, 0)
+	objectInfo := jsonMap{}
+	if len(objectInfos) > 0 {
+		objectInfo = objectInfos[0]
+	}
 	nodeIDs := sortedNodeIDs(workflow)
 	promptNode, promptField := findWorkflowPromptTarget(workflow, nodeIDs)
 	imageOrder, videoOrder, audioOrder := 0, 0, 0
@@ -78,6 +82,13 @@ func discoverWorkflowFields(workflow jsonMap, capability string) []any {
 			case "mask":
 				field["required"] = false
 			}
+			if stringIn(normalizeSourceName(stringValue(field["source"])), "referenceimage", "referencevideo", "referenceaudio") {
+				if plan, ok := discoverMediaPrunePlan(workflow, objectInfo, nodeID); ok {
+					field["optionalMedia"] = true
+					field["mediaDefaultMode"] = "off"
+					field["mediaPrunePlan"] = plan
+				}
+			}
 			if isSeedField(fieldName) {
 				field["randomEnabled"] = true
 			}
@@ -85,6 +96,150 @@ func discoverWorkflowFields(workflow jsonMap, capability string) []any {
 		}
 	}
 	return fields
+}
+
+type workflowEdge struct {
+	nodeID    string
+	fieldName string
+}
+
+func discoverMediaPrunePlan(workflow, objectInfo jsonMap, loaderID string) (jsonMap, bool) {
+	if _, ok := mapValue(workflow[loaderID]); !ok || len(objectInfo) == 0 {
+		return nil, false
+	}
+	edges := make(map[string][]workflowEdge)
+	for nodeID, rawNode := range workflow {
+		node, ok := mapValue(rawNode)
+		if !ok {
+			continue
+		}
+		inputs, _ := mapValue(node["inputs"])
+		for fieldName, value := range inputs {
+			link := sliceValue(value)
+			if len(link) >= 2 {
+				sourceID := strings.TrimSpace(stringValue(link[0]))
+				if sourceID != "" {
+					edges[sourceID] = append(edges[sourceID], workflowEdge{nodeID: nodeID, fieldName: fieldName})
+				}
+			}
+		}
+	}
+	for sourceID := range edges {
+		sort.Slice(edges[sourceID], func(i, j int) bool {
+			if edges[sourceID][i].nodeID == edges[sourceID][j].nodeID {
+				return edges[sourceID][i].fieldName < edges[sourceID][j].fieldName
+			}
+			return edges[sourceID][i].nodeID < edges[sourceID][j].nodeID
+		})
+	}
+	removed := map[string]bool{loaderID: true}
+	active := map[string]bool{loaderID: true}
+	detach := make([]any, 0)
+	var walk func(string) bool
+	walk = func(sourceID string) bool {
+		for _, edge := range edges[sourceID] {
+			if active[edge.nodeID] {
+				return false
+			}
+			node, ok := mapValue(workflow[edge.nodeID])
+			if !ok {
+				return false
+			}
+			classType := stringValue(node["class_type"])
+			requirement, known := workflowInputRequirement(objectInfo, classType, edge.fieldName)
+			if !known {
+				return false
+			}
+			if workflowOutputNode(objectInfo, classType) && normalizeSourceName(classType) != "previewimage" {
+				return false
+			}
+			otherLinked := workflowHasOtherLinkedInput(node, edge.fieldName, sourceID)
+			if requirement == "optional" && otherLinked {
+				detach = append(detach, jsonMap{"nodeId": edge.nodeID, "fieldName": edge.fieldName})
+				continue
+			}
+			if requirement == "required" && otherLinked {
+				return false
+			}
+			if removed[edge.nodeID] {
+				continue
+			}
+			removed[edge.nodeID] = true
+			active[edge.nodeID] = true
+			if !walk(edge.nodeID) {
+				return false
+			}
+			delete(active, edge.nodeID)
+		}
+		return true
+	}
+	if !walk(loaderID) {
+		return nil, false
+	}
+	removeNodeIDs := make([]string, 0, len(removed))
+	for nodeID := range removed {
+		removeNodeIDs = append(removeNodeIDs, nodeID)
+	}
+	sort.Strings(removeNodeIDs)
+	sort.Slice(detach, func(i, j int) bool {
+		left, _ := mapValue(detach[i])
+		right, _ := mapValue(detach[j])
+		return stringValue(left["nodeId"])+"::"+stringValue(left["fieldName"]) < stringValue(right["nodeId"])+"::"+stringValue(right["fieldName"])
+	})
+	return jsonMap{"removeNodeIds": removeNodeIDs, "detachInputs": detach}, true
+}
+
+func workflowHasOtherLinkedInput(node jsonMap, fieldName, sourceID string) bool {
+	inputs, _ := mapValue(node["inputs"])
+	for name, value := range inputs {
+		if name == fieldName {
+			continue
+		}
+		link := sliceValue(value)
+		if len(link) >= 2 && stringValue(link[0]) != sourceID {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowInputRequirement(objectInfo jsonMap, classType, fieldName string) (string, bool) {
+	nodeInfo, ok := mapValue(objectInfo[classType])
+	if !ok {
+		return "", false
+	}
+	inputs, ok := mapValue(nodeInfo["input"])
+	if !ok {
+		return "", false
+	}
+	for _, group := range []string{"required", "optional"} {
+		definitions, _ := mapValue(inputs[group])
+		if _, ok := definitions[fieldName]; ok {
+			return group, true
+		}
+		for dynamicName, rawDefinition := range definitions {
+			definition := sliceValue(rawDefinition)
+			if len(definition) < 2 || stringValue(definition[0]) != "COMFY_AUTOGROW_V3" {
+				continue
+			}
+			options, _ := mapValue(definition[1])
+			prefix := stringValue(options["prefix"])
+			childName := strings.TrimPrefix(fieldName, dynamicName+".")
+			if childName == fieldName || prefix == "" || !strings.HasPrefix(childName, prefix) {
+				continue
+			}
+			index := strings.TrimPrefix(childName, prefix)
+			if _, err := strconv.Atoi(index); err == nil {
+				return group, true
+			}
+		}
+	}
+	return "", false
+}
+
+func workflowOutputNode(objectInfo jsonMap, classType string) bool {
+	nodeInfo, ok := mapValue(objectInfo[classType])
+	return ok && boolValue(nodeInfo["output_node"])
 }
 
 // discoverWorkflowGraph 将 ComfyUI 画布 JSON 压缩成网页只读预览所需的节点和连线。

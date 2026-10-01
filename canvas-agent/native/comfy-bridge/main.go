@@ -288,7 +288,7 @@ func inspectWorkflow(ctx context.Context, options bridgeOptions, payload jsonMap
 	if err != nil {
 		return nil, err
 	}
-	workflow, err := normalizeWorkflow(ctx, options.Comfy, source)
+	workflow, objectInfo, err := normalizeWorkflowWithObjectInfo(ctx, options.Comfy, source)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func inspectWorkflow(ctx context.Context, options bridgeOptions, payload jsonMap
 	}
 	result := jsonMap{
 		"workflowJson": workflow,
-		"fields":       discoverWorkflowFields(workflow, stringValue(payload["capability"])),
+		"fields":       discoverWorkflowFields(workflow, stringValue(payload["capability"]), objectInfo),
 	}
 	if graph := discoverWorkflowGraph(source); len(graph) > 0 {
 		result["workflowGraph"] = graph
@@ -494,19 +494,26 @@ func loadWorkflowSource(options bridgeOptions, payload jsonMap) (jsonMap, error)
 }
 
 func normalizeWorkflow(ctx context.Context, comfy string, source jsonMap) (jsonMap, error) {
+	workflow, _, err := normalizeWorkflowWithObjectInfo(ctx, comfy, source)
+	return workflow, err
+}
+
+func normalizeWorkflowWithObjectInfo(ctx context.Context, comfy string, source jsonMap) (jsonMap, jsonMap, error) {
 	source = unwrapWorkflow(source)
-	if len(sliceValue(source["nodes"])) == 0 {
-		return cloneMap(source)
-	}
 	var objectInfo jsonMap
 	if err := requestComfyJSONContext(ctx, http.MethodGet, strings.TrimRight(comfy, "/")+"/object_info", nil, &objectInfo); err != nil {
-		return nil, fmt.Errorf("读取 ComfyUI 节点定义失败：%w", err)
+		return nil, nil, fmt.Errorf("读取 ComfyUI 节点定义失败：%w", err)
+	}
+	if len(sliceValue(source["nodes"])) == 0 {
+		workflow, err := cloneMap(source)
+		return workflow, objectInfo, err
 	}
 	converted, err := convertComfyCanvasWorkflow(source, objectInfo)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return cloneMap(converted)
+	workflow, err := cloneMap(converted)
+	return workflow, objectInfo, err
 }
 
 func readWorkflowFile(filePath string) (jsonMap, error) {
