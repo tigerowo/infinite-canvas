@@ -13,6 +13,8 @@ import { createCanvasAudioTask, pollCanvasAudioTaskStatus, type CanvasAudioTask 
 import { createVideoGenerationTask, pollVideoGenerationTaskStatus, VIDEO_POLL_INTERVAL_MS, type VideoResponse } from "@/services/api/video";
 import { comfyOutputStorageKey, getWorkflowTask, submitWorkflowTask, workflowMediaSource, type WorkflowGenerationTask } from "@/services/api/workflow-generation";
 import type { WorkflowRef } from "@/lib/workflow-channel";
+import { bindWorkflowMediaSlots, findWorkflowEntry, normalizeWorkflowMediaSlotModes, workflowMediaSlots } from "@/lib/workflow-media-slots";
+import { listWorkflowChannels } from "@/services/workflow-channel-storage";
 import { channelProtocolForConfig, defaultConfig, resolveModelForCapability, type AiConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { collectImageStorageKeys, deleteStoredImages, resolveImageUrl, uploadImage, uploadRemoteImageToServer, type UploadedImage } from "@/services/image-storage";
 import { downloadRemoteMedia, resolveMediaUrl, uploadMediaFile, uploadRemoteMediaToServer, type UploadedFile } from "@/services/file-storage";
@@ -2810,6 +2812,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
             const generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
             const workflowRef = mode === "text" ? undefined : sourceNode?.metadata?.workflowRef;
+            const mediaSlotModes = sourceNode?.metadata?.mediaSlotModes;
             if (workflowRef && !useUserStore.getState().token) {
                 message.error("工作流生成需要先登录");
                 return;
@@ -2874,6 +2877,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         metadata: {
                             ...buildImageGenerationMetadata(referenceImages.length ? "edit" : "generation", panoramaGenerationConfig, count, referenceImages),
                             workflowRef,
+                            mediaSlotModes,
                             prompt: panoramaSourcePrompt,
                             panoramaSourcePrompt,
                             panoramaFinalPrompt: panoramaPrompt,
@@ -2902,6 +2906,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         metadata: {
                             ...buildImageGenerationMetadata(referenceImages.length ? "edit" : "generation", panoramaGenerationConfig, count, referenceImages),
                             workflowRef,
+                            mediaSlotModes,
                             prompt: panoramaSourcePrompt,
                             panoramaSourcePrompt,
                             panoramaFinalPrompt: panoramaPrompt,
@@ -2942,7 +2947,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         targetIds.map(async (targetId) => {
                             try {
                                 const task = workflowRef
-                                    ? await workflowImageTask(await submitCanvasWorkflowTask(workflowRef, panoramaGenerationConfig, "image", panoramaPrompt, referenceImages, [], [], targetId, projectId, targetTaskIds[targetId]))
+                                    ? await workflowImageTask(await submitCanvasWorkflowTask(workflowRef, panoramaGenerationConfig, "image", panoramaPrompt, referenceImages, [], [], targetId, projectId, targetTaskIds[targetId], mediaSlotModes))
                                     : await createCanvasImageTask({ ...panoramaGenerationConfig, count: "1", quality: panoramaGenerationConfig.quality === "auto" ? "medium" : panoramaGenerationConfig.quality }, panoramaPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
                                 if (task.image_url || task.url) {
                                     setNodes((prev) => {
@@ -3039,6 +3044,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                             batchUsesReferenceImages: referenceImages.length > 0,
                             ...generationMetadata,
                             workflowRef,
+                            mediaSlotModes,
                             imageBatchExpanded: count > 1 ? true : undefined,
                         },
                     };
@@ -3052,7 +3058,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         },
                         width: imageSize.width,
                         height: imageSize.height,
-                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, imageTaskId: targetTaskIds[id], batchRootId: count > 1 ? rootId : undefined, ...generationMetadata, workflowRef },
+                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, imageTaskId: targetTaskIds[id], batchRootId: count > 1 ? rootId : undefined, ...generationMetadata, workflowRef, mediaSlotModes },
                     }));
                     const batchConnections = [...(isEmptyImageNode ? [] : [{ id: nanoid(), fromNodeId: nodeId, toNodeId: rootId }]), ...childIds.map((childId) => ({ id: nanoid(), fromNodeId: rootId, toNodeId: childId }))];
 
@@ -3100,7 +3106,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         targetIds.map(async (targetId) => {
                             try {
                                 const task = workflowRef
-                                    ? await workflowImageTask(await submitCanvasWorkflowTask(workflowRef, generationConfig, "image", requestPrompt, referenceImages, [], [], targetId, projectId, targetTaskIds[targetId]))
+                                    ? await workflowImageTask(await submitCanvasWorkflowTask(workflowRef, generationConfig, "image", requestPrompt, referenceImages, [], [], targetId, projectId, targetTaskIds[targetId], mediaSlotModes))
                                     : await createCanvasImageTask({ ...generationConfig, count: "1" }, requestPrompt, referenceImages, { nodeId: targetId, sourceId: projectId, clientTaskId: targetTaskIds[targetId] });
                                 if (task.image_url || task.url) {
                                     setNodes((prev) => {
@@ -3173,13 +3179,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         position: isEmptyVideoNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y },
                         width: isEmptyVideoNode ? sourceNode.width : spec.width,
                         height: isEmptyVideoNode ? sourceNode.height : spec.height,
-                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, model: videoGenerationConfig.model, channelId: videoGenerationConfig.videoChannelId || videoGenerationConfig.activeChannelId, workflowRef, size: videoGenerationConfig.size, seconds: videoGenerationConfig.videoSeconds, vquality: videoGenerationConfig.vquality, mode: videoGenerationConfig.videoMode, negativePrompt: videoGenerationConfig.videoNegativePrompt, multiShot: videoGenerationConfig.videoMultiShot, shotType: videoGenerationConfig.videoShotType, generateAudio: videoGenerationConfig.videoGenerateAudio, characterOrientation: videoGenerationConfig.videoCharacterOrientation, watermark: videoGenerationConfig.videoWatermark, references: generationReferenceUrls({ ...generationContext, referenceImages: videoReferenceImages, firstFrame, lastFrame }), firstFrameNodeId: sourceNode?.metadata?.firstFrameNodeId, lastFrameNodeId: sourceNode?.metadata?.lastFrameNodeId, klingImageNodeIds: sourceNode?.metadata?.klingImageNodeIds, klingMultiPrompt: sourceNode?.metadata?.klingMultiPrompt, klingElementList: sourceNode?.metadata?.klingElementList, startedAt: generationStartedAt, progress: 0, videoTaskId: clientTaskId },
+                        metadata: { prompt: effectivePrompt, cameraControl: sourceNode?.metadata?.cameraControl, status: NODE_STATUS_LOADING, model: videoGenerationConfig.model, channelId: videoGenerationConfig.videoChannelId || videoGenerationConfig.activeChannelId, workflowRef, mediaSlotModes, size: videoGenerationConfig.size, seconds: videoGenerationConfig.videoSeconds, vquality: videoGenerationConfig.vquality, mode: videoGenerationConfig.videoMode, negativePrompt: videoGenerationConfig.videoNegativePrompt, multiShot: videoGenerationConfig.videoMultiShot, shotType: videoGenerationConfig.videoShotType, generateAudio: videoGenerationConfig.videoGenerateAudio, characterOrientation: videoGenerationConfig.videoCharacterOrientation, watermark: videoGenerationConfig.videoWatermark, references: generationReferenceUrls({ ...generationContext, referenceImages: videoReferenceImages, firstFrame, lastFrame }), firstFrameNodeId: sourceNode?.metadata?.firstFrameNodeId, lastFrameNodeId: sourceNode?.metadata?.lastFrameNodeId, klingImageNodeIds: sourceNode?.metadata?.klingImageNodeIds, klingMultiPrompt: sourceNode?.metadata?.klingMultiPrompt, klingElementList: sourceNode?.metadata?.klingElementList, startedAt: generationStartedAt, progress: 0, videoTaskId: clientTaskId },
                     };
                     pendingChildIds = [videoId];
                     setNodes((prev) => (isEmptyVideoNode ? prev.map((node) => (node.id === nodeId ? { ...node, ...videoNode } : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), videoNode]));
                     if (!isEmptyVideoNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: videoId }]);
                     const videoTask = workflowRef
-                        ? await workflowVideoTask(await submitCanvasWorkflowTask(workflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...videoReferenceImages, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), generationContext.referenceVideos, generationContext.referenceAudios, videoId, projectId, clientTaskId))
+                        ? await workflowVideoTask(await submitCanvasWorkflowTask(workflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...videoReferenceImages, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), generationContext.referenceVideos, generationContext.referenceAudios, videoId, projectId, clientTaskId, mediaSlotModes))
                         : (await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references: videoReferenceImages, firstFrame, lastFrame, videoReferences: generationContext.referenceVideos, audioReferences: generationContext.referenceAudios }, undefined, { clientTaskId, source: "canvas", sourceId: videoId })).task;
                     setNodes((prev) => applyCanvasVideoTaskUpdate(prev, videoId, videoTask, videoGenerationConfig, generationStartedAt, spec));
                     return;
@@ -3200,13 +3206,13 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         position: isEmptyAudioNode ? sourceNode.position : { x: parent.x + (sourceNode?.width || spec.width) + 96, y: parent.y + ((sourceNode?.height || spec.height) - spec.height) / 2 },
                         width: isEmptyAudioNode ? sourceNode.width : spec.width,
                         height: isEmptyAudioNode ? sourceNode.height : spec.height,
-                        metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, audioTaskId: clientAudioTaskId, ...buildAudioGenerationMetadata(generationConfig, sourceNode?.metadata), workflowRef },
+                        metadata: { prompt: effectivePrompt, status: NODE_STATUS_LOADING, startedAt: generationStartedAt, progress: 0, audioTaskId: clientAudioTaskId, ...buildAudioGenerationMetadata(generationConfig, sourceNode?.metadata), workflowRef, mediaSlotModes },
                     };
                     pendingChildIds = [audioId];
                     setNodes((prev) => (isEmptyAudioNode ? prev.map((node) => (node.id === nodeId ? { ...node, ...audioNode } : node)) : [...prev.map((node) => (node.id === nodeId ? { ...node, metadata: { ...node.metadata, status: NODE_STATUS_SUCCESS } } : node)), audioNode]));
                     if (!isEmptyAudioNode) setConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
                     const task = workflowRef
-                        ? await workflowAudioTask(await submitCanvasWorkflowTask(workflowRef, generationConfig, "audio", effectivePrompt, [], [], workflowAudios, audioId, projectId, clientAudioTaskId))
+                        ? await workflowAudioTask(await submitCanvasWorkflowTask(workflowRef, generationConfig, "audio", effectivePrompt, [], [], workflowAudios, audioId, projectId, clientAudioTaskId, mediaSlotModes))
                         : await createCanvasAudioTask(generationConfig, effectivePrompt, { nodeId: audioId, sourceId: projectId, clientTaskId: clientAudioTaskId }, referenceAudio);
                     setNodes((prev) => applyCanvasAudioTaskUpdate(prev, audioId, task, generationStartedAt));
                     return;
@@ -3747,6 +3753,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
         async (node: CanvasNodeData) => {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const retryWorkflowRef = node.metadata?.workflowRef;
+            const retryMediaSlotModes = node.metadata?.mediaSlotModes;
             const batchPrimaryId = retryWorkflowRef && isCanvasImageNodeType(node.type) && node.metadata?.isBatchRoot ? node.metadata.primaryImageId : undefined;
             const retryTargetId = batchPrimaryId && nodesRef.current.some((item) => item.id === batchPrimaryId) ? batchPrimaryId : node.id;
             const retryBatchRootId = retryWorkflowRef && isCanvasImageNodeType(node.type) ? (retryTargetId === node.id ? node.metadata?.batchRootId : node.id) : undefined;
@@ -3825,7 +3832,7 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const lastFrame = frameReferencesEnabled ? context?.lastFrame || null : null;
                     const references = frameReferencesEnabled || isAutoDLConfig(videoGenerationConfig) ? retryImages : [...retryImages, ...[context?.firstFrame, context?.lastFrame].filter((image): image is ReferenceImage => Boolean(image))];
                     const task = retryWorkflowRef
-                        ? await workflowVideoTask(await submitCanvasWorkflowTask(retryWorkflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...references, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), context?.referenceVideos || [], context?.referenceAudios || [], node.id, projectId, retryVideoTaskId))
+                        ? await workflowVideoTask(await submitCanvasWorkflowTask(retryWorkflowRef, videoGenerationConfig, "video", requestPrompt, [firstFrame, ...references, lastFrame].filter((image): image is ReferenceImage => Boolean(image)), context?.referenceVideos || [], context?.referenceAudios || [], node.id, projectId, retryVideoTaskId, retryMediaSlotModes))
                         : (await createVideoGenerationTask(videoGenerationConfig, requestPrompt, { references, firstFrame, lastFrame, videoReferences: context?.referenceVideos || [], audioReferences: context?.referenceAudios || [] }, undefined, { clientTaskId: retryVideoTaskId, source: "canvas", sourceId: node.id })).task;
                     setNodes((prev) => applyCanvasVideoTaskUpdate(prev, node.id, task, videoGenerationConfig, retryStartedAt, { width: node.width, height: node.height }));
                     return;
@@ -3834,14 +3841,14 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     const workflowAudios = retryWorkflowRef ? context?.referenceAudios || [] : [];
                     const referenceAudio = retryWorkflowRef ? undefined : selectAudioReference(generationConfig, sourceNode?.metadata, context?.referenceAudios || []);
                     const task = retryWorkflowRef
-                        ? await workflowAudioTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "audio", prompt, [], [], workflowAudios, node.id, projectId, retryAudioTaskId))
+                        ? await workflowAudioTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "audio", prompt, [], [], workflowAudios, node.id, projectId, retryAudioTaskId, retryMediaSlotModes))
                         : await createCanvasAudioTask(generationConfig, prompt, { nodeId: node.id, sourceId: projectId, clientTaskId: retryAudioTaskId }, referenceAudio);
                     setNodes((prev) => applyCanvasAudioTaskUpdate(prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, prompt, ...buildAudioGenerationMetadata(generationConfig, sourceNode?.metadata) } } : item)), node.id, task, retryStartedAt));
                     return;
                 }
 
                 const task = retryWorkflowRef
-                    ? await workflowImageTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "image", requestPrompt, useReferenceImages ? retryImages : [], [], [], retryTargetId, projectId, retryImageTaskId))
+                    ? await workflowImageTask(await submitCanvasWorkflowTask(retryWorkflowRef, generationConfig, "image", requestPrompt, useReferenceImages ? retryImages : [], [], [], retryTargetId, projectId, retryImageTaskId, retryMediaSlotModes))
                     : await createCanvasImageTask({ ...generationConfig, quality: isPanorama && generationConfig.quality === "auto" ? "medium" : generationConfig.quality }, requestPrompt, useReferenceImages ? retryImages : [], { nodeId: node.id, sourceId: projectId, clientTaskId: retryImageTaskId });
                 const generationMetadata = savedImageMetadata?.generationType
                     ? { generationType: savedImageMetadata.generationType, model: generationConfig.model, channelId: generationConfig.imageChannelId || generationConfig.activeChannelId, size: generationConfig.size, quality: generationConfig.quality, count: savedImageMetadata.count || 1, references: savedImageMetadata.references }
@@ -5717,13 +5724,31 @@ function canvasTaskFailed(status?: string) {
     return ["failed", "fail", "error", "cancelled", "canceled"].includes((status || "").toLowerCase());
 }
 
-async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode: "image" | "video" | "audio", prompt: string, images: ReferenceImage[], videos: ReferenceVideo[], audios: ReferenceAudio[], nodeId: string, projectId: string, clientTaskId: string) {
+async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode: "image" | "video" | "audio", prompt: string, images: ReferenceImage[], videos: ReferenceVideo[], audios: ReferenceAudio[], nodeId: string, projectId: string, clientTaskId: string, storedModes?: CanvasNodeMetadata["mediaSlotModes"]) {
     const token = useUserStore.getState().token;
     if (!token) throw new Error("工作流生成需要先登录");
+    let mediaSlotModes: CanvasNodeMetadata["mediaSlotModes"];
+    let boundImages: Array<ReferenceImage | undefined> = images;
+    let boundVideos: Array<ReferenceVideo | undefined> = videos;
+    let boundAudios: Array<ReferenceAudio | undefined> = audios;
+    if (ref.scope === "personal") {
+        const accountId = useUserStore.getState().user?.id || "guest";
+        const entry = findWorkflowEntry(await listWorkflowChannels(accountId), ref);
+        const slots = workflowMediaSlots(entry);
+        if (slots.length) {
+            mediaSlotModes = normalizeWorkflowMediaSlotModes(slots, storedModes);
+            const bindings = bindWorkflowMediaSlots(slots, mediaSlotModes, { images, videos, audios });
+            if (bindings.error) throw new Error(bindings.error);
+            boundImages = bindings.images;
+            boundVideos = bindings.videos;
+            boundAudios = bindings.audios;
+        }
+    }
+    const sources = <T,>(items: Array<T | undefined>, url: (item: T) => string) => Promise.all(Array.from({ length: items.length }, (_, index) => items[index] ? workflowMediaSource(url(items[index])) : Promise.resolve("")));
     const [referenceImages, referenceVideos, referenceAudios] = await Promise.all([
-        Promise.all(images.map((image) => workflowMediaSource(image.dataUrl))),
-        Promise.all(videos.map((video) => workflowMediaSource(video.url))),
-        Promise.all(audios.map((audio) => workflowMediaSource(audio.url))),
+        sources(boundImages, (image) => image.dataUrl),
+        sources(boundVideos, (video) => video.url),
+        sources(boundAudios, (audio) => audio.url),
     ]);
     if (useUserStore.getState().token !== token) throw new Error("登录状态已变化");
     const task = await submitWorkflowTask(token, {
@@ -5745,6 +5770,7 @@ async function submitCanvasWorkflowTask(ref: WorkflowRef, config: AiConfig, mode
         audioFormat: config.audioFormat,
         audioSpeed: Number(config.audioSpeed) || 1,
         audioInstructions: config.audioInstructions,
+        mediaSlotModes,
         source: "canvas", sourceId: projectId, nodeId, clientTaskId,
     });
     if (useUserStore.getState().token !== token) throw new Error("登录状态已变化");
