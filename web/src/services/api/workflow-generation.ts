@@ -1,5 +1,5 @@
 import { readFileAsDataUrl } from "@/lib/image-utils";
-import type { WorkflowCapability, WorkflowRef } from "@/lib/workflow-channel";
+import type { WorkflowCapability, WorkflowMediaSlotMode, WorkflowRef } from "@/lib/workflow-channel";
 
 export type WorkflowRunInput = {
     ref: WorkflowRef;
@@ -27,6 +27,7 @@ export type WorkflowRunInput = {
     sourceId?: string;
     nodeId?: string;
     clientTaskId?: string;
+    mediaSlotModes?: Record<string, WorkflowMediaSlotMode>;
 };
 
 export type WorkflowGenerationTask = {

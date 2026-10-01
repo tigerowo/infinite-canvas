@@ -1,11 +1,31 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
+
+func TestResolveWorkflowFieldsLegacyMedia(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Fields: []model.WorkflowFieldMapping{{NodeID: "217", FieldName: "image", Source: "referenceImage", Required: true, Enabled: &enabled}}}
+	_, err := ResolveWorkflowFields(entry, WorkflowRunInput{})
+	if err == nil || !strings.Contains(err.Error(), "必填字段 217::image 缺少值") {
+		t.Fatalf("旧媒体字段缺少素材时仍应保持必填校验，err=%v", err)
+	}
+}
+
+func TestWorkflowRunInputMediaSlotModes(t *testing.T) {
+	var input WorkflowRunInput
+	if err := json.Unmarshal([]byte(`{"mediaSlotModes":{"217::image":"off"}}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.MediaSlotModes["217::image"] != "off" {
+		t.Fatalf("槽位模式未按稳定字段身份解析：%#v", input.MediaSlotModes)
+	}
+}
 
 func TestResolveWorkflowFieldsAllowsWorkflowsWithoutPrompt(t *testing.T) {
 	enabled := true

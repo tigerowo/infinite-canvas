@@ -21,31 +21,32 @@ type WorkflowRef struct {
 }
 
 type WorkflowRunInput struct {
-	Ref                   WorkflowRef    `json:"ref"`
-	ExpectedCapability    string         `json:"expectedCapability"`
-	Prompt                string         `json:"prompt"`
-	SystemPrompt          string         `json:"systemPrompt"`
-	FieldValues           map[string]any `json:"fieldValues"`
-	ReferenceImages       []string       `json:"referenceImages"`
-	ReferenceVideos       []string       `json:"referenceVideos"`
-	ReferenceAudios       []string       `json:"referenceAudios"`
-	Mask                  string         `json:"mask"`
-	Size                  string         `json:"size"`
-	Quality               string         `json:"quality"`
-	TransparentBackground bool           `json:"transparentBackground"`
-	Count                 int            `json:"count"`
-	VideoSeconds          string         `json:"videoSeconds"`
-	VideoQuality          string         `json:"videoQuality"`
-	VideoGenerateAudio    bool           `json:"videoGenerateAudio"`
-	VideoWatermark        bool           `json:"videoWatermark"`
-	AudioVoice            string         `json:"audioVoice"`
-	AudioFormat           string         `json:"audioFormat"`
-	AudioSpeed            float64        `json:"audioSpeed"`
-	AudioInstructions     string         `json:"audioInstructions"`
-	Source                string         `json:"source"`
-	SourceID              string         `json:"sourceId"`
-	NodeID                string         `json:"nodeId"`
-	ClientTaskID          string         `json:"clientTaskId"`
+	Ref                   WorkflowRef       `json:"ref"`
+	ExpectedCapability    string            `json:"expectedCapability"`
+	Prompt                string            `json:"prompt"`
+	SystemPrompt          string            `json:"systemPrompt"`
+	FieldValues           map[string]any    `json:"fieldValues"`
+	ReferenceImages       []string          `json:"referenceImages"`
+	ReferenceVideos       []string          `json:"referenceVideos"`
+	ReferenceAudios       []string          `json:"referenceAudios"`
+	Mask                  string            `json:"mask"`
+	Size                  string            `json:"size"`
+	Quality               string            `json:"quality"`
+	TransparentBackground bool              `json:"transparentBackground"`
+	Count                 int               `json:"count"`
+	VideoSeconds          string            `json:"videoSeconds"`
+	VideoQuality          string            `json:"videoQuality"`
+	VideoGenerateAudio    bool              `json:"videoGenerateAudio"`
+	VideoWatermark        bool              `json:"videoWatermark"`
+	AudioVoice            string            `json:"audioVoice"`
+	AudioFormat           string            `json:"audioFormat"`
+	AudioSpeed            float64           `json:"audioSpeed"`
+	AudioInstructions     string            `json:"audioInstructions"`
+	Source                string            `json:"source"`
+	SourceID              string            `json:"sourceId"`
+	NodeID                string            `json:"nodeId"`
+	ClientTaskID          string            `json:"clientTaskId"`
+	MediaSlotModes        map[string]string `json:"mediaSlotModes"`
 }
 
 type WorkflowOverride struct {
