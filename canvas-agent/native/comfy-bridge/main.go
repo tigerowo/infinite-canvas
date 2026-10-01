@@ -319,13 +319,13 @@ func runComfyRequestFromCheckpoint(
 		mode = "image"
 	}
 	if promptID == "" {
-		workflow, err := loadWorkflow(ctx, options, payload)
+		workflow, objectInfo, err := loadWorkflowWithObjectInfo(ctx, options, payload)
 		if err != nil {
 			return nil, err
 		}
 		fields := sliceValue(payload["workflowFields"])
 		if len(fields) == 0 {
-			fields = discoverWorkflowFields(workflow, mode)
+			fields = discoverWorkflowFields(workflow, mode, objectInfo)
 			payload["workflowFields"] = fields
 		}
 		if err := validateWorkflowMediaInputs(fields, payload); err != nil {
@@ -335,7 +335,7 @@ func runComfyRequestFromCheckpoint(
 		if err != nil {
 			return nil, err
 		}
-		if err := applyWorkflowFields(workflow, payload, files); err != nil {
+		if err := applyWorkflowFields(workflow, payload, files, objectInfo); err != nil {
 			return nil, err
 		}
 		stripCanvasAnnotationNodes(workflow)
@@ -450,11 +450,16 @@ func isComfyAPIWorkflow(workflow jsonMap) bool {
 }
 
 func loadWorkflow(ctx context.Context, options bridgeOptions, payload jsonMap) (jsonMap, error) {
+	workflow, _, err := loadWorkflowWithObjectInfo(ctx, options, payload)
+	return workflow, err
+}
+
+func loadWorkflowWithObjectInfo(ctx context.Context, options bridgeOptions, payload jsonMap) (jsonMap, jsonMap, error) {
 	source, err := loadWorkflowSource(options, payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return normalizeWorkflow(ctx, options.Comfy, source)
+	return normalizeWorkflowWithObjectInfo(ctx, options.Comfy, source)
 }
 
 func loadWorkflowSource(options bridgeOptions, payload jsonMap) (jsonMap, error) {

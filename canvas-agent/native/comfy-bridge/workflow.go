@@ -796,8 +796,16 @@ func validateWorkflowMediaInputs(fields []any, payload jsonMap) error {
 	return nil
 }
 
-func applyWorkflowFields(workflow jsonMap, payload jsonMap, files map[string]string) error {
+func applyWorkflowFields(workflow jsonMap, payload jsonMap, files map[string]string, objectInfos ...jsonMap) error {
 	fields := sliceValue(payload["workflowFields"])
+	objectInfo := jsonMap{}
+	if len(objectInfos) > 0 {
+		objectInfo = objectInfos[0]
+	}
+	prunePlans, err := validatedMediaPrunePlans(workflow, objectInfo, fields, payload)
+	if err != nil {
+		return err
+	}
 	overrides := make(map[string]any)
 	for _, raw := range sliceValue(payload["workflowOverrides"]) {
 		override, ok := mapValue(raw)
@@ -833,7 +841,20 @@ func applyWorkflowFields(workflow jsonMap, payload jsonMap, files map[string]str
 			inputs = jsonMap{}
 		}
 		source := normalizedWorkflowFieldSource(field)
-		value, present := overrides[nodeID+"::"+fieldName]
+		identity := nodeID + "::" + fieldName
+		value, present := overrides[identity]
+		if boolValue(field["optionalMedia"]) && isMediaSource(source) {
+			mode, err := bridgeMediaSlotMode(field, payload, identity)
+			if err != nil {
+				return err
+			}
+			if mode == "off" || mode == "default" {
+				continue
+			}
+			if !present {
+				return fmt.Errorf("工作流媒体槽位 %s 已启用，但没有画布素材", identity)
+			}
+		}
 		if present {
 			if media, ok := mapValue(value); ok && stringValue(media["mediaId"]) != "" {
 				value = files[stringValue(media["mediaId"])]
@@ -853,22 +874,152 @@ func applyWorkflowFields(workflow jsonMap, payload jsonMap, files map[string]str
 	for nodeID := range removed {
 		delete(workflow, nodeID)
 	}
-	if len(removed) == 0 {
-		return nil
+	if len(removed) > 0 {
+		for _, rawNode := range workflow {
+			node, ok := mapValue(rawNode)
+			if !ok {
+				continue
+			}
+			inputs, _ := mapValue(node["inputs"])
+			for fieldName, value := range inputs {
+				link := sliceValue(value)
+				if len(link) > 0 && removed[stringValue(link[0])] {
+					delete(inputs, fieldName)
+				}
+			}
+		}
 	}
-	for _, rawNode := range workflow {
-		node, ok := mapValue(rawNode)
-		if !ok {
+	return applyValidatedMediaPrunePlans(workflow, prunePlans)
+}
+
+func validatedMediaPrunePlans(workflow, objectInfo jsonMap, fields []any, payload jsonMap) ([]jsonMap, error) {
+	plans := make([]jsonMap, 0)
+	for _, raw := range fields {
+		field, ok := mapValue(raw)
+		if !ok || field["enabled"] == false || !boolValue(field["optionalMedia"]) || !isMediaSource(normalizedWorkflowFieldSource(field)) {
 			continue
 		}
-		inputs, ok := mapValue(node["inputs"])
-		if !ok {
+		nodeID := firstNonEmpty(stringValue(field["nodeId"]), stringValue(field["node"]))
+		fieldName := firstNonEmpty(stringValue(field["fieldName"]), stringValue(field["input"]))
+		identity := nodeID + "::" + fieldName
+		mode, err := bridgeMediaSlotMode(field, payload, identity)
+		if err != nil {
+			return nil, err
+		}
+		if mode != "off" {
 			continue
 		}
+		saved, ok := mapValue(field["mediaPrunePlan"])
+		expected, safe := discoverMediaPrunePlan(workflow, objectInfo, nodeID)
+		if !ok || !safe || !sameMediaPrunePlan(saved, expected) {
+			return nil, fmt.Errorf("媒体槽位 %s 的裁枝计划已失效，请重新拉取工作流参数", identity)
+		}
+		plans = append(plans, saved)
+	}
+	return plans, nil
+}
+
+func bridgeMediaSlotMode(field, payload jsonMap, identity string) (string, error) {
+	modes, _ := mapValue(payload["mediaSlotModes"])
+	mode := strings.TrimSpace(stringValue(modes[identity]))
+	if mode == "" {
+		mode = strings.TrimSpace(stringValue(field["mediaDefaultMode"]))
+	}
+	if mode == "" {
+		mode = "canvas"
+	}
+	if !stringIn(mode, "off", "canvas", "default") {
+		return "", fmt.Errorf("工作流媒体槽位 %s 的模式无效：%s", identity, mode)
+	}
+	return mode, nil
+}
+
+func sameMediaPrunePlan(left, right jsonMap) bool {
+	leftNodes, leftDetach, leftOK := normalizedMediaPrunePlan(left)
+	rightNodes, rightDetach, rightOK := normalizedMediaPrunePlan(right)
+	return leftOK && rightOK && strings.Join(leftNodes, "\x00") == strings.Join(rightNodes, "\x00") && strings.Join(leftDetach, "\x00") == strings.Join(rightDetach, "\x00")
+}
+
+func normalizedMediaPrunePlan(plan jsonMap) ([]string, []string, bool) {
+	nodes := make([]string, 0)
+	seen := map[string]bool{}
+	var rawNodes []string
+	switch values := plan["removeNodeIds"].(type) {
+	case []string:
+		rawNodes = values
+	case []any:
+		for _, value := range values {
+			rawNodes = append(rawNodes, stringValue(value))
+		}
+	default:
+		return nil, nil, false
+	}
+	for _, raw := range rawNodes {
+		nodeID := strings.TrimSpace(raw)
+		if nodeID == "" || seen[nodeID] {
+			return nil, nil, false
+		}
+		seen[nodeID] = true
+		nodes = append(nodes, nodeID)
+	}
+	if len(nodes) == 0 {
+		return nil, nil, false
+	}
+	detach := make([]string, 0)
+	seen = map[string]bool{}
+	for _, raw := range sliceValue(plan["detachInputs"]) {
+		input, ok := mapValue(raw)
+		if !ok {
+			return nil, nil, false
+		}
+		key := strings.TrimSpace(stringValue(input["nodeId"])) + "::" + strings.TrimSpace(stringValue(input["fieldName"]))
+		if key == "::" || seen[key] {
+			return nil, nil, false
+		}
+		seen[key] = true
+		detach = append(detach, key)
+	}
+	sort.Strings(nodes)
+	sort.Strings(detach)
+	return nodes, detach, true
+}
+
+func applyValidatedMediaPrunePlans(workflow jsonMap, plans []jsonMap) error {
+	removed := map[string]bool{}
+	for _, plan := range plans {
+		nodes, _, _ := normalizedMediaPrunePlan(plan)
+		for _, nodeID := range nodes {
+			removed[nodeID] = true
+		}
+	}
+	for nodeID := range removed {
+		delete(workflow, nodeID)
+	}
+	for _, plan := range plans {
+		_, detachInputs, _ := normalizedMediaPrunePlan(plan)
+		for _, key := range detachInputs {
+			nodeID, fieldName, _ := strings.Cut(key, "::")
+			if removed[nodeID] {
+				continue
+			}
+			node, ok := mapValue(workflow[nodeID])
+			if !ok {
+				return errors.New("媒体裁枝目标已失效，请重新拉取工作流参数")
+			}
+			inputs, ok := mapValue(node["inputs"])
+			if !ok {
+				return errors.New("媒体裁枝输入已失效，请重新拉取工作流参数")
+			}
+			delete(inputs, fieldName)
+		}
+	}
+	for nodeID, rawNode := range workflow {
+		node, _ := mapValue(rawNode)
+		inputs, _ := mapValue(node["inputs"])
 		for fieldName, value := range inputs {
 			link := sliceValue(value)
 			if len(link) > 0 && removed[stringValue(link[0])] {
-				delete(inputs, fieldName)
+				return fmt.Errorf("媒体裁枝后仍有悬空连接 %s.%s，请重新拉取工作流参数", nodeID, fieldName)
 			}
 		}
 	}
