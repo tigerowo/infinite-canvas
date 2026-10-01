@@ -1,11 +1,104 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/tigerowo/infinite-canvas/model"
 )
+
+func TestResolveWorkflowFieldsLegacyMedia(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Fields: []model.WorkflowFieldMapping{{NodeID: "217", FieldName: "image", Source: "referenceImage", Required: true, Enabled: &enabled}}}
+	_, err := ResolveWorkflowFields(entry, WorkflowRunInput{})
+	if err == nil || !strings.Contains(err.Error(), "必填字段 217::image 缺少值") {
+		t.Fatalf("旧媒体字段缺少素材时仍应保持必填校验，err=%v", err)
+	}
+}
+
+func TestWorkflowRunInputMediaSlotModes(t *testing.T) {
+	var input WorkflowRunInput
+	if err := json.Unmarshal([]byte(`{"mediaSlotModes":{"217::image":"off"}}`), &input); err != nil {
+		t.Fatal(err)
+	}
+	if input.MediaSlotModes["217::image"] != "off" {
+		t.Fatalf("槽位模式未按稳定字段身份解析：%#v", input.MediaSlotModes)
+	}
+}
+
+func TestResolveWorkflowFieldsOptionalMedia(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{
+		Provider:     "comfyui",
+		Fields:       []model.WorkflowFieldMapping{{NodeID: "217", FieldName: "image", Source: "referenceImage", Required: true, Enabled: &enabled, OptionalMedia: true, MediaDefaultMode: "canvas", MediaPrunePlan: &model.MediaPrunePlan{RemoveNodeIDs: []string{"217"}}}},
+		WorkflowJSON: map[string]any{"217": map[string]any{"inputs": map[string]any{"image": "default.png"}}},
+	}
+	t.Run("off skips required media", func(t *testing.T) {
+		values, err := ResolveWorkflowFields(entry, WorkflowRunInput{MediaSlotModes: map[string]string{"217::image": "off"}})
+		if err != nil || len(values) != 0 {
+			t.Fatalf("off 槽位不应生成覆盖或触发必填校验，values=%#v err=%v", values, err)
+		}
+	})
+	t.Run("default preserves workflow input", func(t *testing.T) {
+		values, err := ResolveWorkflowFields(entry, WorkflowRunInput{MediaSlotModes: map[string]string{"217::image": "default"}})
+		if err != nil || len(values) != 0 {
+			t.Fatalf("default 槽位应保留工作流原值，values=%#v err=%v", values, err)
+		}
+	})
+	t.Run("canvas requires its exact media", func(t *testing.T) {
+		_, err := ResolveWorkflowFields(entry, WorkflowRunInput{MediaSlotModes: map[string]string{"217::image": "canvas"}})
+		if err == nil || !strings.Contains(err.Error(), "参考图片 1 已启用") {
+			t.Fatalf("canvas 槽位缺少素材时应指出槽位，err=%v", err)
+		}
+	})
+	t.Run("invalid mode is rejected", func(t *testing.T) {
+		_, err := ResolveWorkflowFields(entry, WorkflowRunInput{MediaSlotModes: map[string]string{"217::image": "skip"}})
+		if err == nil || !strings.Contains(err.Error(), "模式") {
+			t.Fatalf("未知槽位模式不应静默降级，err=%v", err)
+		}
+	})
+	t.Run("non optional media ignores modes", func(t *testing.T) {
+		legacy := entry
+		legacy.Fields = append([]model.WorkflowFieldMapping(nil), entry.Fields...)
+		legacy.Fields[0].OptionalMedia = false
+		_, err := ResolveWorkflowFields(legacy, WorkflowRunInput{MediaSlotModes: map[string]string{"217::image": "off"}})
+		if err == nil || !strings.Contains(err.Error(), "必填") {
+			t.Fatalf("普通媒体字段必须保留旧校验，err=%v", err)
+		}
+	})
+}
+
+func TestComfyWorkflowPayloadSparseMedia(t *testing.T) {
+	enabled := true
+	entry := model.WorkflowEntry{Provider: "comfyui", Fields: []model.WorkflowFieldMapping{
+		{NodeID: "1", FieldName: "image", Source: "referenceImage", SourceIndex: 0, Enabled: &enabled, OptionalMedia: true, MediaDefaultMode: "off"},
+		{NodeID: "2", FieldName: "image", Source: "referenceImage", SourceIndex: 1, ImageOrder: 2, Enabled: &enabled, OptionalMedia: true, MediaDefaultMode: "canvas"},
+		{NodeID: "3", FieldName: "audio", Source: "referenceAudio", SourceIndex: 0, Enabled: &enabled, OptionalMedia: true, MediaDefaultMode: "off"},
+		{NodeID: "4", FieldName: "audio", Source: "referenceAudio", SourceIndex: 1, Enabled: &enabled, OptionalMedia: true, MediaDefaultMode: "canvas"},
+	}}
+	input := WorkflowRunInput{
+		ReferenceImages: []string{"", "data:image/png;base64,AQ=="},
+		ReferenceAudios: []string{"", "data:audio/wav;base64,AQ=="},
+		MediaSlotModes:  map[string]string{"1::image": "off", "2::image": "canvas", "3::audio": "off", "4::audio": "canvas"},
+	}
+	overrides, err := ResolveWorkflowFields(entry, input)
+	if err != nil || len(overrides) != 2 {
+		t.Fatalf("后续槽位应保持真实下标，overrides=%#v err=%v", overrides, err)
+	}
+	if overrides[0].Value.(map[string]any)["mediaId"] != "image:1" || overrides[1].Value.(map[string]any)["mediaId"] != "audio:1" {
+		t.Fatalf("稀疏素材发生移位：%#v", overrides)
+	}
+	payload := comfyWorkflowPayload(entry, input, overrides)
+	images := payload["referenceImages"].([]map[string]any)
+	audios := payload["referenceAudios"].([]map[string]any)
+	if len(images) != 1 || images[0]["id"] != "image:1" || len(audios) != 1 || audios[0]["id"] != "audio:1" {
+		t.Fatalf("Bridge 稀疏素材载荷错误：images=%#v audios=%#v", images, audios)
+	}
+	if payload["mediaSlotModes"].(map[string]string)["2::image"] != "canvas" {
+		t.Fatalf("Bridge 未收到槽位模式：%#v", payload["mediaSlotModes"])
+	}
+}
 
 func TestResolveWorkflowFieldsAllowsWorkflowsWithoutPrompt(t *testing.T) {
 	enabled := true

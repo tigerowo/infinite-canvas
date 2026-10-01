@@ -21,31 +21,32 @@ type WorkflowRef struct {
 }
 
 type WorkflowRunInput struct {
-	Ref                   WorkflowRef    `json:"ref"`
-	ExpectedCapability    string         `json:"expectedCapability"`
-	Prompt                string         `json:"prompt"`
-	SystemPrompt          string         `json:"systemPrompt"`
-	FieldValues           map[string]any `json:"fieldValues"`
-	ReferenceImages       []string       `json:"referenceImages"`
-	ReferenceVideos       []string       `json:"referenceVideos"`
-	ReferenceAudios       []string       `json:"referenceAudios"`
-	Mask                  string         `json:"mask"`
-	Size                  string         `json:"size"`
-	Quality               string         `json:"quality"`
-	TransparentBackground bool           `json:"transparentBackground"`
-	Count                 int            `json:"count"`
-	VideoSeconds          string         `json:"videoSeconds"`
-	VideoQuality          string         `json:"videoQuality"`
-	VideoGenerateAudio    bool           `json:"videoGenerateAudio"`
-	VideoWatermark        bool           `json:"videoWatermark"`
-	AudioVoice            string         `json:"audioVoice"`
-	AudioFormat           string         `json:"audioFormat"`
-	AudioSpeed            float64        `json:"audioSpeed"`
-	AudioInstructions     string         `json:"audioInstructions"`
-	Source                string         `json:"source"`
-	SourceID              string         `json:"sourceId"`
-	NodeID                string         `json:"nodeId"`
-	ClientTaskID          string         `json:"clientTaskId"`
+	Ref                   WorkflowRef       `json:"ref"`
+	ExpectedCapability    string            `json:"expectedCapability"`
+	Prompt                string            `json:"prompt"`
+	SystemPrompt          string            `json:"systemPrompt"`
+	FieldValues           map[string]any    `json:"fieldValues"`
+	ReferenceImages       []string          `json:"referenceImages"`
+	ReferenceVideos       []string          `json:"referenceVideos"`
+	ReferenceAudios       []string          `json:"referenceAudios"`
+	Mask                  string            `json:"mask"`
+	Size                  string            `json:"size"`
+	Quality               string            `json:"quality"`
+	TransparentBackground bool              `json:"transparentBackground"`
+	Count                 int               `json:"count"`
+	VideoSeconds          string            `json:"videoSeconds"`
+	VideoQuality          string            `json:"videoQuality"`
+	VideoGenerateAudio    bool              `json:"videoGenerateAudio"`
+	VideoWatermark        bool              `json:"videoWatermark"`
+	AudioVoice            string            `json:"audioVoice"`
+	AudioFormat           string            `json:"audioFormat"`
+	AudioSpeed            float64           `json:"audioSpeed"`
+	AudioInstructions     string            `json:"audioInstructions"`
+	Source                string            `json:"source"`
+	SourceID              string            `json:"sourceId"`
+	NodeID                string            `json:"nodeId"`
+	ClientTaskID          string            `json:"clientTaskId"`
+	MediaSlotModes        map[string]string `json:"mediaSlotModes"`
 }
 
 type WorkflowOverride struct {
@@ -95,11 +96,21 @@ func ResolveWorkflowFields(entry model.WorkflowEntry, input WorkflowRunInput) ([
 				continue
 			}
 		}
+		mediaMode, optionalMedia, err := workflowOptionalMediaMode(entry.Provider, field, input, identity)
+		if err != nil {
+			return nil, err
+		}
+		if optionalMedia && (mediaMode == "off" || mediaMode == "default") {
+			continue
+		}
 		value, present, err := workflowFieldValue(field, input, entry.Capability)
 		if err != nil {
 			return nil, fmt.Errorf("字段 %s：%w", identity, err)
 		}
 		if !present {
+			if optionalMedia && mediaMode == "canvas" {
+				return nil, fmt.Errorf("%s 已启用，但没有画布素材", workflowMediaSlotLabel(field))
+			}
 			if field.Required {
 				return nil, fmt.Errorf("必填字段 %s 缺少值", identity)
 			}
@@ -133,6 +144,40 @@ func ResolveWorkflowFields(entry model.WorkflowEntry, input WorkflowRunInput) ([
 		return nil, errors.New("蒙版没有对应的工作流字段映射")
 	}
 	return result, nil
+}
+
+func workflowOptionalMediaMode(provider string, field model.WorkflowFieldMapping, input WorkflowRunInput, identity string) (string, bool, error) {
+	if provider != "comfyui" || !field.OptionalMedia {
+		return "", false, nil
+	}
+	mode := strings.TrimSpace(input.MediaSlotModes[identity])
+	if mode == "" {
+		mode = strings.TrimSpace(field.MediaDefaultMode)
+	}
+	if mode == "" {
+		mode = "canvas"
+	}
+	if mode != "off" && mode != "canvas" && mode != "default" {
+		return "", true, fmt.Errorf("字段 %s 的媒体槽位模式无效：%s", identity, mode)
+	}
+	return mode, true, nil
+}
+
+func workflowMediaSlotLabel(field model.WorkflowFieldMapping) string {
+	index := field.SourceIndex
+	label := "参考素材"
+	switch field.Source {
+	case "referenceImage":
+		label = "参考图片"
+		if field.ImageOrder > 0 {
+			index = field.ImageOrder - 1
+		}
+	case "referenceVideo":
+		label = "参考视频"
+	case "referenceAudio":
+		label = "参考音频"
+	}
+	return fmt.Sprintf("%s %d", label, index+1)
 }
 
 func validateWorkflowMedia(raw, mediaID string) error {

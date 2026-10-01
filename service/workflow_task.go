@@ -467,6 +467,9 @@ func comfyWorkflowPayload(entry model.WorkflowEntry, input WorkflowRunInput, ove
 	media := func(prefix string, values []string) []map[string]any {
 		items := make([]map[string]any, 0, len(values))
 		for index, value := range values {
+			if strings.TrimSpace(value) == "" {
+				continue
+			}
 			item := map[string]any{"id": fmt.Sprintf("%s:%d", prefix, index)}
 			if strings.HasPrefix(value, "data:") {
 				item["dataUrl"] = value
@@ -480,6 +483,7 @@ func comfyWorkflowPayload(entry model.WorkflowEntry, input WorkflowRunInput, ove
 	payload := map[string]any{
 		"mode": entry.Capability, "workflowId": entry.WorkflowID, "workflowJson": entry.WorkflowJSON, "workflowFields": entry.Fields, "workflowOverrides": overrides,
 		"referenceImages": media("image", input.ReferenceImages), "referenceVideos": media("video", input.ReferenceVideos), "referenceAudios": media("audio", input.ReferenceAudios),
+		"mediaSlotModes": input.MediaSlotModes,
 	}
 	if input.Mask != "" {
 		mask := media("mask", []string{input.Mask})[0]

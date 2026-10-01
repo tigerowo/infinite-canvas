@@ -14,6 +14,7 @@ import { CanvasImageSettingsPopover } from "./canvas-image-settings-popover";
 import { CanvasCameraControl } from "./canvas-camera-control";
 import { CanvasAudioSettingsPopover, type CanvasAudioSettingKey } from "./canvas-audio-settings-popover";
 import { CanvasVideoSettingsPopover, type CanvasVideoFrameOption, type CanvasVideoResourceOption } from "./canvas-video-settings-popover";
+import { CanvasWorkflowMediaSlotControl } from "./workflow-media-slot-control";
 import type { CanvasGenerationMode, CanvasNodeData, CanvasNodeMetadata } from "../types";
 
 type CanvasConfigNodePanelProps = {
@@ -103,6 +104,8 @@ export function CanvasConfigNodePanel({ node, isRunning, inputSummary, videoFram
                     组装提示词
                 </button>
             </div>
+
+            <CanvasWorkflowMediaSlotControl workflowRef={node.metadata?.workflowRef} modes={node.metadata?.mediaSlotModes} onChange={(mediaSlotModes) => onConfigChange(node.id, { mediaSlotModes })} />
 
             <div className={`mb-2 grid min-w-0 cursor-default items-center gap-2 ${mode === "image" || mode === "video" ? "grid-cols-[minmax(0,1fr)_148px_92px]" : mode === "audio" ? "grid-cols-[minmax(0,1fr)_148px]" : "grid-cols-1"}`} onMouseDown={(event) => event.stopPropagation()}>
                 <ModelPicker className="canvas-compact-control h-10" config={config} value={config.model} channelId={modelChannelId(config, mode)} workflowRef={node.metadata?.workflowRef} onWorkflowChange={mode === "text" ? undefined : (workflowRef) => onConfigChange(node.id, { workflowRef })} onChange={(model, channelId) => onConfigChange(node.id, { model, channelId })} capability={mode} onMissingConfig={() => openConfigDialog(true)} fullWidth />
