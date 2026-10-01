@@ -96,6 +96,7 @@ export function WorkflowFieldMappingEditor({ fields, onChange, disabled = false 
                     const fieldDisabled = disabled || !enabled || !safeToOverride;
                     const configurationError = workflowFieldConfigurationError(field);
                     const roleLabel = field.role === "prompt" ? "提示词" : field.role === "media" ? "素材" : field.role === "internal" ? "内部参数" : "业务参数";
+                    const pruneSummary = workflowMediaPruneSummary(field);
                     return {
                         key: field.id || `${field.nodeId}::${field.fieldName}::${index}`,
                         label: (
@@ -185,6 +186,33 @@ export function WorkflowFieldMappingEditor({ fields, onChange, disabled = false 
                                             onChange={(value) => updateField(index, source === "referenceImage" ? { imageOrder: Number(value) || 1 } : { sourceIndex: Math.max(0, (Number(value) || 1) - 1) })}
                                         />
                                     </label>
+                                ) : null}
+                                {pruneSummary ? (
+                                    <div className="grid gap-2 rounded-md border border-border/60 p-3 text-xs text-foreground/60 md:col-span-2 lg:col-span-3">
+                                        <label className="flex items-center justify-between gap-3">
+                                            可选媒体槽位
+                                            <Switch
+                                                checked={field.optionalMedia === true}
+                                                disabled={fieldDisabled}
+                                                onChange={(optionalMedia) => updateField(index, { optionalMedia, required: optionalMedia ? false : field.required })}
+                                            />
+                                        </label>
+                                        <label className="flex items-center justify-between gap-3">
+                                            默认模式
+                                            <Select
+                                                className="w-36"
+                                                value={field.mediaDefaultMode || "off"}
+                                                disabled={fieldDisabled || field.optionalMedia !== true}
+                                                options={[
+                                                    { label: "关闭", value: "off" },
+                                                    { label: "使用画布", value: "canvas" },
+                                                    { label: "工作流默认", value: "default" },
+                                                ]}
+                                                onChange={(mediaDefaultMode) => updateField(index, { mediaDefaultMode })}
+                                            />
+                                        </label>
+                                        <span>{pruneSummary}</span>
+                                    </div>
                                 ) : null}
                                 <label className="flex items-center justify-between gap-3 text-xs text-foreground/60">
                                     缺失时阻止生成
@@ -282,4 +310,10 @@ function displayValue(value: unknown) {
     } catch {
         return String(value);
     }
+}
+
+export function workflowMediaPruneSummary(field: WorkflowFieldMapping) {
+    const plan = field.mediaPrunePlan;
+    if (!plan?.removeNodeIds?.length) return undefined;
+    return `关闭时删除 ${plan.removeNodeIds.length} 个节点，断开 ${plan.detachInputs?.length || 0} 个输入`;
 }

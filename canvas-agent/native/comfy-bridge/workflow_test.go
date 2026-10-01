@@ -14,8 +14,8 @@ func mediaTestObjectInfo() jsonMap {
 		"Merge":     jsonMap{"input": jsonMap{"required": jsonMap{"image_a": []any{"IMAGE"}, "image_b": []any{"IMAGE"}}}},
 		"Target":    jsonMap{"input": jsonMap{"required": jsonMap{"core": []any{"MODEL"}}, "optional": jsonMap{"image": []any{"IMAGE"}}}},
 		"DynamicTarget": jsonMap{"input": jsonMap{"required": jsonMap{"core": []any{"MODEL"}}, "optional": jsonMap{
-			"ref_images": []any{"COMFY_AUTOGROW_V3", jsonMap{"template": jsonMap{"input": jsonMap{"required": jsonMap{"ref_image": []any{"IMAGE"}}}}, "prefix": "ref_image_"}},
-			"ref_audios": []any{"COMFY_AUTOGROW_V3", jsonMap{"template": jsonMap{"input": jsonMap{"required": jsonMap{"ref_audio": []any{"AUDIO"}}}}, "prefix": "ref_audio_"}},
+			"ref_images": []any{"COMFY_AUTOGROW_V3", jsonMap{"template": jsonMap{"input": jsonMap{"required": jsonMap{"ref_image": []any{"IMAGE"}}}, "prefix": "ref_image_"}}},
+			"ref_audios": []any{"COMFY_AUTOGROW_V3", jsonMap{"template": jsonMap{"input": jsonMap{"required": jsonMap{"ref_audio": []any{"AUDIO"}}}, "prefix": "ref_audio_"}}},
 		}}},
 		"Save":         jsonMap{"input": jsonMap{"required": jsonMap{"images": []any{"IMAGE"}}}, "output_node": true},
 		"PreviewImage": jsonMap{"input": jsonMap{"required": jsonMap{"images": []any{"IMAGE"}}}, "output_node": true},
@@ -64,6 +64,19 @@ func TestDiscoverWorkflowFieldsAddsSafeMediaPrunePlan(t *testing.T) {
 	field, _ := mapValue(fields[0])
 	if !boolValue(field["optionalMedia"]) || stringValue(field["mediaDefaultMode"]) != "off" || field["mediaPrunePlan"] == nil {
 		t.Fatalf("安全媒体字段未附带可选裁枝计划：%#v", field)
+	}
+}
+
+func TestDiscoverWorkflowFieldsUsesDynamicMediaSlotIndex(t *testing.T) {
+	workflow := jsonMap{
+		"1": jsonMap{"class_type": "LoadImage", "inputs": jsonMap{"image": "a.png"}},
+		"2": jsonMap{"class_type": "DynamicTarget", "inputs": jsonMap{"core": []any{"9", 0.0}, "ref_images.ref_image_5": []any{"1", 0.0}}},
+		"9": jsonMap{"class_type": "Core", "inputs": jsonMap{}},
+	}
+	fields := discoverWorkflowFields(workflow, "video", mediaTestObjectInfo())
+	field, _ := mapValue(fields[0])
+	if field["sourceIndex"] != 5 || field["imageOrder"] != 6 {
+		t.Fatalf("动态媒体槽位索引错误：%#v", field)
 	}
 }
 

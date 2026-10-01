@@ -87,6 +87,12 @@ func discoverWorkflowFields(workflow jsonMap, capability string, objectInfos ...
 					field["optionalMedia"] = true
 					field["mediaDefaultMode"] = "off"
 					field["mediaPrunePlan"] = plan
+					if index, ok := dynamicMediaSlotIndex(plan, stringValue(field["source"])); ok {
+						field["sourceIndex"] = index
+						if normalizeSourceName(stringValue(field["source"])) == "referenceimage" {
+							field["imageOrder"] = index + 1
+						}
+					}
 				}
 			}
 			if isSeedField(fieldName) {
@@ -96,6 +102,23 @@ func discoverWorkflowFields(workflow jsonMap, capability string, objectInfos ...
 		}
 	}
 	return fields
+}
+
+func dynamicMediaSlotIndex(plan jsonMap, source string) (int, bool) {
+	prefix := map[string]string{"referenceimage": "ref_images.ref_image_", "referencevideo": "ref_videos.ref_video_", "referenceaudio": "ref_audios.ref_audio_"}[normalizeSourceName(source)]
+	index := -1
+	for _, raw := range sliceValue(plan["detachInputs"]) {
+		detach, ok := mapValue(raw)
+		if !ok || !strings.HasPrefix(stringValue(detach["fieldName"]), prefix) {
+			return 0, false
+		}
+		current, err := strconv.Atoi(strings.TrimPrefix(stringValue(detach["fieldName"]), prefix))
+		if err != nil || current < 0 || index >= 0 && index != current {
+			return 0, false
+		}
+		index = current
+	}
+	return index, index >= 0
 }
 
 type workflowEdge struct {
@@ -224,6 +247,9 @@ func workflowInputRequirement(objectInfo jsonMap, classType, fieldName string) (
 			}
 			options, _ := mapValue(definition[1])
 			prefix := stringValue(options["prefix"])
+			if template, ok := mapValue(options["template"]); ok && prefix == "" {
+				prefix = stringValue(template["prefix"])
+			}
 			childName := strings.TrimPrefix(fieldName, dynamicName+".")
 			if childName == fieldName || prefix == "" || !strings.HasPrefix(childName, prefix) {
 				continue
