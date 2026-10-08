@@ -1,5 +1,11 @@
 export type WorkflowCapability = "image" | "video" | "audio";
 export type WorkflowKind = "workflow" | "app";
+export type WorkflowMediaSlotMode = "off" | "canvas" | "default";
+
+export type WorkflowMediaPrunePlan = {
+    removeNodeIds: string[];
+    detachInputs: Array<{ nodeId: string; fieldName: string }>;
+};
 
 export type WorkflowRef = {
     scope: "personal" | "system";
@@ -50,6 +56,9 @@ export type WorkflowFieldMapping = {
     min?: unknown;
     max?: unknown;
     step?: unknown;
+    optionalMedia?: boolean;
+    mediaDefaultMode?: WorkflowMediaSlotMode;
+    mediaPrunePlan?: WorkflowMediaPrunePlan;
 };
 
 export type WorkflowGraphPreview = {
@@ -276,6 +285,7 @@ export function mergeWorkflowFieldMappings(current: unknown, incoming: unknown, 
         "label", "enabled",
         "randomEnabled", "source", "sourceAutomatic", "sourceFromUpstream", "sourceIndex",
         "imageOrder", "required", "bindPrompt", "fieldValue",
+        "optionalMedia", "mediaDefaultMode",
     ];
     return nextFields.map((field) => {
         const previous = previousByKey.get(`${field.nodeId}::${field.fieldName}`);
