@@ -125,7 +125,7 @@ async function runRpc(session, method, params = {}, generation) {
             || Object.keys(config.mcp_servers || {}).some((name) => name !== "infinite-canvas")
             || Object.keys(config.features || {}).some((name) => name.startsWith("web_search"))
             || Object.keys(overrides).length > 0;
-        const search = searchConfigured ? {} : {
+        const search = searchConfigured || method === "thread/resume" ? {} : {
             web_search: "disabled",
             mcp_servers: { "parallel-search": {
                 url: "https://search.parallel.ai/mcp",

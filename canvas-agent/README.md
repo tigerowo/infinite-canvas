@@ -53,11 +53,13 @@ codex mcp add infinite-canvas -- npx -y @tigerowo/canvas-agent@latest mcp
 
 ## 网页对话联网检索
 
-网页通过本地 Canvas Agent 运行 Codex 时，未配置搜索的会话默认使用 [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)：可搜索参考资料、读取网页，搜索使用 Fast 模式，无需另建搜索账号或填写 API Key。请求和所选网页地址会发送到 Parallel；匿名服务有用量限制。
+网页通过本地 Canvas Agent 运行 Codex 时，新建且未配置搜索的会话默认使用 [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp)：可搜索参考资料、读取网页，搜索使用 Fast 模式，无需另建搜索账号或填写 API Key。请求和所选网页地址会发送到 Parallel；匿名服务有用量限制。
 
-服务先读取实际工作目录下的 Codex 配置。已设置的 `web_search`、搜索工具配置、其他 MCP 服务（包括已禁用的服务），以及显式传入的会话配置都会保留，不自动加入 Parallel。未配置时仅为当前会话注册 Parallel，并关闭 Codex 内置搜索；不会在搜索失败后切换到其他服务，也不写入全局搜索配置。
+服务先读取实际工作目录下的 Codex 配置。已设置的 `web_search`、搜索工具配置、其他 MCP 服务（包括已禁用的服务），以及显式传入的会话配置都会保留，不自动加入 Parallel。未配置时仅为新会话注册 Parallel，并关闭 Codex 内置搜索；不会在搜索失败后切换到其他服务，也不写入全局搜索配置。
 
-如需关闭联网检索，在 Codex 配置文件（默认 `~/.codex/config.toml`）设置 `web_search = "disabled"`；设为 `"cached"` 或 `"live"` 则继续使用 Codex 内置搜索。修改后重新发起网页对话。已有 MCP 配置的用户如需使用 Parallel，可运行 `codex mcp add parallel-search --url https://search.parallel.ai/mcp`，沿用 Codex 的服务启停、工具权限和认证配置。
+如需关闭自动检索接入，在 Codex 配置文件（默认 `~/.codex/config.toml`）设置 `web_search = "disabled"`；设为 `"cached"` 或 `"live"` 则继续使用 Codex 内置搜索。修改后新建网页对话。手动注册的 MCP 服务仍由其 `enabled` 设置和工具权限控制。
+
+同一 Codex 进程中继续对话会保留已加载的工具；断开连接或停止 Agent 后恢复历史对话时，沿用 Codex 当前配置，不自动补入 Parallel。Codex 不会持久保存会话级 MCP 覆盖。如需恢复历史对话时也使用 Parallel，可运行 `codex mcp add parallel-search --url https://search.parallel.ai/mcp`，沿用 Codex 的服务启停、工具权限和认证配置。
 
 ## 开发验证
 

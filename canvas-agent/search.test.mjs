@@ -149,7 +149,8 @@ await test("Canvas Agent search", { timeout: 120000 }, async (suite) => {
             return result;
         };
         await post("/connect", { clientId: "test", canvasId: "canvas", tools: [] });
-        const rpc = (method, params = {}) => post("/rpc", { clientId: "test", generation: 0, method, params });
+        let generation = 0;
+        const rpc = (method, params = {}) => post("/rpc", { clientId: "test", generation, method, params });
         const started = await rpc("thread/start", overrides ? { config: overrides } : {});
         const threadId = started.thread.id;
         async function turn() {
@@ -159,10 +160,11 @@ await test("Canvas Agent search", { timeout: 120000 }, async (suite) => {
             assert.equal(completed.params.turn.status, "completed");
         }
         return { requests, models, events, connections, queue, rpc, threadId, turn, started,
+            stop: () => { generation += 1; return rpc("bridge/stop"); },
             configUnchanged: async () => assert.equal(await readFile(join(codexHome, "config.toml"), "utf8"), configuration) };
     }
 
-    await suite.test("fresh configuration searches, fetches URLs and resumes through real Codex", async (t) => {
+    await suite.test("fresh configuration searches, fetches and retains tools on loaded resume", async (t) => {
         const f = await fixture(t, { steps: ["web_search", "web_fetch", "web_search"] });
         await f.turn();
         assert(f.connections.length > 0);
@@ -184,6 +186,11 @@ await test("Canvas Agent search", { timeout: 120000 }, async (suite) => {
         await f.rpc("thread/resume", { threadId: f.threadId });
         await f.turn();
         assert.equal(f.requests.filter((req) => req.body.method === "tools/call").length, 4);
+        await f.stop();
+        await f.rpc("thread/resume", { threadId: f.threadId });
+        await f.turn();
+        assert(!f.models.at(-1).tools.some((tool) => tool.name === "mcp__parallel_search"));
+        assert(f.models.at(-1).tools.some((tool) => tool.type === "web_search"));
         await f.configUnchanged();
     });
     for (const mode of ["disabled", "cached", "live"]) await suite.test("preserves saved web_search=" + mode, async (t) => {
@@ -193,11 +200,18 @@ await test("Canvas Agent search", { timeout: 120000 }, async (suite) => {
         assert.equal(f.models[0].tools.some((tool) => tool.type === "web_search"), mode !== "disabled");
         await f.configUnchanged();
     });
-    await suite.test("preserves per-thread disable override", async (t) => {
+    await suite.test("preserves per-thread disable override and never injects Parallel on cold resume", async (t) => {
         const f = await fixture(t, { overrides: { web_search: "disabled" } });
         await f.turn();
         assert.equal(f.connections.length, 0);
         assert(!f.models[0].tools.some((tool) => tool.type === "web_search"));
+        await f.stop();
+        await f.rpc("thread/resume", { threadId: f.threadId });
+        await f.turn();
+        // Cold resume uses Codex's current config. It must not add a new
+        // external provider to a thread that previously disabled search.
+        assert(!f.models.at(-1).tools.some((tool) => tool.name === "mcp__parallel_search"));
+        assert.equal(f.connections.length, 0);
     });
     await suite.test("keeps existing MCP providers without adding a default", async (t) => {
         const f = await fixture(t, { saved: '[mcp_servers.existing]\ncommand = "not-launched"\nenabled = false' });
