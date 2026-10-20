@@ -119,12 +119,28 @@ async function runRpc(session, method, params = {}, generation) {
     const codex = session.codex;
     await codex.ready;
     if (method === "thread/start" || method === "thread/resume") {
+        const { config } = await codex.request("config/read", { cwd: workspace, includeLayers: false });
+        const overrides = params.config || {};
+        const searchConfigured = config.web_search != null || config.tools?.web_search != null
+            || Object.keys(config.mcp_servers || {}).some((name) => name !== "infinite-canvas")
+            || Object.keys(config.features || {}).some((name) => name.startsWith("web_search"))
+            || Object.keys(overrides).length > 0;
+        const search = searchConfigured ? {} : {
+            web_search: "disabled",
+            mcp_servers: { "parallel-search": {
+                url: "https://search.parallel.ai/mcp",
+                http_headers: { "User-Agent": "infinite-canvas/canvas-agent" },
+                enabled_tools: ["web_search", "web_fetch"],
+                startup_timeout_sec: 20,
+                tool_timeout_sec: 90,
+            } },
+        };
         params = {
             ...params,
             cwd: workspace,
             approvalPolicy: "on-request",
             sandbox: "workspace-write",
-            config: { mcp_servers: { "infinite-canvas": {
+            config: { ...search, ...overrides, mcp_servers: { ...search.mcp_servers, ...overrides.mcp_servers, "infinite-canvas": {
                 command: process.execPath,
                 args: [entry, "mcp"],
                 default_tools_approval_mode: "approve",
