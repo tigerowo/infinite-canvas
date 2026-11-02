@@ -9,9 +9,9 @@ const (
 type AgentSkillFile struct {
 	SkillID   string `json:"-" gorm:"primaryKey"`
 	Path      string `json:"path" gorm:"primaryKey"`
-	Kind      string `json:"kind"`
+	Kind      string `json:"kind" gorm:"size:16"`
 	Content   string `json:"content"`
 	Sort      int    `json:"sort"`
-	CreatedAt string `json:"createdAt"`
-	UpdatedAt string `json:"updatedAt"`
+	CreatedAt string `json:"createdAt" gorm:"size:64"`
+	UpdatedAt string `json:"updatedAt" gorm:"size:64"`
 }

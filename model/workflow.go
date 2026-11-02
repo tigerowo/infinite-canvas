@@ -9,7 +9,7 @@ type CreativeWorkflow struct {
 	Category    string `json:"category" gorm:"index"`
 	Description string `json:"description"`
 	Data        string `json:"data" gorm:"type:text"` // JSON: variables + config
-	CreatedAt   string `json:"createdAt"`
-	UpdatedAt   string `json:"updatedAt"`
-	LastRunAt   string `json:"lastRunAt"`
+	CreatedAt   string `json:"createdAt" gorm:"size:64"`
+	UpdatedAt   string `json:"updatedAt" gorm:"size:64"`
+	LastRunAt   string `json:"lastRunAt" gorm:"size:64"`
 }

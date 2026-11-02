@@ -19,20 +19,20 @@ const (
 type User struct {
 	ID          string     `json:"id" gorm:"primaryKey"`
 	Username    string     `json:"username" gorm:"size:64;uniqueIndex"`
-	Password    string     `json:"password,omitempty"`
-	Email       string     `json:"email"`
-	DisplayName string     `json:"displayName"`
+	Password    string     `json:"password,omitempty" gorm:"size:60"`
+	Email       string     `json:"email" gorm:"size:254"`
+	DisplayName string     `json:"displayName" gorm:"size:191"`
 	AvatarURL   string     `json:"avatarUrl"`
-	Role        UserRole   `json:"role"`
+	Role        UserRole   `json:"role" gorm:"size:32"`
 	Credits     float64    `json:"credits" gorm:"type:decimal(20,2)"`
-	GithubID    string     `json:"githubId"`
+	GithubID    string     `json:"githubId" gorm:"size:191"`
 	LinuxDoID   string     `json:"linuxDoId" gorm:"index"`
-	WechatID    string     `json:"wechatId"`
-	Status      UserStatus `json:"status"`
-	LastLoginAt string     `json:"lastLoginAt"`
+	WechatID    string     `json:"wechatId" gorm:"size:191"`
+	Status      UserStatus `json:"status" gorm:"size:32"`
+	LastLoginAt string     `json:"lastLoginAt" gorm:"size:64"`
 	Extra       string     `json:"extra" gorm:"type:text"`
-	CreatedAt   string     `json:"createdAt"`
-	UpdatedAt   string     `json:"updatedAt"`
+	CreatedAt   string     `json:"createdAt" gorm:"size:64"`
+	UpdatedAt   string     `json:"updatedAt" gorm:"size:64"`
 }
 
 // UserList 用户分页结果。
@@ -84,13 +84,13 @@ const (
 type CreditLog struct {
 	ID        string        `json:"id" gorm:"primaryKey"`
 	UserID    string        `json:"userId" gorm:"index"`
-	Type      CreditLogType `json:"type"`
+	Type      CreditLogType `json:"type" gorm:"size:32"`
 	Amount    float64       `json:"amount" gorm:"type:decimal(20,2)"`
 	Balance   float64       `json:"balance" gorm:"type:decimal(20,2)"`
-	RelatedID string        `json:"relatedId"`
+	RelatedID string        `json:"relatedId" gorm:"size:191"`
 	Remark    string        `json:"remark"`
 	Extra     string        `json:"extra" gorm:"type:text"`
-	CreatedAt string        `json:"createdAt"`
+	CreatedAt string        `json:"createdAt" gorm:"size:64;index"`
 
 	UserDisplayName string `json:"userDisplayName" gorm:"->;-:migration"`
 }

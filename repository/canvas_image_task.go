@@ -22,7 +22,11 @@ func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, e
 
 	return task, db.Model(&model.CanvasImageTask{}).
 		Where("user_id = ? AND id = ? AND status <> ?", task.UserID, task.ID, "cancelled").
-		Select("*").
+		Select(
+			"Status", "Progress", "ResponseBody", "Error", "ErrorDetail",
+			"ImageURL", "ImageURLs", "StorageKey", "Width", "Height",
+			"MimeType", "Bytes", "UpdatedAt", "StartedAt", "CompletedAt",
+		).
 		Updates(&task).Error
 }
 
@@ -87,11 +91,12 @@ func HasActiveCanvasImageTasks() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	var count int64
-	err = db.Model(&model.CanvasImageTask{}).
+	var task model.CanvasImageTask
+	query := db.Model(&model.CanvasImageTask{}).Select("id").
 		Where("status IN ?", []string{"queued", "processing", "running", "in_progress"}).
-		Count(&count).Error
-	return count > 0, err
+		Limit(1).
+		Find(&task)
+	return query.RowsAffected > 0, query.Error
 }
 
 func DeleteFinishedCanvasImageTasksBefore(before string) error {

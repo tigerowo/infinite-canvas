@@ -11,6 +11,8 @@ description: 当前后端主要数据表与字段说明
 
 后端使用 GORM 管理数据库连接和表结构迁移。
 
+模型中的短字符串字段通过 `gorm:"size:N"` 明确最大长度，在 MySQL、PostgreSQL 中使用对应的 `varchar`；SQLite 仍使用 `text`。正文、JSON、URL 等长内容继续使用文本类型。
+
 支持的存储驱动：
 
 - `sqlite`

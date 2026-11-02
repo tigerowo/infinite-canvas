@@ -5,10 +5,10 @@ type AICallLog struct {
 	UserID          string `json:"userId" gorm:"index"`
 	UserDisplayName string `json:"userDisplayName" gorm:"->;-:migration"`
 	Endpoint        string `json:"endpoint" gorm:"index"`
-	Method          string `json:"method"`
+	Method          string `json:"method" gorm:"size:16"`
 	Model           string `json:"model" gorm:"index"`
 	ChannelID       string `json:"channelId" gorm:"index"`
-	ChannelName     string `json:"channelName"`
+	ChannelName     string `json:"channelName" gorm:"size:191"`
 	Status          int    `json:"status" gorm:"index"`
 	Failed          bool   `json:"failed" gorm:"-"`
 	DurationMs      int64  `json:"durationMs"`
