@@ -719,7 +719,7 @@ export default function VideoPage() {
                     ref: snapshot.workflowRef,
                     expectedCapability: "video",
                     prompt: snapshot.text,
-                    systemPrompt: snapshot.config.systemPrompts.video || snapshot.config.systemPrompt,
+                    systemPrompt: snapshot.config.systemPrompt,
                     referenceImages: workflowImages,
                     referenceVideos: workflowVideos,
                     referenceAudios: workflowAudios,
@@ -2735,7 +2735,7 @@ function isRecoverableBackendVideoTask(task: VideoResponse) {
 }
 
 function isCloudVideo(video: GeneratedVideo) {
-    return Boolean(video.storageKey);
+    return typeof video.storageKey === "string" && video.storageKey.startsWith("server:");
 }
 
 function errorMessage(error: unknown) {

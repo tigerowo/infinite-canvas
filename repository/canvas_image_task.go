@@ -11,7 +11,7 @@ func SaveCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, err
 	if err != nil {
 		return task, err
 	}
-	return task, db.Save(&task).Error
+	return task, db.Create(&task).Error
 }
 
 func UpdateCanvasImageTask(task model.CanvasImageTask) (model.CanvasImageTask, error) {

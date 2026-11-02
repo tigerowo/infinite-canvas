@@ -134,7 +134,7 @@ func AgentSkillsInitialized() (bool, error) {
 		return false, err
 	}
 	var count int64
-	err = db.Model(&model.Setting{}).Where("key = ?", model.SettingKeyAgentSkillsInitialized).Count(&count).Error
+	err = db.Model(&model.Setting{}).Where(map[string]any{"key": model.SettingKeyAgentSkillsInitialized}).Count(&count).Error
 	return count > 0, err
 }
 

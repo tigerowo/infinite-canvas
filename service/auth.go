@@ -55,7 +55,6 @@ func EnsureDefaultAdmin() error {
 		Username:  strings.TrimSpace(config.Cfg.AdminUsername),
 		Password:  hash,
 		Role:      model.UserRoleAdmin,
-		AffCode:   newAffCode(),
 		Status:    model.UserStatusActive,
 		CreatedAt: now(),
 		UpdatedAt: now(),
@@ -94,7 +93,6 @@ func Register(username string, password string) (model.AuthSession, error) {
 		Username:  username,
 		Password:  hash,
 		Role:      model.UserRoleUser,
-		AffCode:   newAffCode(),
 		Status:    model.UserStatusActive,
 		CreatedAt: now(),
 		UpdatedAt: now(),
@@ -185,7 +183,6 @@ func LoginWithLinuxDo(r *http.Request, code string, state string) (model.AuthSes
 			DisplayName: strings.TrimSpace(profile.Name),
 			AvatarURL:   linuxDoAvatar(profile.AvatarTemplate),
 			Role:        model.UserRoleUser,
-			AffCode:     newAffCode(),
 			LinuxDoID:   linuxDoID,
 			Status:      model.UserStatusActive,
 			CreatedAt:   now(),
@@ -270,7 +267,6 @@ func SaveUser(user model.User, password string) (model.User, error) {
 	isCreate := user.ID == ""
 	if isCreate {
 		user.ID = newID("user")
-		user.AffCode = newAffCode()
 		user.CreatedAt = now()
 	} else if saved, ok, err := repository.GetUserByID(user.ID); err != nil {
 		return user, err
@@ -280,12 +276,6 @@ func SaveUser(user model.User, password string) (model.User, error) {
 		user.AvatarURL = saved.AvatarURL
 		user.Credits = saved.Credits
 		user.Extra = saved.Extra
-		if user.AffCode == "" {
-			user.AffCode = saved.AffCode
-		}
-		if user.AffCode == "" {
-			user.AffCode = newAffCode()
-		}
 		if user.LinuxDoID == "" {
 			user.LinuxDoID = saved.LinuxDoID
 		}
@@ -462,16 +452,9 @@ func newID(prefix string) string {
 	return prefix + "-" + uuid.NewString()
 }
 
-func newAffCode() string {
-	return strings.ToUpper(strings.ReplaceAll(uuid.NewString()[:8], "-", ""))
-}
-
 func normalizeUserDefaults(user *model.User) {
 	if user.Status == "" {
 		user.Status = model.UserStatusActive
-	}
-	if user.AffCode == "" {
-		user.AffCode = newAffCode()
 	}
 }
 

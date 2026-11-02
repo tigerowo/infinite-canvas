@@ -22,11 +22,11 @@ export default function AdminAICallLogsPage() {
     const [localDirectReportEnabled, setLocalDirectReportEnabled] = useState(false);
     const [savingLocalDirectReport, setSavingLocalDirectReport] = useState(false);
 
-    const loadLogs = async () => {
+    const loadLogs = async (nextKeyword = keyword) => {
         if (!token) return;
         setLoading(true);
         try {
-            const result = await fetchAdminAICallLogs(token, { keyword, page, pageSize });
+            const result = await fetchAdminAICallLogs(token, { keyword: nextKeyword, page, pageSize });
             setLogs(result.items);
             setTotal(result.total);
         } catch (error) {
@@ -134,7 +134,7 @@ export default function AdminAICallLogsPage() {
                             <Button htmlType="submit" type="primary" icon={<SearchOutlined />}>
                                 查询
                             </Button>
-                            <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(""); setPage(1); void loadLogs(); }}>
+                            <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(""); if (page === 1) void loadLogs(""); else setPage(1); }}>
                                 重置
                             </Button>
                             <div className="flex h-8 items-center gap-2 rounded-md border border-stone-200 px-3 dark:border-stone-800">

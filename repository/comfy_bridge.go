@@ -122,7 +122,7 @@ func DeleteComfyBridge(id, scope, ownerID string) ([]string, error) {
 		switch scope {
 		case "system":
 			var setting model.Setting
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&setting, "key = ?", model.SettingKeyPrivate).Error
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(map[string]any{"key": model.SettingKeyPrivate}).First(&setting).Error
 			if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}

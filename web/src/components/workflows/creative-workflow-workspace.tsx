@@ -593,7 +593,8 @@ export function CreativeWorkflowWorkspace({
         if (!runningWorkflow) return;
         const promptModel = runningWorkflow.seriesConfig.promptModel || effectiveConfig.textModel || effectiveConfig.model;
         const promptChannelId = runningWorkflow.seriesConfig.promptChannelId || effectiveConfig.textChannelId;
-        const textConfig = { ...effectiveConfig, model: promptModel, textModel: promptModel, textChannelId: promptChannelId, activeChannelId: promptChannelId, systemPrompt: effectiveConfig.systemPrompts.workflow || effectiveConfig.systemPrompt };
+        const systemPrompt = effectiveConfig.systemPrompts.workflow || effectiveConfig.systemPrompt;
+        const textConfig = { ...effectiveConfig, model: promptModel, textModel: promptModel, textChannelId: promptChannelId, activeChannelId: promptChannelId, systemPrompt, systemPrompts: { ...effectiveConfig.systemPrompts, text: systemPrompt } };
         if (!isAiConfigReady(textConfig, promptModel)) {
             message.warning("请先完成文本模型配置");
             openConfigDialog(true);
@@ -2019,6 +2020,7 @@ function resolveWorkflowImageChannelId(config: AiConfig, model: string, ...prefe
 }
 
 function buildRunConfig(baseConfig: AiConfig, workflowConfig: WorkflowGenerationConfig, runtime: { model: string; apiMode: AiConfig["apiMode"]; channelId: string }): AiConfig {
+    const systemPrompt = workflowConfig.systemPrompt || baseConfig.systemPrompts.workflow || baseConfig.systemPrompt;
     return {
         ...baseConfig,
         ...workflowConfig,
@@ -2027,7 +2029,8 @@ function buildRunConfig(baseConfig: AiConfig, workflowConfig: WorkflowGeneration
         imageChannelId: runtime.channelId,
         activeChannelId: runtime.channelId,
         apiMode: runtime.apiMode,
-        systemPrompt: workflowConfig.systemPrompt || baseConfig.systemPrompts.workflow || baseConfig.systemPrompt,
+        systemPrompt,
+        systemPrompts: { ...baseConfig.systemPrompts, image: systemPrompt },
         count: workflowConfig.count || "1",
     };
 }

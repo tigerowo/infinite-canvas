@@ -235,7 +235,8 @@ function resolveEffectiveConfig(config: AiConfig, modelChannel: AdminPublicSetti
         videoModel: videoModels.includes(config.videoModel) ? config.videoModel : fallbackVideoModel,
         textModel: textModels.includes(config.textModel) ? config.textModel : fallbackTextModel || fallbackModel,
         audioModel: audioModels.includes(config.audioModel) ? config.audioModel : fallbackAudioModel,
-        systemPrompt: modelChannel.systemPrompt,
+        systemPrompt: "",
+        systemPrompts: { ...defaultConfig.systemPrompts, ...(modelChannel.systemPrompts || {}) },
         publicChannels: modelChannel.channels || [],
     };
 }
@@ -462,7 +463,7 @@ export const useConfigStore = create<ConfigStore>()(
                         glmTtsFormat: config.glmTtsFormat || defaultConfig.glmTtsFormat,
                         glmTtsSpeed: config.glmTtsSpeed || defaultConfig.glmTtsSpeed,
                         geminiTtsVoice: config.geminiTtsVoice || defaultConfig.geminiTtsVoice,
-                        systemPrompts: config.systemPrompts?.image ? config.systemPrompts : defaultConfig.systemPrompts,
+                        systemPrompts: { ...defaultConfig.systemPrompts, ...(config.systemPrompts || {}) },
                         audioInstructions: config.audioInstructions || "",
                         videoSeconds: config.videoSeconds || "6",
                         videoMode: config.videoMode || "std",

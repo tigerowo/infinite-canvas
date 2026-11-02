@@ -18,16 +18,13 @@ const (
 // User 系统用户。
 type User struct {
 	ID          string     `json:"id" gorm:"primaryKey"`
-	Username    string     `json:"username" gorm:"uniqueIndex"`
+	Username    string     `json:"username" gorm:"size:64;uniqueIndex"`
 	Password    string     `json:"password,omitempty"`
 	Email       string     `json:"email"`
 	DisplayName string     `json:"displayName"`
 	AvatarURL   string     `json:"avatarUrl"`
 	Role        UserRole   `json:"role"`
 	Credits     float64    `json:"credits" gorm:"type:decimal(20,2)"`
-	AffCode     string     `json:"affCode" gorm:"uniqueIndex"`
-	AffCount    int        `json:"affCount"`
-	InviterID   string     `json:"inviterId"`
 	GithubID    string     `json:"githubId"`
 	LinuxDoID   string     `json:"linuxDoId" gorm:"index"`
 	WechatID    string     `json:"wechatId"`

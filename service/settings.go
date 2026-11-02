@@ -180,13 +180,13 @@ func normalizePublicSettingWithChannels(setting model.PublicSetting, channels []
 		setting.ModelChannel.Channels = []model.PublicModelChannelInfo{}
 	}
 	if strings.TrimSpace(setting.ModelChannel.SystemPrompts.Image) == "" {
-		setting.ModelChannel.SystemPrompts.Image = firstNonEmpty(setting.ModelChannel.SystemPrompt, DefaultSystemPrompts().Image)
+		setting.ModelChannel.SystemPrompts.Image = DefaultSystemPrompts().Image
 	}
 	if strings.TrimSpace(setting.ModelChannel.SystemPrompts.Video) == "" {
 		setting.ModelChannel.SystemPrompts.Video = DefaultSystemPrompts().Video
 	}
 	if strings.TrimSpace(setting.ModelChannel.SystemPrompts.Text) == "" {
-		setting.ModelChannel.SystemPrompts.Text = firstNonEmpty(setting.ModelChannel.SystemPrompt, DefaultSystemPrompts().Text)
+		setting.ModelChannel.SystemPrompts.Text = DefaultSystemPrompts().Text
 	}
 	if strings.TrimSpace(setting.ModelChannel.SystemPrompts.Workflow) == "" {
 		setting.ModelChannel.SystemPrompts.Workflow = DefaultSystemPrompts().Workflow
@@ -338,7 +338,7 @@ func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, in
 			return item, true
 		}
 	}
-	if index < len(saved) {
+	if index >= 0 && index < len(saved) {
 		return saved[index], true
 	}
 	return model.ModelChannel{}, false

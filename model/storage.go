@@ -5,7 +5,7 @@ type StorageObject struct {
 	ID         string `json:"id" gorm:"primaryKey"`
 	ProviderID string `json:"providerId" gorm:"index"`
 	Bucket     string `json:"bucket"`
-	ObjectKey  string `json:"objectKey" gorm:"uniqueIndex"`
+	ObjectKey  string `json:"objectKey"`
 	PublicURL  string `json:"publicUrl"`
 	MimeType   string `json:"mimeType"`
 	Bytes      int64  `json:"bytes"`

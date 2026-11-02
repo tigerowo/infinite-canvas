@@ -22,9 +22,6 @@ export type AdminUser = {
     avatarUrl: string;
     role: "user" | "admin";
     credits: number;
-    affCode: string;
-    affCount: number;
-    inviterId: string;
     linuxDoId: string;
     status: "active" | "ban";
     lastLoginAt: string;

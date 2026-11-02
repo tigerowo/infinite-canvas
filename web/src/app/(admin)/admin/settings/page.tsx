@@ -17,7 +17,7 @@ import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, sa
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
-import { filterChannelModelsByCapability, type ModelCapabilities } from "@/stores/use-config-store";
+import { filterChannelModelsByCapability, useConfigStore, type ModelCapabilities } from "@/stores/use-config-store";
 
 const CodeMirror = dynamic(() => import("@uiw/react-codemirror"), { ssr: false });
 const WorkflowChannelPane = dynamic(() => import("@/components/workflow/workflow-channel-pane").then((module) => module.WorkflowChannelPane), { ssr: false });
@@ -187,6 +187,7 @@ export default function AdminSettingsPage() {
                 public: JSON.stringify(merged.public, null, 2),
                 private: JSON.stringify(merged.private, null, 2),
             });
+            await useConfigStore.getState().loadPublicSettings().catch(() => undefined);
             message.success("已保存");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "保存失败");
@@ -367,6 +368,7 @@ export default function AdminSettingsPage() {
             public: JSON.stringify(merged.public, null, 2),
             private: JSON.stringify(merged.private, null, 2),
         });
+        await useConfigStore.getState().loadPublicSettings().catch(() => undefined);
         message.success("已保存");
     }
 
@@ -1171,9 +1173,9 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             channels: setting.modelChannel?.channels || [],
             systemPrompts: {
                 ...emptySettings.public.modelChannel.systemPrompts,
-                image: setting.modelChannel?.systemPrompts?.image || setting.modelChannel?.systemPrompt || "",
+                image: setting.modelChannel?.systemPrompts?.image || "",
                 video: setting.modelChannel?.systemPrompts?.video || "",
-                text: setting.modelChannel?.systemPrompts?.text || setting.modelChannel?.systemPrompt || "",
+                text: setting.modelChannel?.systemPrompts?.text || "",
                 workflow: setting.modelChannel?.systemPrompts?.workflow || "",
                 workflowAgent: setting.modelChannel?.systemPrompts?.workflowAgent || "",
             },
@@ -1384,7 +1386,6 @@ async function collectSettings(form: any, editorMode: Record<SettingsTabKey, Edi
     }
     values.public.modelChannel.availableModels = filterModels(values.public.modelChannel.availableModels, collectChannelModels(values.private.channels));
     values.public.modelChannel.availableWorkflows = filterModels(values.public.modelChannel.availableWorkflows, collectChannelWorkflows(values.private.channels).map((item) => item.value));
-    values.public.modelChannel.systemPrompt = values.public.modelChannel.systemPrompts.image || values.public.modelChannel.systemPrompts.text || "";
     return normalizeSettings(values);
 }
 
