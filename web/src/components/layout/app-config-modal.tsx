@@ -313,7 +313,7 @@ export function AppConfigModal() {
 
     const closeLocalModelSelector = () => setModelSelectChannelId("");
 
-    const confirmLocalModelSelector = async (models: string[], modelCapabilities: ModelCapabilities, source: string) => {
+    const confirmLocalModelSelector = async (models: string[], modelAliases: Record<string, string>, modelCapabilities: ModelCapabilities, source: string) => {
         if (!modelSelectChannelId) return;
         const accountId = user?.id || "guest";
         if (parameterTranslation !== undefined && source !== parameterTranslation) {
@@ -323,7 +323,7 @@ export function AppConfigModal() {
             await useChannelTranslationStore.getState().save(accountId, modelSelectChannelId, source);
             if ((useUserStore.getState().user?.id || "guest") !== accountId) throw new Error("登录状态已变化");
         }
-        patchLocalChannel(modelSelectChannelId, { models, modelCapabilities });
+        patchLocalChannel(modelSelectChannelId, { models, modelAliases, modelCapabilities });
         closeLocalModelSelector();
     };
 
@@ -691,6 +691,7 @@ export function AppConfigModal() {
                     channel={modelSelectChannel}
                     parameterTranslation={parameterTranslation}
                     models={modelSelectChannel.models}
+                    modelAliases={modelSelectChannel.modelAliases}
                     onCancel={closeLocalModelSelector}
                     onConfirm={confirmLocalModelSelector}
                     onFetchModels={fetchLocalModelList}
