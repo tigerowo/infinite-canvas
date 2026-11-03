@@ -55,7 +55,7 @@ const emptySettings: AdminSettings = {
     },
     private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
-const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
+const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], modelAliases: {}, weight: 1, timeout: 600, enabled: true, remark: "" };
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "", allowPrivateNetwork: false };
 
@@ -255,7 +255,7 @@ export default function AdminSettingsPage() {
 
     const saveChannel = async () => {
         const values = await channelForm.validateFields();
-        const channel = normalizeChannel(isWorkflowProtocol(values.protocol) ? { ...workflowChannelDraft, ...channelForm.getFieldsValue(true), ...values } : { ...values, modelCapabilities: channelForm.getFieldValue("modelCapabilities"), parameterTranslation: channelForm.getFieldValue("parameterTranslation") });
+        const channel = normalizeChannel(isWorkflowProtocol(values.protocol) ? { ...workflowChannelDraft, ...channelForm.getFieldsValue(true), ...values } : { ...values, modelAliases: channelForm.getFieldValue("modelAliases"), modelCapabilities: channelForm.getFieldValue("modelCapabilities"), parameterTranslation: channelForm.getFieldValue("parameterTranslation") });
         if (channel.protocol === "runninghub" && (!channel.baseUrl.trim() || (!channel.apiKey.trim() && editingChannelIndex === null))) {
             message.error("请填写 RunningHub Base URL 和积分 API Key");
             return;
@@ -286,8 +286,8 @@ export default function AdminSettingsPage() {
 
     const closeChannelModelSelector = () => setIsModelSelectorOpen(false);
 
-    const confirmChannelModelSelector = (models: string[], modelCapabilities: ModelCapabilities, parameterTranslation: string) => {
-        channelForm.setFieldsValue({ models, modelCapabilities, parameterTranslation });
+    const confirmChannelModelSelector = (models: string[], modelAliases: Record<string, string>, modelCapabilities: ModelCapabilities, parameterTranslation: string) => {
+        channelForm.setFieldsValue({ models, modelAliases, modelCapabilities, parameterTranslation });
         rememberModels(models);
         closeChannelModelSelector();
     };
@@ -1074,6 +1074,7 @@ export default function AdminSettingsPage() {
                         channel={channelForm.getFieldsValue(true)}
                         parameterTranslation={channelForm.getFieldValue("parameterTranslation") || ""}
                         models={channelForm.getFieldValue("models") || []}
+                        modelAliases={channelForm.getFieldValue("modelAliases") || {}}
                         onCancel={closeChannelModelSelector}
                         onConfirm={confirmChannelModelSelector}
                         onFetchModels={fetchChannelModelList}
@@ -1266,6 +1267,7 @@ function normalizeChannel(item: Partial<AdminModelChannel> = {}): AdminModelChan
         baseUrl: item.baseUrl || "",
         apiKey: item.apiKey || "",
         models: item.models || [],
+        modelAliases: item.modelAliases || {},
         modelCapabilities: item.modelCapabilities || {},
         parameterTranslation: item.parameterTranslation || "",
         uploadApiKey: item.uploadApiKey || "",

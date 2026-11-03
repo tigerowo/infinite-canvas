@@ -11,8 +11,8 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"sort"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -277,6 +277,8 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
 		}
+		// 渠道模型别名和模型列表保持同一事实来源，避免保存无效键。
+		setting.Channels[i].ModelAliases = normalizeModelAliases(setting.Channels[i].ModelAliases, setting.Channels[i].Models)
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
 		}
@@ -462,6 +464,22 @@ func filterEnabledModels(models []string, options []string) []string {
 	return result
 }
 
+func normalizeModelAliases(aliases map[string]string, models []string) map[string]string {
+	result := map[string]string{}
+	allowed := map[string]bool{}
+	for _, modelName := range uniqueModelNames(models) {
+		allowed[modelName] = true
+	}
+	for modelName, alias := range aliases {
+		name := strings.TrimSpace(modelName)
+		if name == "" || !allowed[name] {
+			continue
+		}
+		result[name] = strings.TrimSpace(alias)
+	}
+	return result
+}
+
 func uniqueModelNames(models []string) []string {
 	result := []string{}
 	seen := map[string]bool{}
@@ -524,6 +542,7 @@ func normalizeModelChannel(channel model.ModelChannel) model.ModelChannel {
 	if channel.Models == nil {
 		channel.Models = []string{}
 	}
+	channel.ModelAliases = normalizeModelAliases(channel.ModelAliases, channel.Models)
 	if channel.Weight <= 0 {
 		channel.Weight = 1
 	}
@@ -1178,6 +1197,7 @@ func publicChannelInfos(channels []model.ModelChannel, availableModels, availabl
 				continue
 			}
 		}
+		modelAliases := normalizeModelAliases(channel.ModelAliases, models)
 		modelCapabilities := map[string]string{}
 		for _, name := range models {
 			if capability, ok := channel.ModelCapabilities[name]; ok {
@@ -1193,6 +1213,7 @@ func publicChannelInfos(channels []model.ModelChannel, availableModels, availabl
 			Name:                       channel.Name,
 			BaseURL:                    channel.BaseURL,
 			Models:                     models,
+			ModelAliases:               modelAliases,
 			Weight:                     channel.Weight,
 			Timeout:                    channel.Timeout,
 			Enabled:                    channel.Enabled,

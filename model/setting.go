@@ -15,21 +15,22 @@ const (
 
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
-	ID           string          `json:"id"`
-	Protocol     string          `json:"protocol"`
-	Name         string          `json:"name"`
-	BaseURL      string          `json:"baseUrl"`
-	APIKey       string          `json:"apiKey"`
-	Models       []string        `json:"models"`
-	Weight       int             `json:"weight"`
-	Timeout      int             `json:"timeout"`
-	Enabled      bool            `json:"enabled"`
-	Remark       string          `json:"remark"`
-	UploadAPIKey string          `json:"uploadApiKey,omitempty"`
-	BridgeID     string          `json:"bridgeId,omitempty"`
-	ComfyURL     string          `json:"comfyUrl,omitempty"`
-	WorkflowDir  string          `json:"workflowDir,omitempty"`
-	Workflows    []WorkflowEntry `json:"workflows,omitempty"`
+	ID           string            `json:"id"`
+	Protocol     string            `json:"protocol"`
+	Name         string            `json:"name"`
+	BaseURL      string            `json:"baseUrl"`
+	APIKey       string            `json:"apiKey"`
+	Models       []string          `json:"models"`
+	ModelAliases map[string]string `json:"modelAliases,omitempty"`
+	Weight       int               `json:"weight"`
+	Timeout      int               `json:"timeout"`
+	Enabled      bool              `json:"enabled"`
+	Remark       string            `json:"remark"`
+	UploadAPIKey string            `json:"uploadApiKey,omitempty"`
+	BridgeID     string            `json:"bridgeId,omitempty"`
+	ComfyURL     string            `json:"comfyUrl,omitempty"`
+	WorkflowDir  string            `json:"workflowDir,omitempty"`
+	Workflows    []WorkflowEntry   `json:"workflows,omitempty"`
 
 	ModelCapabilities    map[string]string `json:"modelCapabilities,omitempty"`
 	ParameterTranslation string            `json:"parameterTranslation,omitempty"`
@@ -77,12 +78,12 @@ type WorkflowEntry struct {
 }
 
 type WorkflowSummary struct {
-	Provider   string  `json:"provider"`
-	Kind       string  `json:"kind"`
-	WorkflowID string  `json:"workflowId"`
-	Title      string  `json:"title"`
-	Capability string  `json:"capability"`
-	Enabled    bool    `json:"enabled"`
+	Provider   string `json:"provider"`
+	Kind       string `json:"kind"`
+	WorkflowID string `json:"workflowId"`
+	Title      string `json:"title"`
+	Capability string `json:"capability"`
+	Enabled    bool   `json:"enabled"`
 }
 
 // ModelCost 模型算力点配置。
@@ -123,6 +124,7 @@ type PublicModelChannelInfo struct {
 	Name                       string            `json:"name"`
 	BaseURL                    string            `json:"baseUrl"`
 	Models                     []string          `json:"models"`
+	ModelAliases               map[string]string `json:"modelAliases,omitempty"`
 	Weight                     int               `json:"weight"`
 	Timeout                    int               `json:"timeout"`
 	Enabled                    bool              `json:"enabled"`
@@ -191,25 +193,25 @@ type PrivateStorageSetting struct {
 }
 
 type StorageProvider struct {
-	ID                string `json:"id"`
-	Name              string `json:"name"`
-	Type              string `json:"type"`
-	Endpoint          string `json:"endpoint"`
-	AllowPrivateNetwork bool `json:"allowPrivateNetwork,omitempty"`
-	Region            string `json:"region"`
-	Bucket            string `json:"bucket"`
-	AccessKeyID       string `json:"accessKeyId"`
-	SecretAccessKey   string `json:"secretAccessKey"`
-	PublicBaseURL     string `json:"publicBaseUrl"`
-	PathPrefix        string `json:"pathPrefix"`
-	Username          string `json:"username"`
-	Password          string `json:"password"`
-	Weight            int    `json:"weight"`
-	Enabled           bool   `json:"enabled"`
-	OwnerUserID       string `json:"ownerUserId"`
-	CapacityBytes     int64  `json:"capacityBytes"`
-	CapacityCheckedAt string `json:"capacityCheckedAt"`
-	CapacityExceeded  bool   `json:"capacityExceeded"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Type                string `json:"type"`
+	Endpoint            string `json:"endpoint"`
+	AllowPrivateNetwork bool   `json:"allowPrivateNetwork,omitempty"`
+	Region              string `json:"region"`
+	Bucket              string `json:"bucket"`
+	AccessKeyID         string `json:"accessKeyId"`
+	SecretAccessKey     string `json:"secretAccessKey"`
+	PublicBaseURL       string `json:"publicBaseUrl"`
+	PathPrefix          string `json:"pathPrefix"`
+	Username            string `json:"username"`
+	Password            string `json:"password"`
+	Weight              int    `json:"weight"`
+	Enabled             bool   `json:"enabled"`
+	OwnerUserID         string `json:"ownerUserId"`
+	CapacityBytes       int64  `json:"capacityBytes"`
+	CapacityCheckedAt   string `json:"capacityCheckedAt"`
+	CapacityExceeded    bool   `json:"capacityExceeded"`
 }
 
 type StorageCapacityCheckSetting struct {

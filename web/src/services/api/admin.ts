@@ -185,6 +185,7 @@ export type AdminModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelAliases?: Record<string, string>;
     modelCapabilities?: ModelCapabilities;
     parameterTranslation?: string;
     weight: number;
@@ -232,6 +233,7 @@ export type AdminPublicModelChannelInfo = {
     name: string;
     baseUrl: string;
     models: string[];
+    modelAliases?: Record<string, string>;
     modelCapabilities?: ModelCapabilities;
     weight: number;
     timeout: number;
