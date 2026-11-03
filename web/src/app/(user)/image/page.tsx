@@ -900,9 +900,7 @@ export default function ImagePage() {
 
     const persistImageHistory = async (nextLogs: GenerationLog[], _nextCategories: GenerationCategory[]) => {
         if (!token || !accountHistorySyncEnabledRef.current) return;
-        await saveImageGenerationLogs(token, nextLogs.map(serializeLog)).catch(() => {
-            accountHistorySyncEnabledRef.current = false;
-        });
+        await saveImageGenerationLogs(token, nextLogs.map(serializeLog)).catch(() => undefined);
     };
 
     const syncBackendImageTasks = async (baseLogs?: GenerationLog[]) => {

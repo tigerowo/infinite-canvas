@@ -25,6 +25,7 @@ type StorageObjectProviderInput struct {
 	Endpoint        string `json:"endpoint"`
 	Region          string `json:"region"`
 	Bucket          string `json:"bucket"`
+	BucketInHost    bool   `json:"bucketInHost,omitempty"`
 	AccessKeyID     string `json:"accessKeyId"`
 	SecretAccessKey string `json:"secretAccessKey"`
 	PublicBaseURL   string `json:"publicBaseUrl"`

@@ -193,6 +193,37 @@ func UploadStorageObject(ctx context.Context, filename string, contentType strin
 	return UploadStorageObjectWithProvider(ctx, filename, contentType, data, nil)
 }
 
+// UploadTemporaryFile 原样转发上传请求并返回临时下载地址。
+func UploadTemporaryFile(ctx context.Context, body io.Reader, contentType string, contentLength int64) (string, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://tmpfile.link/api/upload", body)
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Content-Type", contentType)
+	request.ContentLength = contentLength
+
+	response, err := SafeProxyHTTPClient().Do(request)
+	if err != nil {
+		return "", safeMessageError{message: "匿名上传服务不可达"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return "", safeMessageError{message: "匿名上传失败"}
+	}
+
+	var result struct {
+		URL string `json:"downloadLinkEncoded"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+		return "", safeMessageError{message: "匿名上传结果无效"}
+	}
+	result.URL = strings.TrimSpace(result.URL)
+	if result.URL == "" {
+		return "", safeMessageError{message: "匿名上传未返回链接"}
+	}
+	return result.URL, nil
+}
+
 // UploadStorageObjectWithProvider 上传对象到存储（可选用户自定义 Provider）。
 func UploadStorageObjectWithProvider(ctx context.Context, filename string, contentType string, data []byte, providerInput *StorageObjectProviderInput) (UploadedStorageObject, error) {
 	settings, err := repository.GetSettings()
@@ -231,13 +262,14 @@ func UploadStorageObjectWithProvider(ctx context.Context, filename string, conte
 	nowTime := time.Now()
 	objectKey := strings.Trim(strings.Trim(provider.PathPrefix, "/")+"/"+userID+"/"+nowTime.Format("2006/01/02")+"/"+objectID+ext, "/")
 	sum := sha256.Sum256(data)
-	if err := putStorageObject(provider, objectKey, contentType, data); err != nil {
+	payloadHash := hex.EncodeToString(sum[:])
+	if err := putStorageObject(provider, objectKey, contentType, data, payloadHash); err != nil {
 		return UploadedStorageObject{}, err
 	}
 	publicURL := objectURL(provider, objectKey)
 	object := model.StorageObject{
 		ID: objectID, ProviderID: provider.ID, Bucket: provider.Bucket, ObjectKey: objectKey, PublicURL: publicURL,
-		MimeType: contentType, Bytes: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), CreatedBy: userID, CreatedAt: now(),
+		MimeType: contentType, Bytes: int64(len(data)), SHA256: payloadHash, CreatedBy: userID, CreatedAt: now(),
 	}
 	if _, err := repository.SaveStorageObject(object); err != nil {
 		return UploadedStorageObject{}, err
@@ -620,10 +652,10 @@ func storageProviderConfigured(provider model.StorageProvider) bool {
 	}
 }
 
-func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
+func putStorageObject(provider model.StorageProvider, objectKey string, contentType string, data []byte, payloadHash string) error {
 	switch provider.Type {
 	case model.StorageProviderTypeS3:
-		return putS3Object(provider, objectKey, contentType, data)
+		return putS3Object(provider, objectKey, contentType, data, payloadHash)
 	case model.StorageProviderTypeWebDAV:
 		return putWebDAVObject(provider, objectKey, data)
 	default:
@@ -654,8 +686,8 @@ func measureStorageProvider(provider model.StorageProvider) (int64, error) {
 }
 
 // putS3Object 上传对象到 S3 兼容存储。
-func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte) error {
-	request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)))
+func putS3Object(provider model.StorageProvider, objectKey string, contentType string, data []byte, payloadHash string) error {
+	request, err := newS3Request(http.MethodPut, provider, objectKey, bytes.NewReader(data), int64(len(data)), payloadHash)
 	if err != nil {
 		return err
 	}
@@ -753,19 +785,26 @@ func measureS3Provider(provider model.StorageProvider) (int64, error) {
 	}
 }
 
-func newS3Request(method string, provider model.StorageProvider, objectKey string, body io.Reader, contentLength int64) (*http.Request, error) {
-	return newS3RequestWithQuery(method, provider, objectKey, nil, body, contentLength)
+func newS3Request(method string, provider model.StorageProvider, objectKey string, body io.Reader, contentLength int64, payloadHashes ...string) (*http.Request, error) {
+	return newS3RequestWithQuery(method, provider, objectKey, nil, body, contentLength, payloadHashes...)
 }
 
-func newS3RequestWithQuery(method string, provider model.StorageProvider, objectKey string, query url.Values, body io.Reader, contentLength int64) (*http.Request, error) {
+func newS3RequestWithQuery(method string, provider model.StorageProvider, objectKey string, query url.Values, body io.Reader, contentLength int64, payloadHashes ...string) (*http.Request, error) {
 	endpoint, err := url.Parse(strings.TrimRight(provider.Endpoint, "/"))
 	if err != nil {
 		return nil, err
 	}
 	escapedKey := strings.TrimLeft(objectKey, "/")
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/" + provider.Bucket + "/" + escapedKey
+	basePath := strings.TrimRight(endpoint.Path, "/")
+	if provider.BucketInHost {
+		endpoint.Host = provider.Bucket + "." + endpoint.Host
+		endpoint.Path = basePath + "/" + escapedKey
+	} else {
+		endpoint.Path = basePath + "/" + provider.Bucket + "/" + escapedKey
+	}
+	endpoint.RawPath = strings.ReplaceAll(strings.ReplaceAll(url.QueryEscape(endpoint.Path), "+", "%20"), "%2F", "/")
 	if query != nil {
-		endpoint.RawQuery = query.Encode()
+		endpoint.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
 	}
 	request, err := http.NewRequest(method, endpoint.String(), body)
 	if err != nil {
@@ -774,15 +813,18 @@ func newS3RequestWithQuery(method string, provider model.StorageProvider, object
 	if contentLength > 0 {
 		request.ContentLength = contentLength
 	}
-	signS3Request(request, provider, escapedKey)
+	payloadHash := "UNSIGNED-PAYLOAD"
+	if len(payloadHashes) > 0 {
+		payloadHash = payloadHashes[0]
+	}
+	signS3Request(request, provider, payloadHash)
 	return request, nil
 }
 
-func signS3Request(request *http.Request, provider model.StorageProvider, objectKey string) {
+func signS3Request(request *http.Request, provider model.StorageProvider, payloadHash string) {
 	nowTime := time.Now().UTC()
 	amzDate := nowTime.Format("20060102T150405Z")
 	dateStamp := nowTime.Format("20060102")
-	payloadHash := "UNSIGNED-PAYLOAD"
 	region := provider.Region
 	if region == "" {
 		region = "auto"
@@ -790,7 +832,7 @@ func signS3Request(request *http.Request, provider model.StorageProvider, object
 	request.Header.Set("Host", request.URL.Host)
 	request.Header.Set("X-Amz-Date", amzDate)
 	request.Header.Set("X-Amz-Content-Sha256", payloadHash)
-	canonicalURI := "/" + provider.Bucket + "/" + strings.ReplaceAll(url.PathEscape(objectKey), "%2F", "/")
+	canonicalURI := request.URL.EscapedPath()
 	canonicalHeaders := "host:" + request.URL.Host + "\n" + "x-amz-content-sha256:" + payloadHash + "\n" + "x-amz-date:" + amzDate + "\n"
 	signedHeaders := "host;x-amz-content-sha256;x-amz-date"
 	canonicalRequest := request.Method + "\n" + canonicalURI + "\n" + request.URL.RawQuery + "\n" + canonicalHeaders + "\n" + signedHeaders + "\n" + payloadHash
@@ -844,6 +886,7 @@ func normalizeUserStorageProviderForOwner(input StorageObjectProviderInput, owne
 		Endpoint:        input.Endpoint,
 		Region:          input.Region,
 		Bucket:          input.Bucket,
+		BucketInHost:    input.BucketInHost,
 		AccessKeyID:     input.AccessKeyID,
 		SecretAccessKey: input.SecretAccessKey,
 		PublicBaseURL:   input.PublicBaseURL,

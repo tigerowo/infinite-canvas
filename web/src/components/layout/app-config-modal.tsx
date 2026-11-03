@@ -617,6 +617,8 @@ export function AppConfigModal() {
                                         <Button size="small" loading={measuringStorageType === "s3"} onClick={() => void measureStorage(userStorage)}>
                                             统计容量
                                         </Button>
+                                        <span className="text-xs text-stone-500">路径 / 子域名</span>
+                                        <Switch size="small" checked={userStorage.bucketInHost} onChange={(bucketInHost) => setUserStorage((value) => ({ ...value, bucketInHost }))} />
                                         <span className="text-xs text-stone-500">自动同步</span>
                                         <Switch size="small" checked={config.syncStorageConfig} onChange={(checked) => updateConfig("syncStorageConfig", checked)} />
                                         <Switch checked={userStorage.enabled} disabled={userWebDAVStorage.enabled} onChange={(enabled) => setUserStorage((value) => ({ ...value, enabled }))} />

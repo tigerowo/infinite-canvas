@@ -36,6 +36,17 @@ export async function uploadAnonymousStorageFile<T extends StorageObjectPayload>
     return payload.data;
 }
 
+export async function uploadAnonymousTemporaryFile(file: File) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/anonymous/files/temporary", { method: "POST", body: formData });
+    const payload = (await response.json().catch(() => null)) as ApiPayload<string> | null;
+    if (!response.ok || payload?.code !== 0 || !payload.data) {
+        throw new Error(payload?.msg || "匿名上传失败");
+    }
+    return payload.data;
+}
+
 export async function deleteAnonymousStorageFile(id: string, provider: object) {
     const response = await fetch(`/api/anonymous/files/${encodeURIComponent(id)}`, {
         method: "DELETE",

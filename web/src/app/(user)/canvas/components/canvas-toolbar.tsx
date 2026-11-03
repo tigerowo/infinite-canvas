@@ -1,7 +1,7 @@
 import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode, RefObject } from "react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Segmented, Switch } from "antd";
-import { CircleDot, Eraser, FolderOpen, Globe2, Grid2x2, Hand, Image as ImageIcon, Info, Layers3, Library, Moon, MousePointer2, Music2, Palette, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
+import { CircleDot, Eraser, Globe2, Grid2x2, Hand, Image as ImageIcon, Info, Layers3, Library, Moon, MousePointer2, Music2, Palette, Redo2, Settings2, Square, Sun, Trash2, Type, Undo2, Upload, Video } from "lucide-react";
 
 import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type CanvasTheme } from "@/lib/canvas-theme";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -24,12 +24,12 @@ export function CanvasToolbar({
     onUndo,
     onRedo,
     onUpload,
+    onAnonymousUpload,
     onDelete,
     onClear,
     onCanvasToolChange,
     onBackgroundModeChange,
     onShowImageInfoChange,
-    onOpenAssetLibrary,
     onOpenMyAssets,
 }: {
     selectedCount: number;
@@ -48,12 +48,12 @@ export function CanvasToolbar({
     onUndo: () => void;
     onRedo: () => void;
     onUpload: () => void;
+    onAnonymousUpload: () => void;
     onDelete: () => void;
     onClear: () => void;
     onCanvasToolChange: (tool: "select" | "pan") => void;
     onBackgroundModeChange: (mode: CanvasBackgroundMode) => void;
     onShowImageInfoChange: (show: boolean) => void;
-    onOpenAssetLibrary: () => void;
     onOpenMyAssets: () => void;
 }) {
     const wrapRef = useRef<HTMLDivElement>(null);
@@ -62,12 +62,23 @@ export function CanvasToolbar({
     const theme = canvasThemes[colorTheme];
     const [hovered, setHovered] = useState<string | null>(null);
     const [tipX, setTipX] = useState(0);
+    const [uploadOpen, setUploadOpen] = useState(false);
     const [appearanceOpen, setAppearanceOpen] = useState(false);
     const [panelX, setPanelX] = useState(0);
     const dockStyle = { background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item, boxShadow: colorTheme === "dark" ? "0 18px 45px rgba(0,0,0,.32)" : "0 16px 40px rgba(28,25,23,.12)" };
     const hoverStyle = { background: theme.toolbar.itemHover, color: theme.toolbar.activeText };
     const activeStyle = { background: theme.toolbar.activeBg, color: theme.toolbar.activeText };
     const tip = hovered ? toolLabel(hovered) : "";
+
+    useEffect(() => {
+        const closePanels = (event: PointerEvent) => {
+            if (wrapRef.current?.parentElement?.contains(event.target as Node)) return;
+            setUploadOpen(false);
+            setAppearanceOpen(false);
+        };
+        document.addEventListener("pointerdown", closePanels, true);
+        return () => document.removeEventListener("pointerdown", closePanels, true);
+    }, []);
 
     return (
         <div className="pointer-events-none absolute bottom-5 z-50 flex justify-center" style={{ left: 300, right: 16 }}>
@@ -104,15 +115,27 @@ export function CanvasToolbar({
                 <ToolbarButton id="tool-config" label="生成配置" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onAddConfig}>
                     <Settings2 className="size-4.5" />
                 </ToolbarButton>
-                <ToolbarButton id="tool-upload" label="上传素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onUpload}>
+                <ToolbarButton
+                    id="tool-upload"
+                    label="上传素材"
+                    active={uploadOpen}
+                    hovered={hovered}
+                    activeStyle={activeStyle}
+                    hoverStyle={hoverStyle}
+                    wrapRef={wrapRef}
+                    onTipX={setTipX}
+                    onHover={setHovered}
+                    onClick={(event) => {
+                        setPanelX(getTipX(wrapRef.current, event.currentTarget));
+                        setAppearanceOpen(false);
+                        setUploadOpen((value) => !value);
+                    }}
+                >
                     <Upload className="size-4.5" />
                 </ToolbarButton>
                 <Divider theme={theme} />
-                <ToolbarButton id="tool-library" label="素材库" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenAssetLibrary}>
-                    <Library className="size-4.5" />
-                </ToolbarButton>
                 <ToolbarButton id="tool-assets" label="我的素材" hovered={hovered} hoverStyle={hoverStyle} wrapRef={wrapRef} onTipX={setTipX} onHover={setHovered} onClick={onOpenMyAssets}>
-                    <FolderOpen className="size-4.5" />
+                    <Library className="size-4.5" />
                 </ToolbarButton>
                 <ToolbarButton
                     id="tool-style"
@@ -126,6 +149,7 @@ export function CanvasToolbar({
                     onHover={setHovered}
                     onClick={(event) => {
                         setPanelX(getTipX(wrapRef.current, event.currentTarget));
+                        setUploadOpen(false);
                         setAppearanceOpen((value) => !value);
                     }}
                 >
@@ -144,6 +168,45 @@ export function CanvasToolbar({
                     <Eraser className="size-4.5" />
                 </ToolbarButton>
             </div>
+
+            {uploadOpen ? (
+                <div
+                    className="pointer-events-auto absolute bottom-[72px] z-30 w-37 -translate-x-1/2 rounded-xl border p-2.5 shadow-xl backdrop-blur"
+                    style={{ left: panelX || "50%", background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.item }}
+                >
+                    <div className="px-1 pb-2 text-sm font-medium opacity-65">上传素材</div>
+                    <div className="grid gap-1">
+                        <button
+                            type="button"
+                            className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors"
+                            style={{ color: theme.toolbar.item }}
+                            onMouseEnter={(event) => { event.currentTarget.style.background = theme.toolbar.itemHover; }}
+                            onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}
+                            onClick={() => {
+                                setUploadOpen(false);
+                                onUpload();
+                            }}
+                        >
+                            <Upload className="size-4" />
+                            本地上传
+                        </button>
+                        <button
+                            type="button"
+                            className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-sm transition-colors"
+                            style={{ color: theme.toolbar.item }}
+                            onMouseEnter={(event) => { event.currentTarget.style.background = theme.toolbar.itemHover; }}
+                            onMouseLeave={(event) => { event.currentTarget.style.background = "transparent"; }}
+                            onClick={() => {
+                                setUploadOpen(false);
+                                onAnonymousUpload();
+                            }}
+                        >
+                            <Upload className="size-4" />
+                            匿名公网上传
+                        </button>
+                    </div>
+                </div>
+            ) : null}
 
             {appearanceOpen ? (
                 <div
@@ -302,7 +365,6 @@ function toolLabel(id: string) {
     if (id === "tool-director") return "导演台";
     if (id === "tool-config") return "生成配置";
     if (id === "tool-upload") return "上传素材";
-    if (id === "tool-library") return "素材库";
     if (id === "tool-assets") return "我的素材";
     if (id === "tool-style") return "画布外观";
     if (id === "tool-delete") return "删除选中";

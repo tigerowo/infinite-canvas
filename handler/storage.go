@@ -89,6 +89,16 @@ func UploadFile(w http.ResponseWriter, r *http.Request) {
 	OK(w, object)
 }
 
+// UploadTemporaryFile 匿名上传临时素材。
+func UploadTemporaryFile(w http.ResponseWriter, r *http.Request) {
+	link, err := service.UploadTemporaryFile(r.Context(), r.Body, r.Header.Get("Content-Type"), r.ContentLength)
+	if err != nil {
+		FailError(w, err)
+		return
+	}
+	OK(w, link)
+}
+
 // RegisterDirectFile 登记浏览器已直传至用户 WebDAV 的文件。
 func RegisterDirectFile(w http.ResponseWriter, r *http.Request) {
 	var request service.DirectStorageObjectInput

@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { App, Button, Empty, Input, Modal, Pagination, Spin, Tabs, Tag } from "antd";
-import { ImagePlus, Plus, Search } from "lucide-react";
+import { ImagePlus, Plus, Search, Upload } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { fetchAssetLibrary, type AssetLibraryItem } from "@/services/api/assets";
+import { uploadAnonymousTemporaryFile } from "@/services/anonymous-storage";
 import { uploadAssetMediaFile } from "@/services/file-storage";
 import { uploadImage } from "@/services/image-storage";
 import type { InsertAssetPayload } from "../types";
@@ -235,6 +236,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
     const [createUrl, setCreateUrl] = useState("");
     const [saving, setSaving] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const anonymousInputRef = useRef<HTMLInputElement>(null);
     const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
     const categories = useMemo(() => Array.from(new Set(assets.flatMap((asset) => asset.category ? [asset.category] : []))), [assets]);
@@ -431,10 +433,33 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                     ) : (
                         <div className="space-y-2">
                             <input ref={fileInputRef} type="file" accept={createKind === "image" ? "image/*" : createKind === "video" ? "video/*" : "audio/mpeg,audio/wav,audio/x-wav,.mp3,.wav"} className="hidden" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} />
-                            <Button icon={<ImagePlus className="size-4" />} onClick={() => fileInputRef.current?.click()}>
-                                {selectedFile ? selectedFile.name : createKind === "image" ? "选择图片" : createKind === "video" ? "选择视频" : "选择音频"}
-                            </Button>
+                            <input ref={anonymousInputRef} type="file" accept={`${createKind}/*`} className="hidden" onChange={async (event) => {
+                                const file = event.target.files?.[0];
+                                event.target.value = "";
+                                if (!file) return;
+                                setSaving(true);
+                                try {
+                                    setCreateUrl(await uploadAnonymousTemporaryFile(file));
+                                    message.success("匿名上传成功，文件将在 7 天后自动删除");
+                                    setSelectedFile(null);
+                                    if (fileInputRef.current) fileInputRef.current.value = "";
+                                } catch (error) {
+                                    message.error((error as Error).message);
+                                } finally {
+                                    setSaving(false);
+                                }
+                            }} />
                             <Input value={createUrl} placeholder={createKind === "image" ? "图片 URL" : createKind === "video" ? "视频 URL" : "音频 URL"} onChange={(event) => setCreateUrl(event.target.value)} />
+                            <div className="grid grid-cols-2">
+                                <Button className="!h-8 !min-w-0 !w-full !overflow-hidden !rounded-r-none" icon={<ImagePlus className="size-4" />} onClick={() => fileInputRef.current?.click()}>
+                                    <span className="min-w-0 truncate">
+                                        {selectedFile ? selectedFile.name : createKind === "image" ? "选择图片" : createKind === "video" ? "选择视频" : "选择音频"}
+                                    </span>
+                                </Button>
+                                <Button className="!h-8 !w-full !rounded-l-none !border-l-0 !whitespace-nowrap" loading={saving} icon={<Upload className="size-4" />} onClick={() => anonymousInputRef.current?.click()}>
+                                    匿名公网上传
+                                </Button>
+                            </div>
                         </div>
                     )}
                 </div>

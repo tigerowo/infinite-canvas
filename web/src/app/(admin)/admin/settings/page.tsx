@@ -56,7 +56,7 @@ const emptySettings: AdminSettings = {
     private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
 const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
-const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
+const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", bucketInHost: false, accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
 const emptyWebDAVStorageProvider: AdminStorageProvider = { ...emptyS3StorageProvider, name: "", type: "webdav", region: "", allowPrivateNetwork: false };
 
 type SettingsTabKey = "public" | "private";
@@ -787,19 +787,24 @@ export default function AdminSettingsPage() {
                                                                 )}
                                                                 {!isWebDAV && (
                                                                     <>
-                                                                        <Col xs={24} md={4}>
+                                                                        <Col xs={24} md={3}>
                                                                             <Form.Item name={[field.name, "region"]} label="Region">
                                                                                 <Input placeholder="auto" />
                                                                             </Form.Item>
                                                                         </Col>
-                                                                        <Col xs={24} md={4}>
+                                                                        <Col xs={24} md={3}>
                                                                             <Form.Item name={[field.name, "bucket"]} label="Bucket">
                                                                                 <Input />
                                                                             </Form.Item>
                                                                         </Col>
+                                                                        <Col xs={24} md={3}>
+                                                                            <Form.Item name={[field.name, "bucketInHost"]} label="路径 / 子域名" valuePropName="checked">
+                                                                                <Switch />
+                                                                            </Form.Item>
+                                                                        </Col>
                                                                     </>
                                                                 )}
-                                                                <Col xs={24} md={4}>
+                                                                <Col xs={24} md={isWebDAV ? 4 : 3}>
                                                                     <Form.Item name={[field.name, "enabled"]} label="启用" valuePropName="checked">
                                                                         <Switch
                                                                             onChange={(checked) => {

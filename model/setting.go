@@ -198,6 +198,7 @@ type StorageProvider struct {
 	AllowPrivateNetwork bool `json:"allowPrivateNetwork,omitempty"`
 	Region            string `json:"region"`
 	Bucket            string `json:"bucket"`
+	BucketInHost      bool   `json:"bucketInHost,omitempty"`
 	AccessKeyID       string `json:"accessKeyId"`
 	SecretAccessKey   string `json:"secretAccessKey"`
 	PublicBaseURL     string `json:"publicBaseUrl"`

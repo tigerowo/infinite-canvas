@@ -243,7 +243,7 @@ export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()
     return keys;
 }
 
-function readVideoMeta(url: string) {
+export function readVideoMeta(url: string) {
     return new Promise<{ width: number; height: number }>((resolve) => {
         const video = document.createElement("video");
         const done = () => resolve({ width: video.videoWidth || 1280, height: video.videoHeight || 720 });

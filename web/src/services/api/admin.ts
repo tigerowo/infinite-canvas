@@ -262,6 +262,7 @@ export type AdminStorageProvider = {
     allowPrivateNetwork?: boolean;
     region: string;
     bucket: string;
+    bucketInHost: boolean;
     accessKeyId: string;
     secretAccessKey: string;
     publicBaseUrl: string;

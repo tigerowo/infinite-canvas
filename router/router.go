@@ -34,6 +34,7 @@ func New() *gin.Engine {
 	anonymousFiles := api.Group("/anonymous/files", middleware.AnonymousStorage)
 	anonymousFiles.POST("/session", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	anonymousFiles.POST("", gin.WrapF(handler.UploadFile))
+	anonymousFiles.POST("/temporary", gin.WrapF(handler.UploadTemporaryFile))
 	anonymousFiles.DELETE("/:id", func(c *gin.Context) {
 		handler.DeleteFile(c.Writer, c.Request, c.Param("id"))
 	})

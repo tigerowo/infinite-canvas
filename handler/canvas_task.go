@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -274,28 +275,28 @@ func runCanvasImageTask(task model.CanvasImageTask, user model.AuthUser, body []
 		saveFailedCanvasImageTask(task, err.Error(), err.Error())
 		return
 	}
+	responseDetail := fmt.Sprintf("响应大小：%d bytes；Content-Type：%s", len(payload), responseContentType)
 	if status >= http.StatusBadRequest {
 		message := readUpstreamAIErrorMessage(payload, status)
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, responseDetail)
 		return
 	}
 	if message := readWrappedTaskError(payload); message != "" {
-		saveFailedCanvasImageTask(task, message, string(payload))
+		saveFailedCanvasImageTask(task, message, responseDetail)
 		return
 	}
 	translationInput, _ := service.ReadParameterTranslationInput(body)
 	collectAll := translationInput != nil || allAIProtocolImageResults(task.Model)
 	imageURLs, mimeType, bytes, err := imageURLsFromAIResponse(payload, responseContentType, collectAll, task.Endpoint == "/chat/completions")
 	if err != nil {
-		saveFailedCanvasImageTask(task, err.Error(), string(payload))
+		saveFailedCanvasImageTask(task, err.Error(), responseDetail)
 		return
 	}
 	task.Status = "completed"
 	task.Progress = 100
 	task.CompletedAt = taskTime()
-	task.ResponseBody = string(payload)
 	task.ImageURL = imageURLs[0]
-	if collectAll {
+	if len(imageURLs) > 1 {
 		task.ImageURLs = imageURLs
 	}
 	task.StorageKey = ""
@@ -397,8 +398,7 @@ func executeCanvasAIRequest(ctx context.Context, user model.AuthUser, endpoint s
 	proxyAIRequest(recorder, request, endpoint)
 	response := recorder.Result()
 	defer response.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(response.Body, 32*1024*1024))
-	return payload, response.StatusCode, response.Header.Get("Content-Type"), nil
+	return recorder.Body.Bytes(), response.StatusCode, response.Header.Get("Content-Type"), nil
 }
 
 func saveFailedCanvasImageTask(task model.CanvasImageTask, message string, detail string) {
