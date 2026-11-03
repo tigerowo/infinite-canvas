@@ -78,12 +78,12 @@ type WorkflowEntry struct {
 }
 
 type WorkflowSummary struct {
-	Provider   string `json:"provider"`
-	Kind       string `json:"kind"`
-	WorkflowID string `json:"workflowId"`
-	Title      string `json:"title"`
-	Capability string `json:"capability"`
-	Enabled    bool   `json:"enabled"`
+	Provider   string  `json:"provider"`
+	Kind       string  `json:"kind"`
+	WorkflowID string  `json:"workflowId"`
+	Title      string  `json:"title"`
+	Capability string  `json:"capability"`
+	Enabled    bool    `json:"enabled"`
 }
 
 // ModelCost 模型算力点配置。
@@ -193,25 +193,25 @@ type PrivateStorageSetting struct {
 }
 
 type StorageProvider struct {
-	ID                  string `json:"id"`
-	Name                string `json:"name"`
-	Type                string `json:"type"`
-	Endpoint            string `json:"endpoint"`
-	AllowPrivateNetwork bool   `json:"allowPrivateNetwork,omitempty"`
-	Region              string `json:"region"`
-	Bucket              string `json:"bucket"`
-	AccessKeyID         string `json:"accessKeyId"`
-	SecretAccessKey     string `json:"secretAccessKey"`
-	PublicBaseURL       string `json:"publicBaseUrl"`
-	PathPrefix          string `json:"pathPrefix"`
-	Username            string `json:"username"`
-	Password            string `json:"password"`
-	Weight              int    `json:"weight"`
-	Enabled             bool   `json:"enabled"`
-	OwnerUserID         string `json:"ownerUserId"`
-	CapacityBytes       int64  `json:"capacityBytes"`
-	CapacityCheckedAt   string `json:"capacityCheckedAt"`
-	CapacityExceeded    bool   `json:"capacityExceeded"`
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	Endpoint          string `json:"endpoint"`
+	AllowPrivateNetwork bool `json:"allowPrivateNetwork,omitempty"`
+	Region            string `json:"region"`
+	Bucket            string `json:"bucket"`
+	AccessKeyID       string `json:"accessKeyId"`
+	SecretAccessKey   string `json:"secretAccessKey"`
+	PublicBaseURL     string `json:"publicBaseUrl"`
+	PathPrefix        string `json:"pathPrefix"`
+	Username          string `json:"username"`
+	Password          string `json:"password"`
+	Weight            int    `json:"weight"`
+	Enabled           bool   `json:"enabled"`
+	OwnerUserID       string `json:"ownerUserId"`
+	CapacityBytes     int64  `json:"capacityBytes"`
+	CapacityCheckedAt string `json:"capacityCheckedAt"`
+	CapacityExceeded  bool   `json:"capacityExceeded"`
 }
 
 type StorageCapacityCheckSetting struct {

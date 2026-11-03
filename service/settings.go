@@ -277,7 +277,7 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 		if setting.Channels[i].Models == nil {
 			setting.Channels[i].Models = []string{}
 		}
-		// 渠道模型别名和模型列表保持同一事实来源，避免保存无效键。
+
 		setting.Channels[i].ModelAliases = normalizeModelAliases(setting.Channels[i].ModelAliases, setting.Channels[i].Models)
 		if setting.Channels[i].Weight <= 0 {
 			setting.Channels[i].Weight = 1
