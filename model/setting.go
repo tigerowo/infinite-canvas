@@ -15,21 +15,22 @@ const (
 
 // ModelChannel 模型渠道配置。
 type ModelChannel struct {
-	ID           string          `json:"id"`
-	Protocol     string          `json:"protocol"`
-	Name         string          `json:"name"`
-	BaseURL      string          `json:"baseUrl"`
-	APIKey       string          `json:"apiKey"`
-	Models       []string        `json:"models"`
-	Weight       int             `json:"weight"`
-	Timeout      int             `json:"timeout"`
-	Enabled      bool            `json:"enabled"`
-	Remark       string          `json:"remark"`
-	UploadAPIKey string          `json:"uploadApiKey,omitempty"`
-	BridgeID     string          `json:"bridgeId,omitempty"`
-	ComfyURL     string          `json:"comfyUrl,omitempty"`
-	WorkflowDir  string          `json:"workflowDir,omitempty"`
-	Workflows    []WorkflowEntry `json:"workflows,omitempty"`
+	ID           string            `json:"id"`
+	Protocol     string            `json:"protocol"`
+	Name         string            `json:"name"`
+	BaseURL      string            `json:"baseUrl"`
+	APIKey       string            `json:"apiKey"`
+	Models       []string          `json:"models"`
+	ModelAliases map[string]string `json:"modelAliases,omitempty"`
+	Weight       int               `json:"weight"`
+	Timeout      int               `json:"timeout"`
+	Enabled      bool              `json:"enabled"`
+	Remark       string            `json:"remark"`
+	UploadAPIKey string            `json:"uploadApiKey,omitempty"`
+	BridgeID     string            `json:"bridgeId,omitempty"`
+	ComfyURL     string            `json:"comfyUrl,omitempty"`
+	WorkflowDir  string            `json:"workflowDir,omitempty"`
+	Workflows    []WorkflowEntry   `json:"workflows,omitempty"`
 
 	ModelCapabilities    map[string]string `json:"modelCapabilities,omitempty"`
 	ParameterTranslation string            `json:"parameterTranslation,omitempty"`
@@ -123,6 +124,7 @@ type PublicModelChannelInfo struct {
 	Name                       string            `json:"name"`
 	BaseURL                    string            `json:"baseUrl"`
 	Models                     []string          `json:"models"`
+	ModelAliases               map[string]string `json:"modelAliases,omitempty"`
 	Weight                     int               `json:"weight"`
 	Timeout                    int               `json:"timeout"`
 	Enabled                    bool              `json:"enabled"`

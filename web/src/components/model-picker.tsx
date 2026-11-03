@@ -25,7 +25,7 @@ type ModelPickerProps = {
     onMissingConfig?: () => void;
 };
 
-type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string };
+type PickerBase = { key: string; channelId?: string; channelName: string; protocol?: string; baseUrl?: string; modelAliases?: Record<string, string> };
 type PickerOption = (PickerBase & { model: string }) | (PickerBase & { model: ""; workflowRef: WorkflowRef; label: string });
 
 export function ModelPicker({ config, value, channelId, capability, onChange, workflowRef, onWorkflowChange, className, fullWidth = false, placeholder = "选择模型", onMissingConfig }: ModelPickerProps) {
@@ -38,9 +38,9 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
     const channelOptions = useMemo<PickerOption[]>(() => {
         const channels =
             config.channelMode === "remote"
-                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflows || [] }))
-                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, modelCapabilities: channel.modelCapabilities, workflows: channel.workflowSummaries || [] }));
-        const filtered = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => filterModelsByCapability(channel.models ?? [], capability, channel.protocol || "", channel.modelCapabilities).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, model })));
+                ? config.publicChannels.map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "云端渠道", baseUrl: channel.baseUrl, models: channel.models, modelAliases: channel.modelAliases || {}, modelCapabilities: channel.modelCapabilities, workflows: channel.workflows || [] }))
+                : normalizeLocalChannels(config).map((channel) => ({ id: channel.id, protocol: channel.protocol, name: channel.name || "本地渠道", baseUrl: channel.baseUrl, models: channel.models, modelAliases: channel.modelAliases || {}, modelCapabilities: channel.modelCapabilities, workflows: channel.workflowSummaries || [] }));
+        const filtered = channels.filter((channel) => !isWorkflowProtocol(channel.protocol || "")).flatMap((channel) => filterModelsByCapability(channel.models ?? [], capability, channel.protocol || "", channel.modelCapabilities).map((model) => ({ key: `${channel.id}::${model}`, channelId: channel.id, channelName: channel.name, protocol: channel.protocol, baseUrl: channel.baseUrl, modelAliases: channel.modelAliases, model })));
         if (!workflowEnabled || !token) return filtered;
         const scope = config.channelMode === "remote" ? "system" : "personal";
         return [...filtered, ...channels.flatMap((channel) => isWorkflowProtocol(channel.protocol || "") ? channel.workflows.filter((entry) => entry.enabled && entry.capability === capability && entry.provider === channel.protocol).map((entry) => {
@@ -107,10 +107,10 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
                 )}
                 onMouseDown={(event) => event.stopPropagation()}
                 onPointerDown={(event) => event.stopPropagation()}
-                title={workflowRef && workflowEnabled && !currentOption ? "工作流已停用、未公开或删除，请重新选择" : current || placeholder}
+                title={workflowRef && workflowEnabled && !currentOption ? "工作流已停用、未公开或删除，请重新选择" : pickerOptionLabel(current, currentOption, modelLabel) || current || placeholder}
             >
                 <ModelIcon model={current} />
-                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{workflowRef && workflowEnabled ? current || "工作流已停用、未公开或删除，请重新选择" : modelLabel(current, currentOption) || placeholder}</span>
+                <span className="canvas-model-picker-text min-w-0 flex-1 truncate text-left">{workflowRef && workflowEnabled ? current || "工作流已停用、未公开或删除，请重新选择" : pickerOptionLabel(current, currentOption, modelLabel) || placeholder}</span>
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
@@ -124,8 +124,8 @@ export function ModelPicker({ config, value, channelId, capability, onChange, wo
             >
                 {options.length ? (
                     options.map((option) => (
-                        <SelectItem key={option.key} value={option.key} textValue={`${"workflowRef" in option ? option.label : modelLabel(option.model, option)} ${option.model} ${option.channelName}`}>
-                            <ModelLabel model={"workflowRef" in option ? option.workflowRef.workflowId : option.model} label={"workflowRef" in option ? `工作流 · ${option.label}` : modelLabel(option.model, option)} channelName={option.channelName} />
+                        <SelectItem key={option.key} value={option.key} textValue={`${"workflowRef" in option ? option.label : pickerOptionLabel(option.model, option, modelLabel)} ${option.model} ${option.channelName}`}>
+                            <ModelLabel model={"workflowRef" in option ? option.workflowRef.workflowId : option.model} label={"workflowRef" in option ? `工作流 · ${option.label}` : pickerOptionLabel(option.model, option, modelLabel)} channelName={option.channelName} />
                         </SelectItem>
                     ))
                 ) : (
@@ -151,6 +151,13 @@ function ModelLabel({ model, label, channelName }: { model: string; label?: stri
 function ModelIcon({ model }: { model: string }) {
     const icon = resolveModelIcon(model);
     return icon ? <img src={icon} alt="" className="size-4 shrink-0 dark:invert" /> : <Cpu className="size-4 shrink-0 opacity-70" />;
+}
+
+function pickerOptionLabel(model: string, option: PickerOption | undefined, modelLabel: (model: string, option?: { channelId?: string; channelName?: string; protocol?: string; baseUrl?: string }) => string) {
+    if (!option || !model || "workflowRef" in option) return modelLabel(model, option);
+    const alias = option.modelAliases?.[model]?.trim();
+    if (alias) return alias;
+    return modelLabel(model, option) || model;
 }
 
 function resolveModelIcon(model: string) {

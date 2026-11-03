@@ -17,6 +17,7 @@ export type LocalModelChannel = {
     baseUrl: string;
     apiKey: string;
     models: string[];
+    modelAliases?: Record<string, string>;
     modelCapabilities?: ModelCapabilities;
     uploadApiKey?: string;
     bridgeId?: string;
@@ -97,7 +98,7 @@ export type AiConfig = {
         workflowAgent: string;
     };
     localChannels: LocalModelChannel[];
-    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelCapabilities?: ModelCapabilities; parameterTranslationModels?: string[]; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
+    publicChannels: Array<{ id?: string; protocol?: LocalModelChannel["protocol"]; name?: string; baseUrl?: string; models?: string[]; modelAliases?: Record<string, string>; modelCapabilities?: ModelCapabilities; parameterTranslationModels?: string[]; workflows?: WorkflowSummary[]; weight?: number; timeout?: number; enabled?: boolean; remark?: string }>;
     syncStorageConfig: boolean;
     syncWebDAVStorageConfig: boolean;
     activeChannelId: string;
@@ -539,6 +540,7 @@ export function normalizeLocalChannels(config: Partial<AiConfig>): LocalModelCha
         baseUrl: channel.baseUrl || "",
         apiKey: channel.apiKey || "",
         models: Array.isArray(channel.models) ? channel.models.filter(Boolean) : [],
+        modelAliases: channel.modelAliases || {},
         modelCapabilities: channel.modelCapabilities || {},
         ...(isWorkflowProtocol(channel.protocol || "") ? {
             uploadApiKey: channel.uploadApiKey || "",
