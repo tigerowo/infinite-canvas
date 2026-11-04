@@ -360,7 +360,7 @@ async function createGrok2APIVideoRequestBody(config: AiConfig, model: string, p
     const aspectRatio = normalizeSeedanceRatio(config.size);
     if (aspectRatio !== "adaptive") body.aspect_ratio = aspectRatio;
 
-    const urls = await Promise.all(input.references.map((reference) => imageToDataUrl(reference)));
+    const urls = await Promise.all(input.references.map(imageToAgnesReference));
     if (urls.length === 1) body.image = { url: urls[0] };
     else if (urls.length > 1) body.reference_images = urls.map((url) => ({ url }));
 

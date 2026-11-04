@@ -103,7 +103,7 @@ func readAPIMartPayload(body []byte, contentType string, channel model.ModelChan
 		}
 		payload[key] = items
 	}
-	if err := mergeAPIMartFormFiles(payload, form.File, channel); err != nil {
+	if err := mergeAPIMartFormFiles(payload, form, body, params["boundary"], channel); err != nil {
 		return nil, err
 	}
 	return payload, nil
@@ -121,8 +121,32 @@ func parseAPIMartFormValue(value string) any {
 	return value
 }
 
-func mergeAPIMartFormFiles(payload map[string]any, files map[string][]*multipart.FileHeader, channel model.ModelChannel) error {
-	for key, headers := range files {
+func mergeAPIMartFormFiles(payload map[string]any, form *multipart.Form, body []byte, boundary string, channel model.ModelChannel) error {
+	orderByKey := map[string][]bool{}
+	for key := range form.File {
+		if len(form.Value[key]) > 0 {
+			orderByKey[key] = nil
+		}
+	}
+	if len(orderByKey) > 0 {
+		reader := multipart.NewReader(bytes.NewReader(body), boundary)
+		for {
+			part, err := reader.NextPart()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				return err
+			}
+			key := part.FormName()
+			if _, ok := orderByKey[key]; ok {
+				orderByKey[key] = append(orderByKey[key], part.FileName() != "")
+			}
+			_ = part.Close()
+		}
+	}
+
+	for key, headers := range form.File {
 		if len(headers) == 0 {
 			continue
 		}
@@ -140,6 +164,20 @@ func mergeAPIMartFormFiles(payload map[string]any, files map[string][]*multipart
 				return err
 			}
 			values = append(values, uploaded)
+		}
+		if order, ok := orderByKey[key]; ok {
+			merged := make([]any, 0, len(order))
+			valueIndex, fileIndex := 0, 0
+			for _, isFile := range order {
+				if isFile {
+					merged = append(merged, values[fileIndex])
+					fileIndex++
+				} else {
+					merged = append(merged, parseAPIMartFormValue(form.Value[key][valueIndex]))
+					valueIndex++
+				}
+			}
+			values = merged
 		}
 		if len(values) == 1 {
 			payload[key] = values[0]

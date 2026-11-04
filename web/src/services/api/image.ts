@@ -1365,6 +1365,7 @@ function parseGeminiImages(payload: Record<string, unknown>) {
         const content = candidate.content && typeof candidate.content === "object" ? candidate.content as Record<string, unknown> : {};
         const parts = Array.isArray(content.parts) ? content.parts as Array<Record<string, unknown>> : [];
         return parts.flatMap((part) => {
+            if (part.thought === true) return [];
             const inlineData = part.inlineData && typeof part.inlineData === "object" ? part.inlineData as Record<string, unknown> : {};
             const data = typeof inlineData.data === "string" ? inlineData.data : "";
             if (!data) return [];
