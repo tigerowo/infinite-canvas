@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [修复] OpenAI Images 多参考图改用数组字段，避免重复 image 参数导致请求失败
 + [修复] 修复 Gemini 误将思考图作为正式结果
 + [修复] 修复 Grok2API 视频参考图 URL 强制被转换为 Base64
 

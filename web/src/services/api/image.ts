@@ -790,7 +790,7 @@ async function requestImageEditSingle(config: AiConfig, prompt: string, referenc
         formData.set("partial_images", String(params.streamPartialImages));
     }
     const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-    files.forEach((file) => formData.append("image", file));
+    files.forEach((file) => formData.append(files.length > 1 ? "image[]" : "image", file));
 
     const directProvider = !usesAccountProxy(config) ? directAIProviderForConfig(config) : null;
     if (directProvider) {
@@ -1174,7 +1174,7 @@ async function createCanvasImageTaskRequest(config: AiConfig & { seedIndex?: num
         }
         if (params.size) formData.set("size", params.size);
         const files = await Promise.all(references.map(async (image) => dataUrlToFile({ ...image, dataUrl: await imageToDataUrl(image) })));
-        files.forEach((file) => formData.append("image", file));
+        files.forEach((file) => formData.append(files.length > 1 ? "image[]" : "image", file));
         return { method: "POST", headers: tokenHeaders, body: formData };
     }
     if (isAgnesImageModel(config.model)) {
