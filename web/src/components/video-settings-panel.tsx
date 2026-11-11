@@ -251,10 +251,11 @@ function KlingV26VideoSettingsPanel({ config, modelName, onConfigChange, theme, 
 function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, showTitle, className, visualOnly }: VideoSettingsPanelProps) {
     const model = modelName || config.model || config.videoModel;
     const modelId = modelKey(model);
+    const seedance25 = modelId.includes("seedance-2-5") || modelId.includes("seedance2-5") || modelId.includes("sd2-5");
     const seedance20 = (modelId.includes("seedance-2-0") || modelId.includes("seedance2-0") || modelId === "bytedance-seedance-2") && !isSeedanceFastOrMiniModel(model);
     const resolution = seedance20 ? normalizeVideoResolutionValue(config.vquality) : normalizeSeedanceResolution(config.vquality, model);
     const ratio = normalizeSeedanceRatio(config.size);
-    const maxSeconds = (modelId.includes("seedance-2-5") || modelId.includes("seedance2-5") || modelId.includes("sd2-5")) ? 30 : 15;
+    const maxSeconds = seedance25 ? 30 : 15;
     const watermark = boolConfig(config.videoWatermark, false);
     const audioGenerationEnabled = supportsVideoAudioGeneration(model);
     const generateAudio = boolConfig(config.videoGenerateAudio, false);
@@ -263,10 +264,22 @@ function SeedanceVideoSettingsPanel({ config, modelName, onConfigChange, theme, 
         <ImageSettingsTheme theme={theme}>
             <div className={className} style={{ color: theme.node.text }} onMouseDown={(event) => event.stopPropagation()}>
                 {showTitle ? <div className="text-lg font-semibold">视频设置</div> : null}
+                {seedance25 ? (
+                    <SettingGroup title="生成模式" color={theme.node.muted}>
+                        <div className="grid grid-cols-2 gap-2.5">
+                            <OptionPill selected={config.videoMode !== "draft"} theme={theme} onClick={() => onConfigChange("videoMode", "normal")}>
+                                默认
+                            </OptionPill>
+                            <OptionPill selected={config.videoMode === "draft"} theme={theme} onClick={() => { onConfigChange("videoMode", "draft"); onConfigChange("vquality", "480p"); }}>
+                                样片
+                            </OptionPill>
+                        </div>
+                    </SettingGroup>
+                ) : null}
                 <SettingGroup title="分辨率" color={theme.node.muted}>
                     <div className="grid grid-cols-3 gap-2.5">
                         {(seedance20 ? resolutionButtonOptions : seedanceResolutionOptions).map((item) => {
-                            const disabled = item.value === "1080p" && isSeedanceFastOrMiniModel(model);
+                            const disabled = (seedance25 && config.videoMode === "draft" && item.value !== "480p") || (item.value === "1080p" && isSeedanceFastOrMiniModel(model));
                             return (
                                 <OptionPill key={item.value} selected={resolution === item.value} disabled={disabled} theme={theme} onClick={() => onConfigChange("vquality", item.value)}>
                                     {item.label}

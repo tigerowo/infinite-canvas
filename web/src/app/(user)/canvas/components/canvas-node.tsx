@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSy
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
+import { Tooltip } from "antd";
 import { ChevronRight, Image as ImageIcon, Maximize2, Music2, Pause, Play, RefreshCw, Star, Video } from "lucide-react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
@@ -53,6 +54,8 @@ type CanvasNodeProps = {
     onToggleBatch?: (nodeId: string) => void;
     onSetBatchPrimary?: (node: CanvasNodeData) => void;
     onRetry?: (node: CanvasNodeData) => void;
+    onConvertDraft?: (node: CanvasNodeData) => Promise<void>;
+    isConvertingDraft?: boolean;
     onViewImage?: (node: CanvasNodeData) => void;
     onSelectReference?: (nodeId: string) => void;
     onContextMenu: (event: React.MouseEvent, nodeId: string) => void;
@@ -77,6 +80,8 @@ type NodeContentRendererProps = {
     onStopEditing: () => void;
     mentionReferences: CanvasResourceReference[];
     onRetry?: (node: CanvasNodeData) => void;
+    onConvertDraft?: (node: CanvasNodeData) => Promise<void>;
+    isConvertingDraft?: boolean;
     onViewImage?: (node: CanvasNodeData) => void;
     onToggleBatch?: () => void;
     onSetBatchPrimary?: () => void;
@@ -116,6 +121,8 @@ export const CanvasNode = React.memo(function CanvasNode({
     onToggleBatch,
     onSetBatchPrimary,
     onRetry,
+    onConvertDraft,
+    isConvertingDraft,
     onViewImage,
     onSelectReference,
     onContextMenu,
@@ -421,6 +428,8 @@ export const CanvasNode = React.memo(function CanvasNode({
                             onContentChange={onContentChange}
                             onStopEditing={() => setIsEditingContent(false)}
                             onRetry={onRetry}
+                            onConvertDraft={referenceSelectionState ? undefined : onConvertDraft}
+                            isConvertingDraft={isConvertingDraft}
                             onViewImage={onViewImage}
                             onToggleBatch={() => onToggleBatch?.(data.id)}
                             onSetBatchPrimary={() => onSetBatchPrimary?.(data)}
@@ -677,11 +686,13 @@ function EmptyImageContent({ node, theme, isBatchRoot, batchCount, batchExpanded
     return content;
 }
 
-function VideoNodeContent({ node, theme, isSelected, onViewImage, onResize }: NodeContentRendererProps) {
+function VideoNodeContent({ node, theme, isSelected, onViewImage, onResize, onConvertDraft, isConvertingDraft = false }: NodeContentRendererProps) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [isPlaying, setIsPlaying] = useState(false);
     const [mediaDurationMs, setMediaDurationMs] = useState(0);
     const [videoTime, setVideoTime] = useState(0);
+    const [submittingDraft, setSubmittingDraft] = useState(false);
+    const convertingDraft = submittingDraft || isConvertingDraft;
     const videoDuration = mediaDurationMs / 1000;
     const togglePlayback = () => {
         const video = videoRef.current;
@@ -712,6 +723,17 @@ function VideoNodeContent({ node, theme, isSelected, onViewImage, onResize }: No
         <div className="relative h-full w-full overflow-hidden rounded-[18px] bg-black">
             <video ref={videoRef} src={node.metadata.content} tabIndex={-1} playsInline className="h-full w-full object-contain outline-none" onLoadStart={() => { setVideoTime(0); setMediaDurationMs(0); }} onLoadedMetadata={(event) => { const video = event.currentTarget; setMediaDurationMs(Number.isFinite(video.duration) ? video.duration * 1000 : 0); if (video.currentSrc === video.src) onResize(node.id, video.videoWidth, video.videoHeight, undefined, node); }} onTimeUpdate={(event) => setVideoTime(event.currentTarget.currentTime)} onPlay={() => setIsPlaying(true)} onPause={() => setIsPlaying(false)} onKeyDown={(event) => { if (isSelected && event.code === "Space") { event.preventDefault(); event.stopPropagation(); togglePlayback(); } }} />
             {mediaDurationMs > 0 ? <span className="pointer-events-none absolute left-2 top-2 z-20 flex h-7 items-center justify-center rounded-md px-2 text-[11px] font-medium opacity-70 backdrop-blur" style={controlStyle}>{new Date(mediaDurationMs).toISOString().slice(mediaDurationMs >= 3_600_000 ? 11 : 14, 19)}</span> : null}
+            {onConvertDraft ? (
+                <Tooltip title="生成正片 1080P，样片具有时效性，逾期需重新生成" placement="bottom" mouseEnterDelay={0.2} color={theme.node.panel} styles={{ container: { color: theme.node.text } }}>
+                    <button type="button" aria-label="生成正片（1080p）" disabled={convertingDraft} className="absolute right-2 top-2 z-20 flex h-7 cursor-pointer items-center justify-center rounded-md bg-foreground/70 px-2 text-[11px] font-medium transition-colors enabled:hover:bg-foreground disabled:cursor-wait" style={{ color: controlStyle.background }} onMouseDown={keepVideoFocus} onPointerDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()} onClick={async (event) => {
+                        event.stopPropagation();
+                        setSubmittingDraft(true);
+                        try { await onConvertDraft(node); } finally { setSubmittingDraft(false); }
+                    }}>
+                        <span className="scale-95">{submittingDraft ? "提交中" : convertingDraft ? "生成中" : "生成正片"}</span>
+                    </button>
+                </Tooltip>
+            ) : null}
             <button type="button" title={isPlaying ? "暂停" : "播放"} aria-label={isPlaying ? "暂停" : "播放"} className={`${controlClassName} left-2`} style={controlStyle} onClick={(event) => { event.stopPropagation(); togglePlayback(); }} onMouseDown={keepVideoFocus} onDoubleClick={(event) => event.stopPropagation()}>
                 {isPlaying ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
             </button>

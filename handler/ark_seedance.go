@@ -26,6 +26,14 @@ func normalizeArkSeedanceVideoBody(body []byte, modelName string) ([]byte, error
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
+	if id := strings.TrimSpace(toStringSafe(payload["draft_task_id"])); id != "" {
+		return json.Marshal(map[string]any{
+			"model":      firstNonEmpty(strings.TrimSpace(modelName), strings.TrimSpace(toStringSafe(payload["model"]))),
+			"content":    []any{map[string]any{"type": "draft_task", "draft_task": map[string]any{"id": id}}},
+			"resolution": "1080p",
+			"watermark":  boolLike(payload["video_watermark"]),
+		})
+	}
 	content := []any{map[string]any{"type": "text", "text": strings.TrimSpace(toStringSafe(payload["prompt"]))}}
 	for _, url := range readStringSlice(payload["input_reference[]"]) {
 		content = append(content, arkSeedanceReference("image", url, "reference_image"))
@@ -60,6 +68,9 @@ func normalizeArkSeedanceVideoBody(body []byte, modelName string) ([]byte, error
 	}
 	if value, ok := payload["video_watermark"]; ok {
 		result["watermark"] = boolLike(value)
+	}
+	if value, ok := payload["draft"]; ok {
+		result["draft"] = boolLike(value)
 	}
 	return json.Marshal(result)
 }

@@ -19,6 +19,7 @@ export const translationVariableGroups = {
         ["视频分辨率", "resolution", "string", "当前视频分辨率"],
         ["视频时长", "seconds", "number", "当前视频时长"],
         ["视频模式", "mode", "string", "面板已有的视频模式"],
+        ["样片任务ID", "draftTaskId", "string", "转成片时为原样片任务 ID，普通生成时为空；非空时按该站接口文档组织转成片请求"],
         ["负面提示词", "negativePrompt", "string", "当前负面提示词"],
         ["生成音频", "generateAudio", "boolean", "当前生成音频开关"],
         ["水印", "watermark", "boolean", "当前水印开关"],

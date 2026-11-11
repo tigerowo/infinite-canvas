@@ -59,7 +59,16 @@ func normalizeAPIMartVideoBody(body []byte, contentType string, modelName string
 	if finalModel != "" {
 		payload["model"] = finalModel
 	}
-	normalizeAPIMartVideoParams(payload, finalModel, channel)
+	if id := strings.TrimSpace(toStringSafe(payload["draft_task_id"])); id != "" {
+		payload = map[string]any{
+			"model":         finalModel,
+			"draft_task_id": id,
+			"resolution":    "1080p",
+			"watermark":     boolLike(payload["video_watermark"]),
+		}
+	} else {
+		normalizeAPIMartVideoParams(payload, finalModel, channel)
+	}
 	if errMessage := strings.TrimSpace(toStringSafe(payload["_apimart_reference_error"])); errMessage != "" {
 		return body, contentType, errors.New(errMessage)
 	}

@@ -29,6 +29,7 @@ import (
 var parameterTranslationVariables = []string{
 	"model", "prompt", "size", "aspectRatio", "quality", "count", "images",
 	"resolution", "seconds", "mode", "negativePrompt", "generateAudio", "watermark",
+	"draftTaskId",
 	"videos", "audios", "firstFrame", "lastFrame", "voice", "audioFormat", "speed", "instructions",
 }
 var parameterTranslationMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}

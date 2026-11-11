@@ -20,14 +20,14 @@ import { useUserStore } from "@/stores/use-user-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-export type VideoResponse = { parameter_translation?: boolean; translationSnapshot?: LocalVideoTranslationSnapshot; id: string; task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; workflowRef?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string };
+export type VideoResponse = { parameter_translation?: boolean; translationSnapshot?: LocalVideoTranslationSnapshot; id: string; task_id?: string; draft?: boolean; draft_task_id?: string; video_id?: string; source_id?: string; sourceId?: string; channelId?: string; userChannelId?: string; channelName?: string; workflowRef?: string; channel_id?: string; user_channel_id?: string; channel_name?: string; status?: string; video_url?: string; url?: string; storageKey?: string; progress?: number; error?: { message?: string }; size?: string; seconds?: string; model?: string; created_at?: string | number; createdAt?: string | number; started_at?: string | number; startedAt?: string | number; request_body?: string };
 type ApiVideoEnvelope = { code: number; data?: VideoResponse | VideoResponse[] | null; msg?: string; message?: string };
 type ApiVideoResponse = VideoResponse | ApiVideoEnvelope;
 export type VideoGenerationResult = { id: string; url: string; durationMs: number; width: number; height: number; bytes: number; mimeType: string; task: VideoResponse };
 type LocalVideoTranslationSnapshot = { match:MatchedTranslation; input:TranslationInput; baseUrl:string; protocol:AiConfig["localChannels"][number]["protocol"]; taskIds:string[]; completed:Record<string,TranslationResult> };
 export type CreatedVideoGenerationTask = { task: VideoResponse; pollId: string; startedAt: number; requestBody: unknown };
 export type VideoProgressHandler = (progress: number, task: VideoResponse) => void;
-export type VideoTaskCreateOptions = { signal?: AbortSignal; onServerTask?: () => void; clientTaskId?: string; source?: "video-workbench" | "canvas"; sourceId?: string };
+export type VideoTaskCreateOptions = { signal?: AbortSignal; onServerTask?: () => void; onRequest?: (body: string) => Promise<void>; clientTaskId?: string; source?: "video-workbench" | "canvas"; sourceId?: string; draftTaskId?: string };
 export const VIDEO_POLL_INTERVAL_MS = 5000;
 
 export class VideoRequestError extends Error {
@@ -118,12 +118,30 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 export async function createVideoGenerationTask(config: AiConfig, prompt: string, references: ReferenceImage[] | VideoReferenceInput = [], onProgress?: VideoProgressHandler, options?: string | VideoTaskCreateOptions): Promise<CreatedVideoGenerationTask> {
     const model = config.model || config.videoModel;
     const systemPrompt = (config.systemPrompts.video || config.systemPrompt).trim();
+    const createOptions = normalizeVideoTaskCreateOptions(options);
+    const draft = !createOptions.draftTaskId && config.videoMode === "draft" && (modelKey(model).includes("seedance-2-5") || modelKey(model).includes("seedance2-5") || modelKey(model).includes("sd2-5"));
+    if (config.videoMode === "draft" && !draft) config = { ...config, videoMode: "std" };
+    const draftBody = createOptions.draftTaskId
+        ? { model, draft_task_id: createOptions.draftTaskId, resolution_name: "1080p", seconds: config.videoSeconds, video_watermark: boolConfig(config.videoWatermark, false) }
+        : undefined;
+    if (draftBody) await createOptions.onRequest?.(JSON.stringify(draftBody));
     const translation = await findParameterTranslation({...config,model});
-    if (translation) return createTranslatedVideoTask({...config,model},translation,systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,normalizeVideoReferenceInput(references),normalizeVideoTaskCreateOptions(options),onProgress);
-    const body = await createVideoRequestBody(config, model, systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, normalizeVideoReferenceInput(references));
+    if (translation) {
+        const created = await createTranslatedVideoTask({...config,model},translation,systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt,normalizeVideoReferenceInput(references),createOptions,onProgress);
+        return { ...created, task: { ...created.task, draft, draft_task_id: draft ? created.task.draft_task_id || created.task.translationSnapshot?.taskIds[0] : undefined } };
+    }
+    const body = draftBody || await createVideoRequestBody(config, model, systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt, normalizeVideoReferenceInput(references));
+    if (draft) {
+        if (body instanceof FormData) {
+            body.set("draft", "true");
+            body.set("resolution_name", "480p");
+        } else {
+            Object.assign(body, { draft: true, resolution_name: "480p" });
+        }
+        await createOptions.onRequest?.(JSON.stringify(summarizeVideoRequestBody(body)));
+    }
     const startedAt = Date.now();
     try {
-        const createOptions = normalizeVideoTaskCreateOptions(options);
         const accountProxy = usesAccountProxy(config);
         const headers = { ...aiHeaders(config), ...(accountProxy && createOptions.clientTaskId ? { "X-Client-Video-Task-ID": createOptions.clientTaskId } : {}), ...(accountProxy && createOptions.source ? { "X-Video-Task-Source": createOptions.source } : {}), ...(accountProxy && createOptions.sourceId ? { "X-Video-Task-Source-ID": createOptions.sourceId } : {}) };
         const directProvider = !accountProxy ? directAIProviderForConfig(config) : null;
@@ -141,7 +159,7 @@ export async function createVideoGenerationTask(config: AiConfig, prompt: string
             : unwrapVideoResponseForConfig(config, model, (await axios.post<ApiVideoResponse>(createUrl, requestBody, { headers, signal: accountProxy ? undefined : createOptions.signal })).data);
         if (!created.id && !created.video_id) throw new Error("视频接口没有返回任务 ID");
         refreshRemoteUser(config);
-        const task = await syncGeneratedVideo(created, config);
+        const task = { ...await syncGeneratedVideo(created, config), draft, draft_task_id: draft ? created.task_id || created.id : undefined };
         if (typeof task.progress === "number") onProgress?.(task.progress, task);
         return { task, pollId: videoPollId(model, task), startedAt, requestBody: body };
     } catch (error) {
@@ -164,6 +182,7 @@ async function createTranslatedVideoTask(config: AiConfig, match: MatchedTransla
             resolution: config.vquality,
             seconds: Number(config.videoSeconds),
             mode: config.videoMode,
+            draftTaskId: options.draftTaskId || "",
             negativePrompt: config.videoNegativePrompt,
             generateAudio: boolConfig(config.videoGenerateAudio, true),
             watermark: boolConfig(config.videoWatermark, false),
@@ -174,6 +193,9 @@ async function createTranslatedVideoTask(config: AiConfig, match: MatchedTransla
             lastFrame: references.lastFrame ? await imageURL(references.lastFrame) : "",
         },
     };
+    if (options.draftTaskId || input.variables.mode === "draft") {
+        await options.onRequest?.(JSON.stringify(translationBody(config, input)));
+    }
     const startedAt = Date.now();
     let task: VideoResponse;
     if (match.accountProxy) {

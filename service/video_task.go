@@ -181,6 +181,10 @@ func VideoTaskResponse(task model.VideoTask) map[string]any {
 	}
 	if task.ParameterTranslationSnapshot != "" {
 		result["parameter_translation"] = true
+		var snapshot parameterTranslationSnapshot
+		if json.Unmarshal([]byte(task.ParameterTranslationSnapshot), &snapshot) == nil && snapshot.Variables["mode"] == "draft" {
+			result["draft_task_id"] = firstVideoTaskValue(snapshot.TaskIDs...)
+		}
 	}
 	if IsFailedVideoTaskStatus(task.Status) && (task.Error != "" || task.ErrorDetail != "") {
 		result["error"] = map[string]any{"message": firstVideoTaskValue(task.Error, task.ErrorDetail)}
