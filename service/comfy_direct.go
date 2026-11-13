@@ -318,7 +318,7 @@ func comfyOutputItems(outputs any) []comfyOutputItem {
 		sort.Strings(keys)
 		for _, key := range keys {
 			switch key {
-			case "images", "gifs", "videos", "files":
+			case "images", "gifs", "files":
 				walk(node[key], "")
 			case "video", "videos":
 				walk(node[key], "video")
