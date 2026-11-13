@@ -99,6 +99,7 @@ func New() *gin.Engine {
 	v1.GET("/comfy-bridges", gin.WrapF(handler.UserComfyBridges))
 	v1.POST("/comfy-bridges", gin.WrapF(handler.UserComfyBridges))
 	v1.POST("/comfy-bridges/inspect", gin.WrapF(handler.UserComfyBridgeInspect))
+	v1.POST("/comfy-workflows/inspect", gin.WrapF(handler.InspectComfyWorkflow))
 	v1.DELETE("/comfy-bridges/:id", func(c *gin.Context) { handler.UserDeleteComfyBridge(c.Writer, c.Request, c.Param("id")) })
 	v1.POST("/user-config/storage", gin.WrapF(handler.SaveUserStorageProvider))
 	v1.GET("/canvas/projects", gin.WrapF(handler.UserCanvasProjects))

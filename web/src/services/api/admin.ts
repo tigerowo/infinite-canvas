@@ -242,6 +242,10 @@ export type AdminPublicModelChannelInfo = {
 
 export type AdminPublicSettings = {
     modelChannel: AdminPublicModelChannelSettings;
+    comfy: {
+        url: string;
+        servers: AdminComfyServer[];
+    };
     auth: {
         allowRegister: boolean;
         linuxDo: {
@@ -277,8 +281,20 @@ export type AdminStorageProvider = {
     capacityExceeded: boolean;
 };
 
+export type AdminComfyServer = {
+    id: string;
+    name: string;
+    url: string;
+    apiKey?: string;
+};
+
 export type AdminPrivateSettings = {
     channels: AdminModelChannel[];
+    comfy: {
+        url: string;
+        apiKey: string;
+        servers: AdminComfyServer[];
+    };
     promptSync: {
         enabled: boolean;
         cron: string;

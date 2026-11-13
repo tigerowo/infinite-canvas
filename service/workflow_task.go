@@ -87,6 +87,28 @@ func CreateWorkflowTask(ctx context.Context, user model.AuthUser, input Workflow
 		SaveAICallLog(logInput)
 	}()
 	if resolved.Channel.Protocol == "comfyui" {
+		if strings.TrimSpace(resolved.Channel.BridgeID) == "" {
+			target, ok := comfyTargetForEntry(resolved.Entry)
+			if !ok {
+				failure := errors.New("ComfyUI 服务地址未配置，请先在系统设置里填写默认地址")
+				if finishErr := finishWorkflowTask(taskID, "failed", nil, failure.Error(), nil); finishErr != nil {
+					return WorkflowTaskResult{}, errors.Join(failure, finishErr)
+				}
+				return WorkflowTaskResult{}, safeMessageError{message: failure.Error()}
+			}
+			promptID, submitErr := SubmitComfyDirectTask(ctx, target, resolved.Entry, input, overrides, &logInput)
+			if submitErr != nil {
+				if finishErr := finishWorkflowTask(taskID, "failed", nil, submitErr.Error(), &logInput); finishErr != nil {
+					return WorkflowTaskResult{}, errors.Join(submitErr, finishErr)
+				}
+				return WorkflowTaskResult{}, safeMessageError{message: submitErr.Error()}
+			}
+			if err := markRunningHubTask(user.ID, taskID, comfyDirectTag(target.ID, resolved.Entry.Capability, promptID)); err != nil {
+				return WorkflowTaskResult{}, errors.Join(err, finishWorkflowTask(taskID, "failed", nil, err.Error(), nil))
+			}
+			WakeVideoTaskPoller()
+			return WorkflowTaskResult{ID: taskID, Status: "running", Progress: 10}, nil
+		}
 		payload := comfyWorkflowPayload(resolved.Entry, input, overrides)
 		encoded, _ := json.Marshal(payload)
 		logInput.RequestBody = string(workflowLogJSON(string(encoded), ""))
@@ -325,7 +347,7 @@ func workflowUpstreamID(value string) string {
 
 func pollRunningHubWorkflowTask(ctx context.Context, task repository.RunningHubWorkflowTask) error {
 	if started, parseErr := time.Parse(time.RFC3339Nano, task.CreatedAt); parseErr == nil && time.Since(started) > workflowTaskTimeout {
-		return finishWorkflowTask(task.ID, "failed", nil, "RunningHub 任务超过 1 小时仍未完成")
+		return finishWorkflowTask(task.ID, "failed", nil, "工作流任务超过 1 小时仍未完成")
 	}
 	upstreamID := task.UpstreamTaskID
 	if !strings.HasPrefix(task.ID, "wf-video-") {
@@ -341,6 +363,29 @@ func pollRunningHubWorkflowTask(ctx context.Context, task repository.RunningHubW
 	resolved, err := resolveWorkflowForUser(model.AuthUser{ID: task.UserID}, ref, false)
 	if err != nil {
 		return finishWorkflowTask(task.ID, "failed", nil, err.Error())
+	}
+	if resolved.Channel.Protocol == "comfyui" {
+		serverID, capability, promptID := parseComfyDirectTag(upstreamID)
+		if strings.TrimSpace(promptID) == "" {
+			return finishWorkflowTask(task.ID, "failed", nil, "ComfyUI 上游任务 ID 无效")
+		}
+		target, ok := comfyTargetByID(serverID)
+		if !ok {
+			return finishWorkflowTask(task.ID, "failed", nil, "ComfyUI 服务地址未配置")
+		}
+		var capture AICallLogInput
+		urls, done, pollErr := PollComfyDirectTask(ctx, target, promptID, capability)
+		if errors.Is(pollErr, errComfyDirectTerminal) {
+			failure := strings.TrimSpace(strings.TrimPrefix(pollErr.Error(), errComfyDirectTerminal.Error()+":"))
+			if failure == "" {
+				failure = errComfyDirectTerminal.Error()
+			}
+			return finishWorkflowTask(task.ID, "failed", nil, failure, &capture)
+		}
+		if done {
+			return finishWorkflowTask(task.ID, "completed", urls, "", &capture)
+		}
+		return pollErr
 	}
 	var capture AICallLogInput
 	urls, done, pollErr := PollRunningHubTask(ctx, resolved.Channel, upstreamID, &capture)

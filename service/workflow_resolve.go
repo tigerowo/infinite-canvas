@@ -104,9 +104,13 @@ func resolveWorkflowForUser(user model.AuthUser, ref WorkflowRef, requireEntry b
 				if entry.Kind != "workflow" {
 					return ResolvedWorkflow{}, errors.New("ComfyUI 只支持 Workflow 类型")
 				}
-				bridge, err := repository.GetComfyBridge(channel.BridgeID)
-				if err != nil || !bridge.Enabled || bridge.OwnerScope != ownerScope || bridge.OwnerID != ownerID {
-					return ResolvedWorkflow{}, errors.New("ComfyUI Bridge 不存在或无权使用")
+				if strings.TrimSpace(channel.BridgeID) != "" {
+					bridge, err := repository.GetComfyBridge(channel.BridgeID)
+					if err != nil || !bridge.Enabled || bridge.OwnerScope != ownerScope || bridge.OwnerID != ownerID {
+						return ResolvedWorkflow{}, errors.New("ComfyUI Bridge 不存在或无权使用")
+					}
+				} else if _, ok := comfyTargetForEntry(entry); !ok {
+					return ResolvedWorkflow{}, errors.New("ComfyUI 服务地址未配置，请先在系统设置里填写默认地址")
 				}
 			}
 			return ResolvedWorkflow{Channel: channel, Entry: entry, OwnerScope: ownerScope, OwnerID: ownerID}, nil
