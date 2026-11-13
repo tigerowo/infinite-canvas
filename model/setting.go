@@ -35,6 +35,21 @@ type ModelChannel struct {
 	ParameterTranslation string            `json:"parameterTranslation,omitempty"`
 }
 
+// ComfyServer 额外的 ComfyUI 服务端，供工作流按需绑定。
+type ComfyServer struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	APIKey string `json:"apiKey,omitempty"`
+}
+
+// ComfySetting ComfyUI 服务端配置：默认地址与额外服务端；工作流没有绑定服务端时使用默认地址。
+type ComfySetting struct {
+	URL     string        `json:"url"`
+	APIKey  string        `json:"apiKey,omitempty"`
+	Servers []ComfyServer `json:"servers"`
+}
+
 type WorkflowFieldMapping struct {
 	ID                 string `json:"id,omitempty"`
 	NodeID             string `json:"nodeId"`
@@ -71,6 +86,7 @@ type WorkflowEntry struct {
 	Title         string                 `json:"title"`
 	Capability    string                 `json:"capability"`
 	Enabled       bool                   `json:"enabled"`
+	ComfyServerID string                 `json:"comfyServerId,omitempty"`
 	Fields        []WorkflowFieldMapping `json:"fields"`
 	WorkflowJSON  map[string]any         `json:"workflowJson,omitempty"`
 	WorkflowGraph map[string]any         `json:"workflowGraph,omitempty"`
@@ -135,8 +151,21 @@ type PublicModelChannelInfo struct {
 // PublicSetting 公开配置。
 type PublicSetting struct {
 	ModelChannel PublicModelChannelSetting `json:"modelChannel"`
+	Comfy        PublicComfySetting        `json:"comfy"`
 	Auth         PublicAuthSetting         `json:"auth"`
 	Storage      PublicStorageSetting      `json:"storage"`
+}
+
+// PublicComfySetting 公开的 ComfyUI 服务端清单，密钥不出现在这里。
+type PublicComfySetting struct {
+	URL     string              `json:"url"`
+	Servers []PublicComfyServer `json:"servers"`
+}
+
+type PublicComfyServer struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
 }
 
 type PublicStorageSetting struct {
@@ -162,6 +191,7 @@ type PublicLinuxDoAuthSetting struct {
 // PrivateSetting 私有配置。
 type PrivateSetting struct {
 	Channels   []ModelChannel        `json:"channels"`
+	Comfy      ComfySetting          `json:"comfy"`
 	PromptSync PromptSyncSetting     `json:"promptSync"`
 	AILog      AILogSetting          `json:"aiLog"`
 	Auth       PrivateAuthSetting    `json:"auth"`
