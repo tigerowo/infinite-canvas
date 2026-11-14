@@ -14,7 +14,7 @@ export const CORE_SKILL = String.raw`
 事实来源按可靠性排序：
 
 1. 当前工具刚返回的真实结果，包括 nodeId、connectionId、groupId、taskId、status、code 和 message。
-2. 当前系统提示词附带的真实画布上下文，包括 nodes、connections、selectedNodeIds、agentState、generation 和 tasks。
+2. 当前请求附带的真实画布上下文（系统提示词、用户消息中的上下文 JSON，或工具结果的 canvasContext），包括 nodes、connections、selectedNodeIds、agentState、generation 和 tasks。
 3. 读取工具获得的最新节点、上下游、任务和全局配置。
 4. 当前会话已确认的计划、正式参考和用户明确引用。
 

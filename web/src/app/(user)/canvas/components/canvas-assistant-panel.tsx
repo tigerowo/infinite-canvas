@@ -481,6 +481,7 @@ export function CanvasAssistantPanel({
             );
             const run = mode === "codex" ? (input: Parameters<typeof runCanvasAgent>[0]) => codex.run({
                 ...input, threadId: session.codexThreadId, serviceId: session.codexServiceId, model: codexModel?.model, effort: codexEffort,
+                skillsSelected: input.skillsSelected || skillOverride !== undefined,
                 onThread: (codexThreadId, codexServiceId) => updateSession(session.id, (current) => ({ ...current, codexThreadId, codexServiceId })),
                 onText: (text) => updateMessage(session.id, assistantId, { text }),
             }) : runCanvasAgent;
@@ -491,12 +492,14 @@ export function CanvasAssistantPanel({
                 userText: text,
                 references: modelReferences,
                 activeSkillContents,
+                skillsSelected: userMessage.skillsSelected,
                 contextCheckpoint: session.contextCheckpoint,
                 preferredJsonMode: session.jsonToolFallbackKey === jsonToolFallbackKey ? session.jsonToolFallbackMode || "structured-json" : undefined,
                 getContext: getAgentContext,
                 executeAction: (action, signal = controller.signal) => executeCanvasTool(action, messageReferenceNodeIds, activeSkills, mode, signal),
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
+                onContextUsage: (usage) => updateSession(session.id, (current) => ({ ...current, contextUsage: usage })),
                 onCheckpoint: (checkpoint) =>
                     updateSession(session.id, (current) => ({
                         ...current,
@@ -542,18 +545,18 @@ export function CanvasAssistantPanel({
 
     const submit = async (nextPrompt = prompt, referenceIds = composerReferenceIds) => {
         const text = nextPrompt.trim();
-        if (!text || isRunning) return;
+        if ((!text && !selectedSkills.length) || isRunning) return;
         await sendMessage(text, resolveReferences(referenceIds));
     };
 
     const retryMessage = (message: CanvasAssistantMessage) => {
         const index = messages.findIndex((item) => item.id === message.id);
         const user = messages.slice(0, index).findLast((item) => item.role === "user");
-        if (user) void sendMessage(user.text, user.references, user.skills || []);
+        if (user) void sendMessage(user.text, user.references, user.skills || [], user.skillsSelected);
     };
 
     const startResize = () => {
-        const move = (event: MouseEvent) => onWidthChange(Math.min(760, Math.max(464, window.innerWidth - event.clientX)));
+        const move = (event: MouseEvent) => onWidthChange(Math.min(760, Math.max(320, window.innerWidth - event.clientX)));
         const stop = () => {
             setResizing(false);
             document.body.style.cursor = "";
@@ -679,6 +682,7 @@ export function CanvasAssistantPanel({
                         prompt={prompt}
                         isRunning={isRunning}
                         codexControls={codexControls}
+                        contextUsage={mode !== "codex" || activeSession?.contextUsage?.threadId === activeSession?.codexThreadId ? activeSession?.contextUsage : undefined}
                         references={composerReferences}
                         availableReferences={resourceReferences}
                         pendingReferences={pendingReferences}
@@ -856,7 +860,7 @@ function AssistantMessages({ messages, nodeById, onFocusNode, onRetry, codexMode
                 if (message.role === "user") previousUserSkills = message.skills || [];
                 return (
                     <div key={message.id} className={cn("flex flex-col gap-2", message.role === "user" ? "items-end" : "items-start")}>
-                        {message.text ? (
+                        {message.text || (message.role === "user" && showSkills && message.skills?.length) ? (
                             <div
                                 className="max-w-[88%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm leading-6"
                                 style={

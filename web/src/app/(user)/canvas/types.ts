@@ -252,7 +252,7 @@ export type CanvasAgentToolCall = {
 };
 
 export type CanvasAgentProtocolMessage =
-    | { role: "user" | "system"; content: CanvasAgentContent }
+    | { role: "user" | "system"; content: CanvasAgentContent; contextCompaction?: string }
     | { role: "assistant"; content?: string; reasoningContent?: string; responseItems?: unknown[]; toolCalls?: CanvasAgentToolCall[] }
     | { role: "tool"; content: string; toolCallId: string; name: string };
 
@@ -273,6 +273,8 @@ export type CanvasAssistantMessage = {
 export type CanvasAgentJsonFallbackMode = "structured-json" | "prompt-json";
 export type CanvasAgentToolMode = "native" | CanvasAgentJsonFallbackMode;
 
+export type CanvasAgentContextUsage = { tokens: number; contextWindow?: number | null; threadId?: string };
+
 export type CanvasAssistantSession = {
     provider?: "api" | "codex";
     codexThreadId?: string;
@@ -286,6 +288,7 @@ export type CanvasAssistantSession = {
     jsonToolFallbackMode?: CanvasAgentJsonFallbackMode;
     activeSkills?: CanvasAgentSkillSelection[];
     contextCheckpoint?: string;
+    contextUsage?: CanvasAgentContextUsage;
     createdAt: string;
     updatedAt: string;
 };

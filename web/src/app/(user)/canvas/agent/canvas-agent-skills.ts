@@ -14,7 +14,7 @@ import { VIDEO_MULTI_SHOT_SKILL } from "./skills/video-multi-shot";
 import { VIDEO_SINGLE_SHOT_SKILL } from "./skills/video-single-shot";
 import { WORKFLOW_SKILL } from "./skills/workflow";
 
-export function buildCanvasAgentSkillPrompt(phase: CanvasAgentPhase, userText: string, context: CanvasAgentContext, activeSkillContents?: string, contextCheckpoint?: string, skillFileToolAvailable = false) {
+export function buildCanvasAgentSkillPrompt(phase: CanvasAgentPhase, userText: string, context: CanvasAgentContext, activeSkillContents?: string, contextCheckpoint?: string, skillFileToolAvailable = false, includeCanvasContext = true) {
     const skills = [CORE_SKILL];
 
     if (!activeSkillContents) {
@@ -82,7 +82,7 @@ export function buildCanvasAgentSkillPrompt(phase: CanvasAgentPhase, userText: s
         + (skillFileToolAvailable ? "\n\n【系统 Skill 附属文件】\n仅按当前系统 Skill 给出的相对路径调用 read_skill_file；读取结果只用于当前执行，不写入画布或伪装成工具成果。" : "")
         + (contextCheckpoint ? "\n\n【长期对话检查点】\n" + contextCheckpoint : "")
         + "\n\n【事实优先级】\n当前工具结果 > 当前真实画布上下文 > agentState > 用户所选 Skill 根内容 > 长期对话检查点。检查点中的节点 ID 仅是线索；节点已不存在时不得据此恢复或声称其仍存在。"
-        + "\n\n【当前真实画布上下文 JSON】\n" + serializeCanvasAgentContext(context);
+        + (includeCanvasContext ? "\n\n【当前真实画布上下文 JSON】\n" + serializeCanvasAgentContext(context) : "");
 }
 
 function buildIntentText(userText: string, context: CanvasAgentContext) {

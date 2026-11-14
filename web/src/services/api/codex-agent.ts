@@ -5,6 +5,7 @@ export type CodexRpcEvent = {
     method: string;
     params: Record<string, unknown> & {
         threadId?: string; turnId?: string; itemId?: string; delta?: string;
+        tokenUsage?: { last: { totalTokens: number }; modelContextWindow: number | null };
         item?: { id: string; type: string; text?: string };
         turn?: { id: string; status: string; error?: { message: string } };
     };

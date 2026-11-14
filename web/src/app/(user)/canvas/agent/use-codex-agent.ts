@@ -165,7 +165,14 @@ export function useCodexAgent(options: {
                 return;
             }
             if (!belongs) return;
-            if (event.method === "item/agentMessage/delta" && params.itemId) {
+            if (event.method === "thread/tokenUsage/updated" && params.tokenUsage) {
+                try {
+                    const { last, modelContextWindow } = params.tokenUsage;
+                    if (last && Number.isFinite(last.totalTokens) && last.totalTokens >= 0) {
+                        pending.input.onContextUsage?.({ tokens: last.totalTokens, contextWindow: modelContextWindow, threadId: params.threadId });
+                    }
+                } catch { /* 用量展示不影响 Codex 执行 */ }
+            } else if (event.method === "item/agentMessage/delta" && params.itemId) {
                 pending.messages.set(params.itemId, (pending.messages.get(params.itemId) || "") + (params.delta || ""));
                 pending.input.onText([...pending.messages.values()].join("\n\n"));
             } else if (event.method === "item/completed" && params.item?.type === "agentMessage") {
@@ -279,7 +286,9 @@ export function useCodexAgent(options: {
                 const references = input.references.map((item) => (item.label || item.title) + " → 节点 " + item.id + "（" + item.title + "）").join("；");
                 const images = input.references.filter((item) => item.dataUrl && /^(data:image\/|https?:\/\/)/.test(item.dataUrl));
                 const imageOrder = images.map((item, index) => "第 " + (index + 1) + " 张 = " + (item.label || item.title)).join("；");
-                const text = input.userText + (references ? "\n本次引用：" + references : "") + (imageOrder ? "\n附图顺序：" + imageOrder : "");
+                const text = input.userText
+                    + (skills && input.skillsSelected ? "\n\n【本轮用户明确选择的 Skill，替换此前选择】\n" + skills : "")
+                    + (references ? "\n本次引用：" + references : "") + (imageOrder ? "\n附图顺序：" + imageOrder : "");
                 const { turn } = await link.rpc<{ turn: { id: string } }>("turn/start", {
                     threadId: thread.id,
                     input: [{ type: "text", text }, ...images.map((item) => ({ type: "image", url: item.dataUrl }))],
