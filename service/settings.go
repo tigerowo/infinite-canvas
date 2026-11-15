@@ -111,6 +111,7 @@ func AdminTestChannelModel(index *int, channel model.ModelChannel, modelName str
 func normalizeSettings(settings model.Settings) model.Settings {
 	settings.Private = normalizePrivateSetting(settings.Private)
 	settings.Public = normalizePublicSettingWithChannels(settings.Public, settings.Private.Channels)
+	settings.Public.Comfy = publicComfySetting(settings.Private.Comfy)
 	return settings
 }
 
@@ -264,6 +265,8 @@ func normalizePrivateSetting(setting model.PrivateSetting) model.PrivateSetting 
 	if setting.Channels == nil {
 		setting.Channels = []model.ModelChannel{}
 	}
+	setting.Comfy = normalizeComfySetting(setting.Comfy)
+	clearMissingComfyServerBindings(&setting)
 	setting.PromptSync = normalizePromptSyncSetting(setting.PromptSync)
 	setting.AILog = normalizeAILogSetting(setting.AILog)
 	setting.Storage = normalizePrivateStorageSetting(setting.Storage)
@@ -291,6 +294,10 @@ func hidePrivateAPIKeys(settings model.Settings) model.Settings {
 	for i := range settings.Private.Channels {
 		settings.Private.Channels[i].APIKey = ""
 		settings.Private.Channels[i].UploadAPIKey = ""
+	}
+	settings.Private.Comfy.APIKey = ""
+	for i := range settings.Private.Comfy.Servers {
+		settings.Private.Comfy.Servers[i].APIKey = ""
 	}
 	for i := range settings.Private.Storage.Providers {
 		settings.Private.Storage.Providers[i].SecretAccessKey = ""
@@ -324,12 +331,73 @@ func keepPrivateAPIKeys(settings *model.Settings, saved model.Settings) {
 			break
 		}
 	}
+	if strings.TrimSpace(settings.Private.Comfy.APIKey) == "" {
+		settings.Private.Comfy.APIKey = saved.Private.Comfy.APIKey
+	}
+	savedComfyKeys := make(map[string]string, len(saved.Private.Comfy.Servers))
+	for _, server := range saved.Private.Comfy.Servers {
+		savedComfyKeys[server.ID] = server.APIKey
+	}
+	for i := range settings.Private.Comfy.Servers {
+		if strings.TrimSpace(settings.Private.Comfy.Servers[i].APIKey) == "" {
+			settings.Private.Comfy.Servers[i].APIKey = savedComfyKeys[settings.Private.Comfy.Servers[i].ID]
+		}
+	}
 }
 
 func keepPrivateAuthSecrets(settings *model.Settings, saved model.Settings) {
 	if strings.TrimSpace(settings.Private.Auth.LinuxDo.ClientSecret) == "" {
 		settings.Private.Auth.LinuxDo.ClientSecret = saved.Private.Auth.LinuxDo.ClientSecret
 	}
+}
+
+func normalizeComfySetting(setting model.ComfySetting) model.ComfySetting {
+	setting.URL = strings.TrimRight(strings.TrimSpace(setting.URL), "/")
+	setting.APIKey = strings.TrimSpace(setting.APIKey)
+	servers := make([]model.ComfyServer, 0, len(setting.Servers))
+	seen := map[string]bool{}
+	for _, server := range setting.Servers {
+		server.URL = strings.TrimRight(strings.TrimSpace(server.URL), "/")
+		server.Name = strings.TrimSpace(server.Name)
+		server.APIKey = strings.TrimSpace(server.APIKey)
+		if server.ID == "" {
+			server.ID = "comfy-" + providerSecureHash([]string{server.URL, server.Name})
+		}
+		if seen[server.ID] {
+			continue
+		}
+		seen[server.ID] = true
+		if server.Name == "" {
+			server.Name = fmt.Sprintf("服务端 %d", len(servers)+1)
+		}
+		servers = append(servers, server)
+	}
+	setting.Servers = servers
+	return setting
+}
+
+// clearMissingComfyServerBindings 让删掉的服务端不再被工作流引用，执行时回落到默认地址。
+func clearMissingComfyServerBindings(setting *model.PrivateSetting) {
+	known := make(map[string]bool, len(setting.Comfy.Servers))
+	for _, server := range setting.Comfy.Servers {
+		known[server.ID] = true
+	}
+	for i := range setting.Channels {
+		for j := range setting.Channels[i].Workflows {
+			serverID := setting.Channels[i].Workflows[j].ComfyServerID
+			if serverID != "" && !known[serverID] {
+				setting.Channels[i].Workflows[j].ComfyServerID = ""
+			}
+		}
+	}
+}
+
+func publicComfySetting(setting model.ComfySetting) model.PublicComfySetting {
+	servers := make([]model.PublicComfyServer, 0, len(setting.Servers))
+	for _, server := range setting.Servers {
+		servers = append(servers, model.PublicComfyServer{ID: server.ID, Name: server.Name, URL: server.URL})
+	}
+	return model.PublicComfySetting{URL: setting.URL, Servers: servers}
 }
 
 func findSavedChannel(channel model.ModelChannel, saved []model.ModelChannel, index int) (model.ModelChannel, bool) {

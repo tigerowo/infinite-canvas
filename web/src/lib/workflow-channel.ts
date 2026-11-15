@@ -64,6 +64,7 @@ export type WorkflowEntry = {
     title: string;
     capability: WorkflowCapability;
     enabled: boolean;
+    comfyServerId?: string;
     fields: WorkflowFieldMapping[];
     workflowJson?: Record<string, unknown>;
     workflowGraph?: WorkflowGraphPreview;

@@ -13,7 +13,7 @@ import type { WorkflowChannelSettings } from "@/components/workflow/workflow-cha
 import { useAutoDLWorkflowNames } from "@/hooks/use-autodl-workflow";
 import { isWorkflowProtocol, modelChannelApiKeyUrls, modelChannelDefaultBaseUrls, modelChannelProtocolOptions } from "@/lib/model-channel";
 import { startTokenDanceOAuth } from "@/lib/tokendance-oauth";
-import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
+import { fetchAdminSettings, fetchChannelModels, measureAdminStorageProvider, saveAdminSettings, testChannelModel, type AdminComfyServer, type AdminModelChannel, type AdminModelCost, type AdminSettings, type AdminStorageProvider } from "@/services/api/admin";
 import { clearStorageConfigCache as clearMediaStorageConfigCache } from "@/services/file-storage";
 import { clearStorageConfigCache as clearImageStorageConfigCache } from "@/services/image-storage";
 import { useUserStore } from "@/stores/use-user-store";
@@ -51,9 +51,10 @@ const emptySettings: AdminSettings = {
             allowUserRemoteChannel: false,
         },
         auth: { allowRegister: true, linuxDo: { enabled: false } },
+        comfy: { url: "", servers: [] },
         storage: { mode: "local_indexeddb", allowUserProvider: false },
     },
-    private: { channels: [], promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
+    private: { channels: [], comfy: { url: "", apiKey: "", servers: [] }, promptSync: { enabled: true, cron: "0 0 * * *" }, aiLog: { localDirectReportEnabled: false, cleanup: { enabled: false, retentionDays: 14, cron: "0 3 * * *" } }, auth: { linuxDo: { clientId: "", clientSecret: "" } }, storage: { mode: "local_indexeddb", allowUserProvider: false, allowUserGlobalProvider: true, autoSyncAllAssets: false, providers: [], roundRobinCursor: 0, capacityCheck: { enabled: false, cron: "0 */6 * * *" }, capacityLimitBytes: 9 * 1024 * 1024 * 1024 } },
 };
 const emptyChannel: AdminModelChannel = { id: "", protocol: "openai", name: "", baseUrl: modelChannelDefaultBaseUrls.openai, apiKey: "", models: [], weight: 1, timeout: 600, enabled: true, remark: "" };
 const emptyS3StorageProvider: AdminStorageProvider = { id: "", name: "", type: "s3", endpoint: "", region: "auto", bucket: "", bucketInHost: false, accessKeyId: "", secretAccessKey: "", publicBaseUrl: "", pathPrefix: "canvas", username: "", password: "", weight: 1, enabled: true, ownerUserId: "", capacityBytes: 0, capacityCheckedAt: "", capacityExceeded: false };
@@ -693,6 +694,57 @@ export default function AdminSettingsPage() {
                                         </Col>
                                     </Row>
                                 </Card>
+                                <Card size="small" title="ComfyUI 服务地址">
+                                    <Flex vertical gap={14}>
+                                        <Typography.Text type="secondary">渠道没有绑定 Bridge 时，服务端直接连这里的地址执行 ComfyUI 工作流。</Typography.Text>
+                                        <Row gutter={16}>
+                                            <Col xs={24} md={12}>
+                                                <Form.Item name={["private", "comfy", "url"]} label="默认地址" extra="ComfyUI 后端服务地址，默认端口 8188；工作流没有绑定服务端时使用它">
+                                                    <Input placeholder="https://xxxx-8188.container.x-gpu.com" />
+                                                </Form.Item>
+                                            </Col>
+                                            <Col xs={24} md={12}>
+                                                <Form.Item name={["private", "comfy", "apiKey"]} label="API Key（自建代理未开启鉴权时可留空）" extra="用于云端或启用 Bearer 鉴权的 ComfyUI 服务端">
+                                                    <Input.Password placeholder="留空沿用已保存密钥" />
+                                                </Form.Item>
+                                            </Col>
+                                        </Row>
+                                        <Form.List name={["private", "comfy", "servers"]}>
+                                            {(fields, { add, remove }) => (
+                                                <Flex vertical gap={12}>
+                                                    <Button icon={<PlusOutlined />} onClick={() => add({ id: "", name: "", url: "", apiKey: "" })}>
+                                                        添加服务端
+                                                    </Button>
+                                                    {fields.map((field) => (
+                                                        <Row gutter={12} key={field.key} align="bottom">
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "name"]} label="服务端名称" className="!mb-0">
+                                                                    <Input placeholder="服务端 1" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={10}>
+                                                                <Form.Item name={[field.name, "url"]} label="服务地址" className="!mb-0">
+                                                                    <Input placeholder="https://u1151197-xxxx.westd.seetacloud.com:8443" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={6}>
+                                                                <Form.Item name={[field.name, "apiKey"]} label="API Key（可选）" className="!mb-0">
+                                                                    <Input.Password placeholder="留空沿用已保存密钥" />
+                                                                </Form.Item>
+                                                            </Col>
+                                                            <Col xs={24} md={2}>
+                                                                <Button danger block onClick={() => remove(field.name)}>
+                                                                    删除
+                                                                </Button>
+                                                            </Col>
+                                                        </Row>
+                                                    ))}
+                                                    <Typography.Text type="secondary">在下面的模型渠道里给 ComfyUI 工作流选择服务端；删掉服务端后，绑过它的工作流回落到默认地址。</Typography.Text>
+                                                </Flex>
+                                            )}
+                                        </Form.List>
+                                    </Flex>
+                                </Card>
                                 <Card size="small" title="数据存储">
                                     <Row gutter={16}>
                                         <Col xs={24} md={6}>
@@ -1195,7 +1247,15 @@ function normalizePublicSetting(setting: Partial<AdminSettings["public"]> = {}):
             mode: setting.storage?.mode || "local_indexeddb",
             allowUserProvider: setting.storage?.allowUserProvider === true,
         },
+        comfy: {
+            url: setting.comfy?.url || "",
+            servers: (setting.comfy?.servers || []).map(normalizeComfyServer),
+        },
     };
+}
+
+function normalizeComfyServer(item: Partial<AdminComfyServer> = {}): AdminComfyServer {
+    return { id: item.id || "", name: item.name || "", url: item.url || "", apiKey: item.apiKey || "" };
 }
 
 function normalizeModelCosts(items: Partial<AdminSettings["public"]["modelChannel"]["modelCosts"][number]>[]) {
@@ -1235,6 +1295,11 @@ function normalizePrivateSetting(setting: Partial<AdminSettings["private"]> = {}
                 cron: setting.storage?.capacityCheck?.cron || "0 */6 * * *",
             },
             capacityLimitBytes: Number(setting.storage?.capacityLimitBytes) || 9 * 1024 * 1024 * 1024,
+        },
+        comfy: {
+            url: setting.comfy?.url || "",
+            apiKey: setting.comfy?.apiKey || "",
+            servers: (setting.comfy?.servers || []).map(normalizeComfyServer),
         },
     };
 }

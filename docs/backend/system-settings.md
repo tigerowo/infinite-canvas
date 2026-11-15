@@ -131,3 +131,29 @@ description: settings 表中 public 和 private 配置结构说明
 | --- | --- | --- |
 | `enabled` | boolean | 是否开启定时同步，默认开启 |
 | `cron` | string | Cron 表达式，默认每天 0 点 |
+
+## ComfyUI 服务地址
+
+`private.comfy` 保存 ComfyUI 服务端；`comfyui` 协议渠道没有绑定 Bridge 时，由服务端直连这里的地址执行工作流。
+
+```json
+{
+  "comfy": {
+    "url": "https://xxxx-8188.container.x-gpu.com",
+    "apiKey": "",
+    "servers": [
+      { "id": "comfy-a1b2c3d4e5f60718", "name": "服务端 1", "url": "https://u1151197-xxx.westd.seetacloud.com:8443", "apiKey": "" }
+    ]
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `url` | string | 默认地址，工作流没有绑定服务端时使用 |
+| `apiKey` | string | 默认地址的 Bearer 鉴权密钥，服务端未开启鉴权时留空 |
+| `servers` | object[] | 额外服务端，每项为 `{ id, name, url, apiKey }` |
+
+`comfyui` 渠道的每条工作流用 `workflow.comfyServerId` 绑定服务端；绑定 ID 不存在（含服务端被删除）时自动回落到默认地址。渠道绑定了 `bridgeId` 时仍由 Bridge 执行，`comfy` 只对未绑定 Bridge 的渠道生效。
+
+`private.comfy` 的密钥不会下发前端；公开配置只给出 `public.comfy = { url, servers: [{ id, name, url }] }` 供工作流选择服务端。

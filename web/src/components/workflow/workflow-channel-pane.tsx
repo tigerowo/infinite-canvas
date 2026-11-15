@@ -9,8 +9,10 @@ import { WorkflowTestWorkbench } from "@/components/workflow/workflow-test-workb
 import { parseComfyWorkflowJSON } from "@/lib/comfy-workflow-json";
 import { mergeWorkflowFieldMappings, normalizeWorkflowFieldMappings, type WorkflowCapability, type WorkflowEntry, type WorkflowKind } from "@/lib/workflow-channel";
 import { createComfyBridge, deleteComfyBridge, inspectComfyBridge, listComfyBridges, type ComfyBridgeSummary } from "@/services/api/comfy-bridge";
+import { inspectComfyWorkflow } from "@/services/api/comfy-workflow";
 import { inspectRunningHub } from "@/services/api/runninghub";
 import type { AdminModelChannel } from "@/services/api/admin";
+import { useConfigStore } from "@/stores/use-config-store";
 import styles from "./workflow-channel-pane.module.css";
 
 export type WorkflowChannelSettings = {
@@ -55,6 +57,7 @@ export function WorkflowChannelPane({ channel, workflows, token, admin, onChanne
     const activeRef = useRef(true);
     const selected = workflows.find((item) => entryKey(item) === selectedKey);
     const bridge = bridges.find((item) => item.id === channel.bridgeId);
+    const comfyServers = useConfigStore((state) => state.publicSettings?.comfy?.servers);
 
     useEffect(() => {
         activeRef.current = true;
@@ -96,16 +99,21 @@ export function WorkflowChannelPane({ channel, workflows, token, admin, onChanne
                 incoming = await inspectRunningHub(token, { baseUrl: channel.baseUrl, apiKey: channel.apiKey, kind, workflowId: id, title, capability }, admin);
             } else {
                 if (!token) throw new Error("拉取 ComfyUI 参数请先登录");
-                if (!channel.bridgeId) throw new Error("请先选择 Bridge 设备");
-                const discovered = bridge?.capabilities?.workflows?.find((entry) => entry.workflowId === id);
-                const source = jsonText.trim() ? JSON.parse(jsonText) as Record<string, unknown> : undefined;
-                const inspected = await inspectComfyBridge(token, { bridgeId: channel.bridgeId, workflowId: id, workflowJson: source, capability }, Boolean(admin));
-                incoming = { provider: "comfyui", kind: "workflow", workflowId: id, title: title.trim() || discovered?.title || id, capability, enabled: true, fields: inspected.fields, workflowJson: inspected.workflowJson, workflowGraph: inspected.workflowGraph };
+                const source = jsonText.trim() ? JSON.parse(jsonText) as Record<string, unknown> : selected?.workflowJson;
+                if (!channel.bridgeId) {
+                    if (!source) throw new Error("直连渠道请先粘贴 ComfyUI API JSON，再拉取参数");
+                    const inspected = await inspectComfyWorkflow(token, { workflowJson: source, capability });
+                    incoming = { provider: "comfyui", kind: "workflow", workflowId: id, title: title.trim() || id, capability, enabled: true, fields: inspected.fields, workflowJson: inspected.workflowJson };
+                } else {
+                    const discovered = bridge?.capabilities?.workflows?.find((entry) => entry.workflowId === id);
+                    const inspected = await inspectComfyBridge(token, { bridgeId: channel.bridgeId, workflowId: id, workflowJson: source, capability }, Boolean(admin));
+                    incoming = { provider: "comfyui", kind: "workflow", workflowId: id, title: title.trim() || discovered?.title || id, capability, enabled: true, fields: inspected.fields, workflowJson: inspected.workflowJson, workflowGraph: inspected.workflowGraph };
+                }
             }
             if (!activeRef.current) return;
             const old = workflows.find((entry) => entryKey(entry) === entryKey(incoming));
             const fields = old?.fields.length ? mergeWorkflowFieldMappings(old.fields, incoming.fields, capability) : normalizeWorkflowFieldMappings(incoming.fields, capability);
-            const next = { ...incoming, enabled: old?.enabled ?? true, fields, workflowGraph: incoming.workflowGraph || old?.workflowGraph };
+            const next = { ...incoming, enabled: old?.enabled ?? true, comfyServerId: old?.comfyServerId, fields, workflowGraph: incoming.workflowGraph || old?.workflowGraph };
             saveEntry(next);
             setTitle(next.title);
             setJsonText(next.workflowJson ? JSON.stringify(next.workflowJson, null, 2) : "");
@@ -126,9 +134,16 @@ export function WorkflowChannelPane({ channel, workflows, token, admin, onChanne
                 saveEntry({ ...selected, workflowJson: parsed.workflowJson, workflowGraph: parsed.workflowGraph || selected.workflowGraph });
                 return;
             }
-            if (!token || !channel.bridgeId) return message.error("请先连接 Bridge");
+            if (!token) return message.error("应用 ComfyUI JSON 请先登录");
             setBusy(true);
             try {
+                if (!channel.bridgeId) {
+                    const inspected = await inspectComfyWorkflow(token, { workflowJson: source, capability: selected.capability });
+                    if (!activeRef.current) return;
+                    saveEntry({ ...selected, workflowJson: inspected.workflowJson, fields: mergeWorkflowFieldMappings(selected.fields, inspected.fields, selected.capability) });
+                    setJsonText(JSON.stringify(inspected.workflowJson, null, 2));
+                    return;
+                }
                 const inspected = await inspectComfyBridge(token, { bridgeId: channel.bridgeId, workflowId: selected.workflowId, workflowJson: source, capability: selected.capability }, Boolean(admin));
                 if (!activeRef.current) return;
                 saveEntry({ ...selected, workflowJson: inspected.workflowJson, workflowGraph: inspected.workflowGraph || selected.workflowGraph, fields: mergeWorkflowFieldMappings(selected.fields, inspected.fields, selected.capability) });
@@ -189,6 +204,7 @@ export function WorkflowChannelPane({ channel, workflows, token, admin, onChanne
                 <Form.Item label="ComfyUI 地址" className="!mb-0"><Input value={channel.comfyUrl || bridge?.capabilities?.comfyUrl || ""} onChange={(event) => onChannelChange({ comfyUrl: event.target.value })} placeholder="http://127.0.0.1:8188" /></Form.Item>
                 <Form.Item label="工作流目录" className="!mb-0"><Input value={channel.workflowDir || bridge?.capabilities?.workflowDir || ""} onChange={(event) => onChannelChange({ workflowDir: event.target.value })} placeholder="workflows" /></Form.Item>
             </div>
+            {!channel.bridgeId ? <div className="rounded-md border border-[var(--ant-color-border-secondary)] bg-[var(--ant-color-fill-quaternary)] px-3 py-2 text-xs text-[var(--ant-color-text-secondary)]">未选择 Bridge：这条渠道由服务端直连「系统设置 → ComfyUI 服务地址」里的服务端执行，工作流参数用下方 API JSON 拉取。</div> : null}
             <div className="flex gap-2"><Input value={bridgeName} onChange={(event) => setBridgeName(event.target.value)} placeholder="新 Bridge 名称" /><Button onClick={() => void registerBridge()}>注册 Bridge</Button></div>
             {newToken && channel.bridgeId === newTokenBridgeId ? <div className="space-y-2 rounded border p-3 text-xs">专用 Token 只显示这一次，关闭后无法找回：<Input.Password readOnly visibilityToggle value={newToken} /><div>下载对应程序，在能访问 ComfyUI 的机器上运行：</div><pre className="overflow-x-auto whitespace-pre-wrap rounded bg-[var(--muted)] p-2 select-text">Windows PowerShell: {windowsBridgeCommand}{"\n"}Linux: {linuxBridgeCommand}</pre><div className="flex gap-2"><Button size="small" onClick={() => void navigator.clipboard.writeText(windowsBridgeCommand).then(() => message.success("Windows 启动命令已复制"))}>复制 Windows 命令</Button><Button size="small" onClick={() => void navigator.clipboard.writeText(linuxBridgeCommand).then(() => message.success("Linux 启动命令已复制"))}>复制 Linux 命令</Button><Button size="small" onClick={() => setNewToken("")}>我已保存</Button></div><div>Linux ARM64：将命令中的 amd64 改为 arm64。</div></div> : null}
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[var(--ant-color-border-secondary)] bg-[var(--ant-color-fill-quaternary)] px-3 py-2">
@@ -202,6 +218,9 @@ export function WorkflowChannelPane({ channel, workflows, token, admin, onChanne
             {channel.protocol === "runninghub" ? <Form.Item label="类型" className="!mb-0 md:col-span-3"><Segmented block value={kind} options={[{ label: "Workflow", value: "workflow" }, { label: "App", value: "app" }]} onChange={(value) => { choose(); setKind(value as WorkflowKind); }} /></Form.Item> : null}
             <Form.Item label={kind === "app" ? "webappId" : "workflowId"} className={`!mb-0 ${channel.protocol === "runninghub" ? "md:col-span-3" : "md:col-span-6"}`}><Input value={workflowId} onChange={(event) => setWorkflowId(event.target.value)} /></Form.Item>
             <Form.Item label="显示名称" className="!mb-0 md:col-span-6"><Input value={title} onChange={(event) => setTitle(event.target.value)} onBlur={() => selected && saveEntry({ ...selected, title: title.trim() || selected.workflowId })} /></Form.Item>
+            {channel.protocol === "comfyui" && (comfyServers?.length ?? 0) > 0 ? <Form.Item label="执行服务端" className="!mb-0 md:col-span-6" extra={channel.bridgeId ? "渠道已绑定 Bridge，此设置只在未绑定 Bridge 时生效" : "未绑定 Bridge 时由服务端直连该服务端"}>
+                <Select allowClear placeholder="默认地址" value={selected?.comfyServerId || undefined} options={(comfyServers ?? []).map((item) => ({ label: item.name, value: item.id }))} onChange={(value) => selected && saveEntry({ ...selected, comfyServerId: value || undefined })} />
+            </Form.Item> : null}
             {channel.protocol === "comfyui" && bridge?.capabilities?.workflows?.length ? <Form.Item label="Bridge 发现的工作流" className="!mb-0 md:col-span-6"><Select showSearch options={bridge.capabilities.workflows.map((item) => ({ value: item.workflowId, label: item.title || item.workflowId }))} onChange={(id) => { setWorkflowId(id); setJsonText(""); }} /></Form.Item> : null}
             <Form.Item label="操作" className="!mb-0 md:col-span-12"><div className="flex flex-wrap items-center gap-2"><Button type="primary" loading={busy} onClick={() => void pull()}>{selected ? "重新拉取参数" : "拉取参数"}</Button><Switch checked={selected?.enabled === true} disabled={!selected} checkedChildren="启用" unCheckedChildren="停用" onChange={(enabled) => selected && saveEntry({ ...selected, enabled })} /><Popconfirm title="删除当前工作流？" onConfirm={() => { if (!selected) return; onWorkflowsChange(workflows.filter((item) => entryKey(item) !== selectedKey)); choose(); }}><Button danger disabled={!selected}>删除</Button></Popconfirm></div></Form.Item>
         </div>
