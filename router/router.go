@@ -59,6 +59,14 @@ func New() *gin.Engine {
 	v1.GET("/canvas/audio-tasks/:id", func(c *gin.Context) {
 		handler.GetCanvasAudioTask(c.Writer, c.Request, c.Param("id"))
 	})
+	videoAnalysis := v1.Group("/canvas/video-analysis")
+	videoAnalysis.POST("", gin.WrapF(handler.StartCanvasVideoAnalysis))
+	videoAnalysis.POST("/:id/frames", func(c *gin.Context) {
+		handler.CanvasVideoAnalysisFrames(c.Writer, c.Request, c.Param("id"))
+	})
+	videoAnalysis.DELETE("/:id", func(c *gin.Context) {
+		handler.CloseCanvasVideoAnalysis(c.Writer, c.Request, c.Param("id"))
+	})
 	v1.POST("/ai-logs", gin.WrapF(handler.ClientAICallLog))
 	v1.POST("/videos", gin.WrapF(handler.AIVideos))
 	v1.GET("/video-tasks", gin.WrapF(handler.UserVideoTasks))

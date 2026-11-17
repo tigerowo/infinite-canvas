@@ -36,6 +36,18 @@ COPY service ./service
 COPY main.go ./
 RUN go build -o /server .
 
+FROM --platform=$BUILDPLATFORM alpine:3.22 AS video-ffmpeg-download
+
+ARG TARGETARCH
+RUN apk add --no-cache curl ca-certificates
+COPY service/canvas_ffmpeg_assets.txt /tmp/ffmpeg-assets.txt
+RUN set -- $(awk -v target="linux/$TARGETARCH" '$1 == target { print $2, $3, $4; exit }' /tmp/ffmpeg-assets.txt) \
+    && test "$#" -eq 3 \
+    && curl -fLsS -o /ffmpeg "$3" \
+    && test "$(wc -c < /ffmpeg)" -eq "$1" \
+    && printf '%s  /ffmpeg\n' "$2" | sha256sum -c - \
+    && chmod 0755 /ffmpeg
+
 # 运行镜像：Next.js 对外监听 3000，Go 只在容器内部监听 8080。
 FROM node:22-bookworm-slim
 
@@ -43,6 +55,7 @@ WORKDIR /app
 COPY VERSION /app/VERSION
 COPY CHANGELOG.md /app/CHANGELOG.md
 COPY --from=api-build /server /app/server
+COPY --from=video-ffmpeg-download /ffmpeg /usr/local/bin/ffmpeg
 COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 COPY --from=web-build /app/web/public /app/web/public
@@ -52,6 +65,7 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 ENV PROMPT_DATA_DIR=/app/data/prompts
+ENV CANVAS_VIDEO_FFMPEG_PATH=/usr/local/bin/ffmpeg
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /app/data/prompts
 

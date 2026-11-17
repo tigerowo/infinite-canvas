@@ -1,6 +1,6 @@
 "use client";
 
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
     History,
     Bot,
@@ -35,11 +35,14 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
 import { fetchSystemAgentSkillFile } from "@/services/api/agent-skills";
+import { analyzeCanvasVideo } from "@/services/api/canvas-video-analysis";
+import { downloadRemoteMedia, resolveMediaUrl } from "@/services/file-storage";
 import { imageToDataUrl } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useAgentSkillStore } from "@/stores/use-agent-skill-store";
 import { useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { createCanvasAgentState, runCanvasAgent } from "../agent/canvas-agent-runtime";
 import { useCodexAgent } from "../agent/use-codex-agent";
 import type { CanvasAgentContext } from "../agent/canvas-agent-context";
@@ -188,6 +191,8 @@ export function CanvasAssistantPanel({
     const resourceReferences = useMemo(() => buildAllCanvasResourceReferences(nodes), [nodes]);
     const resourceReferenceById = useMemo(() => new Map(resourceReferences.map((reference) => [reference.nodeId, reference])), [resourceReferences]);
     const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+    const videoNodesRef = useRef(nodeById);
+    useLayoutEffect(() => { videoNodesRef.current = nodeById; }, [nodeById]);
     const resolveReferences = useCallback((ids: string[]) => ids.flatMap((id) => {
         const node = nodeById.get(id);
         const resource = resourceReferenceById.get(id);
@@ -337,6 +342,25 @@ export function CanvasAssistantPanel({
     const codex = useCodexAgent({
         canvasId,
         onBootstrap: () => { if (mode === "api") switchMode(); else setView("chat"); },
+        readVideo: async (nodeId, signal) => {
+            const node = videoNodesRef.current.get(nodeId);
+            const metadata = node?.metadata;
+            if (node?.type !== CanvasNodeType.Video || (!metadata?.content && !metadata?.storageKey)) {
+                throw new Error("请选择当前画布上已有视频的节点");
+            }
+            const token = useUserStore.getState().token;
+            const source = await resolveMediaUrl(metadata.storageKey, metadata.content || "");
+            signal.throwIfAborted();
+            if (!source) throw new Error("找不到原视频");
+            const video = await downloadRemoteMedia(source, { signal, direct: true }).catch((error) => {
+                const url = new URL(source, location.href);
+                if (signal.aborted || !(error instanceof TypeError) ||
+                    !["http:", "https:"].includes(url.protocol) || url.origin === location.origin) throw error;
+                return url.href;
+            });
+            if (useUserStore.getState().token !== token) throw new Error("登录状态已变化，请重新发起视频分析");
+            return video;
+        },
         executeTool: async (action, signal) => {
             if (action.name === "arrange_nodes" && !(await confirmCodex("允许 Codex 整理画布？", <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(action.arguments, null, 2)}</pre>, signal))) return { ok: false, code: "action_not_requested", message: "未允许整理画布" };
             return executeCanvasTool(action, [], [], "codex", signal);
@@ -466,6 +490,12 @@ export function CanvasAssistantPanel({
         }
 
         const controller = new AbortController();
+        const { token: initialToken, user: initialUser } = useUserStore.getState();
+        const videoAnalysisSkill = activeSkillContents.some(({ content }) => /\banalyze_video\b/.test(content));
+        const enableVideoAnalysis = mode === "api" &&
+            Boolean(initialToken && initialUser && initialUser.role !== "guest") &&
+            (references.some(({ type }) => type === CanvasNodeType.Video) || videoAnalysisSkill);
+        let stopWatchingVideoAccount: (() => void) | undefined;
         abortRef.current = controller;
         setIsRunning(true);
         try {
@@ -492,11 +522,50 @@ export function CanvasAssistantPanel({
                 userText: text,
                 references: modelReferences,
                 activeSkillContents,
+                ...(enableVideoAnalysis ? { enableVideoAnalysis: true } : {}),
                 skillsSelected: userMessage.skillsSelected,
                 contextCheckpoint: session.contextCheckpoint,
                 preferredJsonMode: session.jsonToolFallbackKey === jsonToolFallbackKey ? session.jsonToolFallbackMode || "structured-json" : undefined,
                 getContext: getAgentContext,
-                executeAction: (action, signal = controller.signal) => executeCanvasTool(action, messageReferenceNodeIds, activeSkills, mode, signal),
+                executeAction: async (action, signal = controller.signal) => {
+                    if (mode !== "api" || action.name !== "analyze_video") {
+                        return executeCanvasTool(action, messageReferenceNodeIds, activeSkills, mode, signal);
+                    }
+                    signal.throwIfAborted();
+                    const { nodeId, question, startMs, endMs, detailed } = action.arguments as {
+                        nodeId: string; question: string; startMs?: number; endMs?: number; detailed?: boolean;
+                    };
+                    if (!enableVideoAnalysis || (!videoAnalysisSkill && !messageReferenceNodeIds.includes(nodeId))) {
+                        return { ok: false, code: "video_reference_required", message: "请引用需要分析的视频" };
+                    }
+                    const node = videoNodesRef.current.get(nodeId);
+                    const metadata = node?.metadata;
+                    if (node?.type !== CanvasNodeType.Video || (!metadata?.content && !metadata?.storageKey)) {
+                        return { ok: false, code: "video_required", message: "请选择当前画布上已有视频的节点" };
+                    }
+                    const { token, user } = useUserStore.getState();
+                    if (!token || !user || user.role === "guest") {
+                        return { ok: false, code: "login_required", message: "请先登录再分析视频" };
+                    }
+                    if (token !== initialToken) {
+                        return { ok: false, code: "login_changed", message: "登录状态已变化，请重新发起视频分析" };
+                    }
+                    stopWatchingVideoAccount ??= useUserStore.subscribe((state) => {
+                        if (state.token !== token) controller.abort(new DOMException("登录状态已变化", "AbortError"));
+                    });
+                    return analyzeCanvasVideo({
+                        config: requestConfig,
+                        signal,
+                        token,
+                        nodeId,
+                        source: metadata.content || "",
+                        storageKey: metadata.storageKey,
+                        question,
+                        startMs,
+                        endMs,
+                        detailed,
+                    });
+                },
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
                 onContextUsage: (usage) => updateSession(session.id, (current) => ({ ...current, contextUsage: usage })),
@@ -531,6 +600,7 @@ export function CanvasAssistantPanel({
                 activity: undefined,
             });
         } finally {
+            stopWatchingVideoAccount?.();
             if (abortRef.current === controller) abortRef.current = null;
             setIsRunning(false);
         }

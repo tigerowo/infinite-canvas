@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/tigerowo/infinite-canvas/config"
@@ -23,5 +24,10 @@ func main() {
 	service.StartCanvasProjectCleanupScheduler()
 	handler.StartVideoTaskPoller()
 	service.WakeComfyBridgePoller()
+	go func() {
+		if _, err := service.PrepareCanvasVideoFFmpeg(context.Background()); err != nil {
+			log.Printf("准备视频分析 FFmpeg 失败: %v", err)
+		}
+	}()
 	log.Fatal(router.New().Run(":" + config.Cfg.Port))
 }

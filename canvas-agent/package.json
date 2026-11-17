@@ -1,6 +1,6 @@
 {
     "name": "@tigerowo/canvas-agent",
-    "version": "0.1.3",
+    "version": "0.1.4",
     "type": "module",
     "bin": {
         "canvas-agent": "index.mjs"

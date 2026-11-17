@@ -28,6 +28,7 @@ export const CANVAS_AGENT_ACTION_NAMES = [
     "generate_video",
     "generate_audio",
     "get_media_task_status",
+    "analyze_video",
 ] as const;
 
 export type CanvasAgentActionName = (typeof CANVAS_AGENT_ACTION_NAMES)[number];
@@ -89,6 +90,13 @@ function defineTool(name: CanvasAgentActionName, description: string, properties
 }
 
 export const CANVAS_AGENT_SKILL_FILE_TOOL = defineTool("read_skill_file", "按相对路径读取当前激活系统 Skill 的附属 Markdown 或文本文件。仅当 SKILL.md 明确引用附属文件时使用。", { skillId: STRING, path: STRING }, ["skillId", "path"]);
+
+export const CANVAS_AGENT_VIDEO_TOOL = defineTool(
+    "analyze_video",
+    "分析真实视频节点的画面，传 nodeId 和 question。默认按至少 1 秒间隔拆解叙事、卖点和场景。用户要求精细拆解，或问题需要看构图、表情、字幕或动作细节时，传 detailed: true，按至少 0.5 秒间隔取帧。只把视频作为生成参考时无需调用。",
+    { nodeId: STRING, question: STRING, detailed: { type: "boolean" }, startMs: { type: "integer", minimum: 0 }, endMs: { type: "integer", minimum: 1 } },
+    ["nodeId", "question"],
+);
 
 export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
     defineTool("get_canvas_summary", "读取当前画布摘要、节点、连线、模型配置和任务状态。"),
@@ -221,6 +229,23 @@ export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = na
         case "read_skill_file":
             normalized = { skillId: requiredString(input.skillId, "skillId"), path: requiredString(input.path, "path") };
             break;
+        case "analyze_video": {
+            const { startMs, endMs, detailed } = input;
+            if (detailed !== undefined && typeof detailed !== "boolean") throw new Error("detailed 必须是布尔值");
+            if ((startMs !== undefined || endMs !== undefined) && (
+                typeof startMs !== "number" || typeof endMs !== "number" ||
+                !Number.isSafeInteger(startMs) || !Number.isSafeInteger(endMs) || startMs < 0 || endMs <= startMs
+            )) {
+                throw new Error("请提供有效的视频起止时间");
+            }
+            normalized = {
+                nodeId: requiredString(input.nodeId, "nodeId"),
+                question: requiredString(input.question, "question"),
+                ...(detailed === true ? { detailed } : {}),
+                ...(startMs !== undefined ? { startMs, endMs } : {}),
+            };
+            break;
+        }
         case "delete_connection":
             normalized = { connectionId: requiredString(input.connectionId, "connectionId") };
             break;
@@ -374,6 +399,7 @@ export async function parseCanvasAgentJson(content: string, { allowRepair = fals
 }
 
 function canvasAgentToolDefinition(name: string) {
+    if (name === "analyze_video") return CANVAS_AGENT_VIDEO_TOOL;
     return name === "read_skill_file" ? CANVAS_AGENT_SKILL_FILE_TOOL : CANVAS_AGENT_TOOLS.find((tool) => tool.function.name === name)!;
 }
 
@@ -404,6 +430,7 @@ export function canvasAgentActionLabel(action: CanvasAgentAction) {
         generate_video: "正在创建视频节点",
         generate_audio: "正在创建音频节点",
         get_media_task_status: "正在读取媒体任务",
+        analyze_video: "正在分析视频画面",
     };
     return labels[action.name];
 }

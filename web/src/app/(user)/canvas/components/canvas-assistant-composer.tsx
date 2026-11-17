@@ -176,7 +176,7 @@ export function CanvasAssistantComposer({
                                     <div className="relative my-1 h-3">
                                         <Progress className="!block !leading-none" percent={contextPercent ?? 0} showInfo={false} size={["100%", 12]} strokeColor={theme.node.text} railColor={theme.node.faint} />
                                     </div>
-                                    <div className="mt-2 text-[11px] leading-4 opacity-65">当前 {usedTokens} / {totalTokens}（{codexMode ? "Codex 上报" : "会话估算"}）。</div>
+                                    <div className="mt-2 text-[11px] leading-4 opacity-65">当前 {usedTokens} / {totalTokens}（{codexMode ? "Codex 上报" : "会话估算"}）</div>
                                     <div className="mt-3 flex items-center justify-between leading-4">
                                         <span className="flex items-center gap-2"><span className="size-2 rounded-full" style={{ background: theme.node.faint }} />未使用</span>
                                         <span>{remainingTokens}</span>

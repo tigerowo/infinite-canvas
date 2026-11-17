@@ -31,6 +31,7 @@ const stopped = () => new DOMException("Agent 已停止", "AbortError");
 export function useCodexAgent(options: {
     canvasId: string;
     executeTool: (action: CanvasAgentAction, signal: AbortSignal) => Promise<CanvasAgentToolResult>;
+    readVideo: (nodeId: string, signal: AbortSignal) => Promise<Blob | string>;
     onApproval: (request: CodexRpcEvent, signal: AbortSignal) => Promise<unknown>;
     onBootstrap: () => void;
 }) {
@@ -196,6 +197,12 @@ export function useCodexAgent(options: {
                 try {
                     signal.throwIfAborted();
                     if (client.current !== link || (event.source === "codex" && !pending)) throw stopped();
+                    if (event.name === "extract_video_frames") {
+                        const nodeId = typeof event.arguments.nodeId === "string" ? event.arguments.nodeId : "";
+                        const video = await latest.current.readVideo(nodeId, signal);
+                        if (!(await link.uploadVideo(event.requestId, video, signal)).ok) throw new Error("无法将视频交给本地 Agent");
+                        return;
+                    }
                     const action = normalizeCanvasAgentAction(event.name, event.arguments, event.requestId);
                     let result: CanvasAgentToolResult;
                     if (pending && action.name === "arrange_nodes" && !canvasAgentAllowsArrangement(pending.input.userText)) {

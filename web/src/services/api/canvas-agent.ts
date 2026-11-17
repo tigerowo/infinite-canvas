@@ -98,10 +98,15 @@ class CanvasAgentRequestError extends Error {
     }
 }
 
-type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textStreaming?: boolean; skipTokenCalibration?: boolean };
+type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textStreaming?: boolean; skipTokenCalibration?: boolean; canvasVideoAnalysisId?: string };
 
 function applyCanvasAgentReasoning(body: Record<string, unknown>, config: CanvasAgentAiConfig, mode: "chat" | "responses" | "gemini") {
-    if (!config.textReasoningEnabled) return;
+    if (!config.textReasoningEnabled) {
+        if (mode === "chat" && config.model.toLowerCase().includes("deepseek")) {
+            body.thinking = { type: "disabled" };
+        }
+        return;
+    }
     if (mode === "responses") body.reasoning = { effort: "high" };
     else if (mode === "gemini") body.generationConfig = { ...((body.generationConfig as Record<string, unknown> | undefined) || {}), thinkingConfig: config.model.toLowerCase().includes("2.5") ? { thinkingBudget: -1 } : { thinkingLevel: "high" } };
     else if (channelProtocolForConfig(config) === "mimo") body.thinking = { type: "enabled" };
@@ -166,6 +171,30 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
         }
     }
     throw requestError;
+}
+
+export async function requestCanvasVideoVision(
+    config: CanvasAgentAiConfig,
+    content: Extract<CanvasAgentProtocolMessage, { role: "user" | "system" }>["content"],
+    analysisId: string,
+    signal: AbortSignal,
+) {
+    const result = await requestCompletion(
+        { ...config, canvasVideoAnalysisId: analysisId, skipTokenCalibration: true },
+        "按时间戳和图片回答，仅依据实际画面。输出 JSON，text 为带时间的观察。仅在 canReview 为 true 且为回答问题确有必要时，在 reviews 数组列出需要补查的区间。每项含 startMs 和 endMs，为输入窗口内的整数毫秒，每段最多一秒。",
+        [{ role: "user", content }],
+        [],
+        undefined,
+        signal,
+    ).catch((error: unknown) => {
+        if (isImageCompatibilityError(error)) {
+            throw new Error("当前云端文本模型不接收图片，请在现有模型配置中选用支持图片输入的模型");
+        }
+        throw error;
+    });
+    const contentText = result.content.trim();
+    if (!contentText) throw new Error("视觉模型未返回视频分析结果");
+    return contentText;
 }
 
 export function canvasAgentSystemPrompt(config: AiConfig, prompt: string, jsonTools: CanvasAgentToolDefinition[] = [], nativeTools = false) {
@@ -238,9 +267,13 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
     if (jsonSchema) body.response_format = { type: "json_schema", json_schema: { name: "canvas_agent_actions", schema: jsonSchema } };
     applyCanvasAgentReasoning(body, config, "chat");
 
-    const response = await fetch(aiApiUrl(config, "/chat/completions"), {
+    const url = aiApiUrl(config, "/chat/completions");
+    const response = await fetch(url, {
         method: "POST",
-        headers: aiHeaders(config, "application/json"),
+        headers: {
+            ...aiHeaders(config, "application/json"),
+            ...(config.canvasVideoAnalysisId && url.startsWith("/api/v1/") ? { "X-Canvas-Node-Request": "true" } : {}),
+        },
         body: JSON.stringify(body),
         signal,
     });
@@ -306,7 +339,7 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
 
     const inputTokens = payload.usage?.prompt_tokens || payload.data?.usage?.prompt_tokens;
     if (!config.skipTokenCalibration) calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
-    refreshRemoteUser(config);
+    if (!config.canvasVideoAnalysisId) refreshRemoteUser(config);
     let toolError: string | undefined;
     const toolCalls = (message.tool_calls || []).flatMap((toolCall, index) => {
         const name = toolCall.function?.name?.trim();
@@ -346,9 +379,13 @@ async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPro
     if (jsonSchema) body.text = { format: { type: "json_schema", name: "canvas_agent_actions", schema: jsonSchema } };
     applyCanvasAgentReasoning(body, config, "responses");
 
-    const response = await fetch(aiApiUrl(config, "/responses"), {
+    const url = aiApiUrl(config, "/responses");
+    const response = await fetch(url, {
         method: "POST",
-        headers: aiHeaders(config, "application/json"),
+        headers: {
+            ...aiHeaders(config, "application/json"),
+            ...(config.canvasVideoAnalysisId && url.startsWith("/api/v1/") ? { "X-Canvas-Node-Request": "true" } : {}),
+        },
         body: JSON.stringify(body),
         signal,
     });
@@ -404,7 +441,7 @@ async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPro
     });
     const inputTokens = result.usage?.input_tokens;
     if (!config.skipTokenCalibration) calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
-    refreshRemoteUser(config);
+    if (!config.canvasVideoAnalysisId) refreshRemoteUser(config);
     return {
         content: typeof result.output_text === "string" ? result.output_text : output.flatMap((item) => item.type === "message" ? item.content || [] : []).map((item) => item.type === "output_text" && typeof item.text === "string" ? item.text : "").join(""),
         responseItems,
@@ -448,7 +485,13 @@ async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt
     const { model: _model, stream: _stream, ...nativeBody } = body;
     const response = await fetch(proxy ? aiApiUrl(config, "/chat/completions") : geminiActionUrl(channel?.baseUrl || config.baseUrl, config.model, config.textStreaming ? "streamGenerateContent" : "generateContent"), {
         method: "POST",
-        headers: proxy ? aiHeaders(config, "application/json") : geminiDirectHeaders(config),
+        headers: proxy ? {
+            ...aiHeaders(config, "application/json"),
+            ...(config.canvasVideoAnalysisId ? {
+                "X-Canvas-Node-Request": "true",
+                "X-Canvas-Video-Analysis-ID": config.canvasVideoAnalysisId,
+            } : {}),
+        } : geminiDirectHeaders(config),
         body: JSON.stringify(proxy ? body : nativeBody),
         signal,
     });
@@ -488,7 +531,7 @@ async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt
     const usageMetadata = payload.usageMetadata && typeof payload.usageMetadata === "object" ? payload.usageMetadata as Record<string, unknown> : {};
     const inputTokens = typeof usageMetadata.promptTokenCount === "number" ? usageMetadata.promptTokenCount : undefined;
     if (!config.skipTokenCalibration) calibrateCanvasAgentTokenEstimate(canvasAgentTokenCalibrationKey(config), { systemPrompt, messages, tools }, inputTokens);
-    refreshRemoteUser(config);
+    if (!config.canvasVideoAnalysisId) refreshRemoteUser(config);
     let toolError: string | undefined;
     const toolCalls = parts.flatMap((part, index) => {
         const call = part.functionCall && typeof part.functionCall === "object" ? part.functionCall as Record<string, unknown> : null;

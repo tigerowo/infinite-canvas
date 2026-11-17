@@ -1,0 +1,3 @@
+linux/amd64 3241368 833f720dc27bd992edea8a377b4c8ceeff8f3fe966953a53c433b4e072454685 https://github.com/tigerowo/infinite-canvas/releases/download/v0.8.4/ffmpeg-6.1.4-linux-x64
+linux/arm64 2636688 c7c73a0def478aafe37b120b2a091539a29f538c8539fadd484a5bf59d2b485c https://github.com/tigerowo/infinite-canvas/releases/download/v0.8.4/ffmpeg-6.1.4-linux-arm64
+windows/amd64 2641920 e9e5b6e2afd96b11b291139d0b60d077bdddcb64f218610a6ffeeb82c6ed0203 https://github.com/tigerowo/infinite-canvas/releases/download/v0.8.4/ffmpeg-6.1.4-windows-x64.exe

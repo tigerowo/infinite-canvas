@@ -28,6 +28,7 @@ import {
 import {
     CANVAS_AGENT_SKILL_FILE_TOOL,
     CANVAS_AGENT_TOOLS,
+    CANVAS_AGENT_VIDEO_TOOL,
     canvasAgentActionLabel,
     isCanvasAgentMediaAction,
     normalizeCanvasAgentAction,
@@ -52,6 +53,7 @@ export type RunCanvasAgentInput = {
     references: CanvasAssistantReference[];
     skillsSelected?: boolean;
     activeSkillContents?: Array<{ id: string; source: "system" | "user"; name: string; content: string; hasFiles?: boolean }>;
+    enableVideoAnalysis?: boolean;
     contextCheckpoint?: string;
     preferredJsonMode?: CanvasAgentJsonFallbackMode;
     getContext: (state: CanvasAgentState) => CanvasAgentContext;
@@ -103,7 +105,8 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
     let contextCheckpoint = input.contextCheckpoint;
     const activeSkillContents = input.activeSkillContents?.map((skill, index) => `【完整 Skill ${index + 1}：${skill.name}（${skill.source === "system" ? `系统 Skill ID：${skill.id}` : "用户 Skill"}）】\n${skill.content}`).join("\n\n");
     const skillFileToolAvailable = Boolean(input.activeSkillContents?.some((skill) => skill.source === "system" && skill.hasFiles));
-    const agentTools = skillFileToolAvailable ? [...CANVAS_AGENT_TOOLS, CANVAS_AGENT_SKILL_FILE_TOOL] : CANVAS_AGENT_TOOLS;
+    let agentTools = skillFileToolAvailable ? [...CANVAS_AGENT_TOOLS, CANVAS_AGENT_SKILL_FILE_TOOL] : CANVAS_AGENT_TOOLS;
+    if (input.enableVideoAnalysis) agentTools = [...agentTools, CANVAS_AGENT_VIDEO_TOOL];
 
     const emitCheckpoint = () => input.onCheckpoint?.({
         state,
@@ -149,7 +152,12 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         input.onEvent?.({ status: "thinking", label: step ? "正在根据画布结果继续" : "正在理解画布和创作目标" });
         const context = input.getContext(state);
         const canvasContext = serializeCanvasAgentContext(context);
-        const buildPrompt = () => buildCanvasAgentSkillPrompt(state.phase, input.userText, context, activeSkillContents, contextCheckpoint, skillFileToolAvailable, false);
+        const buildPrompt = () => buildCanvasAgentSkillPrompt(state.phase, input.userText, context, activeSkillContents, contextCheckpoint, skillFileToolAvailable, false)
+            + (input.enableVideoAnalysis
+                ? "\n\n用户要求看懂视频画面时，对引用的真实节点调用 analyze_video。"
+                    + "已有 Skill 可以传真实节点 ID。只把视频用于生成参考时使用原有生成工具。"
+                    + "后续动作依赖视频观察时，先单独调用 analyze_video，等结果返回后再调用对应工具。"
+                : "");
         let systemPrompt = buildPrompt();
         const nativeTools = toolMode === "native";
         const tools = nativeTools ? agentTools : [];

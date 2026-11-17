@@ -147,6 +147,12 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		Fail(w, "未登录或权限不足")
 		return
 	}
+	videoAnalysisID := r.Header.Get("X-Canvas-Video-Analysis-ID")
+	redactVideoFrames := path == "/chat/completions" && videoAnalysisID != ""
+	if redactVideoFrames && !service.CanUseCanvasVideoAnalysis(videoAnalysisID, user.ID) {
+		Fail(w, "视频分析已结束或不存在")
+		return
+	}
 	channel, userChannelID, err := selectAIRequestChannel(user, modelName, r.Header.Get("X-Model-Channel-ID"), r.Header.Get(userModelChannelHeader), true)
 	if err != nil {
 		log.Printf("AI proxy select channel failed: model=%s err=%v", modelName, err)
@@ -213,7 +219,7 @@ func proxyAIRequest(w http.ResponseWriter, r *http.Request, path string) {
 		UserID:          user.ID,
 		UserDisplayName: firstNonEmpty(user.DisplayName, user.Username),
 		Credits:         credits,
-		RequestBody:     summarizeAIRequest(body, contentType),
+		RequestBody:     summarizeAIRequest(body, contentType, redactVideoFrames),
 	}, func() {
 		if credits > 0 && ctx.Err() == nil {
 			if err := service.RefundUserCredits(user.ID, modelName, credits, upstreamPath); err != nil {
@@ -349,13 +355,13 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func summarizeAIRequest(body []byte, contentType string) string {
+func summarizeAIRequest(body []byte, contentType string, redactVideoFrames ...bool) string {
 	if strings.HasPrefix(contentType, "multipart/form-data") {
 		return summarizeMultipartAIRequest(body, contentType)
 	}
 	var payload any
 	if err := json.Unmarshal(body, &payload); err == nil {
-		redactLargeImages(&payload)
+		redactLargeImages(&payload, len(redactVideoFrames) > 0 && redactVideoFrames[0])
 		if encoded, err := json.MarshalIndent(payload, "", "  "); err == nil {
 			return string(encoded)
 		}
@@ -418,20 +424,28 @@ func readUpstreamAIErrorMessage(body []byte, statusCode int) string {
 	return "AI 接口请求失败"
 }
 
-func redactLargeImages(value *any) {
+func redactLargeImages(value *any, redactVideoFrames bool) {
 	switch typed := (*value).(type) {
 	case map[string]any:
+		if redactVideoFrames {
+			if inline, ok := typed["inlineData"].(map[string]any); ok {
+				mimeType, _ := inline["mimeType"].(string)
+				if data, ok := inline["data"].(string); ok && strings.HasPrefix(mimeType, "image/") {
+					inline["data"] = fmt.Sprintf("[redacted media/string len=%d]", len(data))
+				}
+			}
+		}
 		for key, item := range typed {
 			if text, ok := item.(string); ok && (strings.HasPrefix(text, "data:image/") || strings.HasPrefix(text, "data:video/") || strings.HasPrefix(text, "data:audio/") || len(text) > 2048 && looksLikeBase64(text)) {
 				typed[key] = fmt.Sprintf("[redacted media/string len=%d]", len(text))
 				continue
 			}
-			redactLargeImages(&item)
+			redactLargeImages(&item, redactVideoFrames)
 			typed[key] = item
 		}
 	case []any:
 		for index, item := range typed {
-			redactLargeImages(&item)
+			redactLargeImages(&item, redactVideoFrames)
 			typed[index] = item
 		}
 	}

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
++ [新增] Agent 与 Codex MCP 支持视频读取分析
 + [新增] SD 2.5 样片生成与生成正片，支持自定传参转译
 + [新增] Agent 支持查看和保存会话上下文用量
 + [修复] 修复 Codex Skill 切换异常和重复加载

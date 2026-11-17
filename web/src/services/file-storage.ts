@@ -42,8 +42,8 @@ export async function uploadAssetMediaFile(file: File, prefix = "asset-media"): 
     }
 }
 
-export async function downloadRemoteMedia(url: string) {
-    const response = await fetch(getProxyUrl(url));
+export async function downloadRemoteMedia(url: string, options?: { signal?: AbortSignal; direct?: boolean }) {
+    const response = await fetch(options?.direct ? url : getProxyUrl(url), { signal: options?.signal });
     if (!response.ok) throw new Error(`媒体下载失败：${response.status}`);
     const blob = await response.blob();
     if (blob.type.includes("json") || blob.type.startsWith("text/")) {

@@ -82,10 +82,20 @@ export function createCodexAgentClient(
     });
     listen<CodexToolEvent>("tool", (event) => { if (event.source === "external" || event.generation === codexGeneration) handlers.tool(event); });
     listen<{ requestId: string }>("tool-cancel", ({ requestId }) => handlers.cancelTool(requestId));
-    events.onopen = () => { void request<{ serviceId: string }>("/connect", { canvasId, tools }).then((result) => { serviceId = result.serviceId; return handlers.ready(); }).catch(fail); };
+    events.onopen = () => { void request<{ serviceId: string }>("/connect", { canvasId, tools, videoMedia: true }).then((result) => { serviceId = result.serviceId; return handlers.ready(); }).catch(fail); };
     events.onerror = () => fail(new Error("本地 Agent 连接已断开，请检查服务和连接配置"));
     return {
         rpc,
+        uploadVideo: (requestId: string, video: Blob | string, signal: AbortSignal) => {
+            const remote = typeof video === "string";
+            const path = remote ? "/result" : "/result?" + new URLSearchParams({ clientId, requestId });
+            return fetch(endpoint + path, {
+                method: "POST",
+                headers: { "content-type": remote ? "application/json" : "application/octet-stream", "x-canvas-agent-token": connection.token },
+                body: remote ? JSON.stringify({ clientId, requestId, videoUrl: video }) : video,
+                signal,
+            });
+        },
         stop: () => { codexGeneration += 1; return rpc("bridge/stop"); },
         get serviceId() { return serviceId; },
         reply: (event: CodexRpcEvent, result?: unknown, error?: { code: number; message: string }) => request("/reply", { id: event.id, generation: event.generation, result, error }),
