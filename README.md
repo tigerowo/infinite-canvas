@@ -113,8 +113,10 @@ git clone https://github.com/tigerowo/infinite-canvas.git
 cd infinite-canvas
 cp .env.example .env
 # 修改默认账号密码等信息
-docker compose up -d --build
+docker compose up -d
 ```
+
+默认从 GHCR 拉取原作者发布的 `ghcr.io/tigerowo/infinite-canvas:latest`；如需使用自己 CI 构建的镜像，在 `.env` 中设置 `IMAGE=ghcr.io/realkiro/infinite-canvas:latest`。详见 [镜像来源与 CI](docs/overview/docker.md#镜像来源与-ci)。
 
 本地非 Docker 开发运行：
 ```bash
