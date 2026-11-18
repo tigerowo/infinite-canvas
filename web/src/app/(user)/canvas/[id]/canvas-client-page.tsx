@@ -38,7 +38,7 @@ import {
     type CanvasAlignmentGuides,
 } from "../utils/canvas-alignment";
 import { App, Button, Dropdown, Modal, Slider } from "antd";
-import { isCogVideoX3Model, modelKey, supportsVideoAudioGeneration, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
+import { isCogVideoX3Model, modelKey, supportsVideoFrameReferences } from "@/lib/video-model-capabilities";
 import { isMimoVoiceCloneModel } from "@/lib/mimo-tts";
 import { isAutoDLConfig } from "@/lib/autodl";
 import { isGlmTtsModel } from "@/lib/audio-generation";
@@ -3891,7 +3891,6 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         imageCount: 1,
                         videoSeconds: agentEffectiveConfig.videoSeconds,
                         videoGenerateAudio: agentEffectiveConfig.videoGenerateAudio,
-                        videoSupportsAudio: supportsVideoAudioGeneration(videoModel),
                         videoDuration: canvasAgentVideoDurationHint(videoModel),
                         audioVoice: isGeminiTtsModel(audioModel) && isGeminiConfig(audioConfig, audioModel) ? agentEffectiveConfig.geminiTtsVoice : miniMaxTts ? agentEffectiveConfig.miniMaxTtsVoice : isGlmTtsModel(audioModel) ? agentEffectiveConfig.glmTtsVoice : grokTts ? agentEffectiveConfig.grokTtsVoice : agentEffectiveConfig.audioVoice,
                         audioLanguage: grokTts ? agentEffectiveConfig.grokTtsLanguage : "",
@@ -4115,12 +4114,8 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                         const seconds = typeof args.seconds === "number" ? args.seconds : Number(generationConfig.videoSeconds);
                         const durationError = agentWorkflowRef ? "" : validateCanvasAgentVideoSeconds(generationConfig.model, seconds);
                         if (durationError) return { ok: false, code: "unsupported_duration", message: durationError, supported: canvasAgentVideoDurationHint(generationConfig.model) };
-                        const generateAudio = typeof args.generateAudio === "boolean" ? args.generateAudio : generationConfig.videoGenerateAudio === "true";
-                        if (!agentWorkflowRef && generateAudio && !supportsVideoAudioGeneration(generationConfig.model)) {
-                            return { ok: false, code: "video_audio_not_supported", message: "当前全局视频模型不支持视频原生声音" };
-                        }
                         metadata.seconds = String(seconds);
-                        metadata.generateAudio = String(generateAudio);
+                        if (typeof args.generateAudio === "boolean") metadata.generateAudio = String(args.generateAudio);
                     }
                     if (mode === "audio") {
                         if (isGeminiTtsModel(generationConfig.model) && isGeminiConfig(generationConfig, generationConfig.model)) {
@@ -4145,7 +4140,10 @@ function InfiniteCanvasPage({ projectId }: { projectId: string }) {
                     }
 
                     const layoutSourceNodes = mode === "image" ? [] : mode === "video" ? nodesRef.current.filter((node) => !node.metadata?.groupId && (node.type === CanvasNodeType.Text || isCanvasImageNodeType(node.type) || node.type === CanvasNodeType.Group)) : sourceNodes;
-                    let node = createCanvasNode(targetType, nextNodeCenter(targetType, layoutSourceNodes), metadata);
+                    const videoSize = mode === "video" && typeof generationConfig.size === "string"
+                        ? nodeSizeFromRatio(generationConfig.size, VIDEO_NODE_MAX_WIDTH, VIDEO_NODE_MAX_HEIGHT) ?? undefined
+                        : undefined;
+                    let node = createCanvasNode(targetType, nextNodeCenter(targetType, layoutSourceNodes, videoSize), metadata);
                     if (mode === "video") node = applyNodeConfigPatch(node, { size: generationConfig.size });
                     node.title = stringValue("title") || prompt.slice(0, 32) || (mode === "video" ? "视频" : mode === "audio" ? "音频" : "图片");
                     const createdConnections = sourceNodeIds.map((sourceNodeId) => ({ id: nanoid(), fromNodeId: sourceNodeId, toNodeId: node.id }));

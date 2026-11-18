@@ -93,7 +93,7 @@ export const CANVAS_AGENT_SKILL_FILE_TOOL = defineTool("read_skill_file", "按�
 
 export const CANVAS_AGENT_VIDEO_TOOL = defineTool(
     "analyze_video",
-    "分析真实视频节点的画面，传 nodeId 和 question。默认按至少 1 秒间隔拆解叙事、卖点和场景。用户要求精细拆解，或问题需要看构图、表情、字幕或动作细节时，传 detailed: true，按至少 0.5 秒间隔取帧。只把视频作为生成参考时无需调用。",
+    "分析真实视频节点的画面，传 nodeId 和 question。默认每 1 秒取一帧。用户要求精细拆解，或问题需要看构图、表情、字幕或动作细节时，传 detailed: true，每 0.5 秒取一帧。只把视频作为生成参考时无需调用。",
     { nodeId: STRING, question: STRING, detailed: { type: "boolean" }, startMs: { type: "integer", minimum: 0 }, endMs: { type: "integer", minimum: 1 } },
     ["nodeId", "question"],
 );
@@ -174,7 +174,7 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
             sourceNodeIds: STRING_ARRAY,
             size: STRING,
             seconds: { type: "integer", minimum: -1, maximum: 30, description: "本次视频任务的总时长（秒），不是每个内部镜头的时长。按 videoDuration 的合法范围或离散值填写已确认时长；仅省略时使用当前 videoSeconds 默认值，不得把默认值当成上限。-1 仅用于支持智能时长的模型。" },
-            generateAudio: { type: "boolean" },
+            generateAudio: { type: "boolean", description: "仅在用户明确要求本次启用视频音频或将整个视频静音时传入。其余情况省略，沿用全局视频音频设置。无背景音乐和无字幕要求写入 prompt。" },
         },
         ["prompt", "sourceNodeIds"],
     ),

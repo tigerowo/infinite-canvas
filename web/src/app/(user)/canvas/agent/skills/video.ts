@@ -31,7 +31,7 @@ export const VIDEO_SKILL = String.raw`
 - sourceNodeIds：文本作者来源及真实图片、视频、音频参考；同时建立来源连线。
 - size：默认读取当前画布 Agent videoSize；只有用户明确本次覆盖时传入。不得使用图片 imageSize。
 - seconds：必须来自用户明确选择、镜头规划或全局 videoSeconds，并通过当前模型校验。
-- generateAudio：视频文件是否直接生成声音；只有当前模型支持时可为 true。
+- generateAudio：仅在用户明确要求更改本次音轨开关时传入。省略时沿用全局 videoGenerateAudio。
 
 工具成功后会创建真实 video 节点并沿用现有任务、轮询和上游地址。
 
@@ -43,7 +43,6 @@ export const VIDEO_SKILL = String.raw`
 - 本次片段的真实镜头文本或具体动作。
 - 使用哪些角色、产品、地点、关键帧、视频和音频参考。
 - 视频尺寸/比例；用户或全局配置已明确时不重复问。
-- 是否需要视频原生声音；仅在当前模型支持且用户未说明时询问。
 - 多片段的依赖与调度方式。
 
 用户已经明确要求生成且这些条件足够时直接调用工具，不再次问“是否生成”。
@@ -61,9 +60,7 @@ export const VIDEO_SKILL = String.raw`
 
 ## 5. 视频原生声音与独立音频
 
-当 generation.videoSupportsAudio=true 且用户尚未表态时，询问：
-
-“这个片段需要同时生成对白、环境声和音效吗？”
+默认沿用全局视频音频开关。无背景音乐和无字幕要求写入 prompt，保留用户要求的对白和音效。
 
 ### generateAudio=true
 
@@ -310,7 +307,6 @@ sourceNodeIds 中三种媒体分别编号：
 ## 20. 视频错误提示与修正
 
 - unsupported_duration：改为 supported 中的合法秒数并重新规划镜头。
-- video_audio_not_supported：关闭 generateAudio 或走独立音频链路。
 - model_not_configured：让用户完成全局视频模型配置。
 - 引用内容读取失败：识别具体失败节点并替换为真实可用参考。
 - 引用数量超限：保留最重要的角色/产品/地点/来源视频/音频，删除无关参考；以 Provider 返回上限为准。

@@ -4,6 +4,8 @@ import { type CSSProperties, type ReactNode, useCallback, useEffect, useLayoutEf
 import {
     History,
     Bot,
+    Brain,
+    ChevronRight,
     Clapperboard,
     Copy,
     Cpu,
@@ -11,6 +13,7 @@ import {
     Group,
     Image as ImageIcon,
     ArrowLeftRight,
+    LoaderCircle,
     Music2,
     PanelRightClose,
     Pencil,
@@ -27,10 +30,9 @@ import {
 import { App, AutoComplete, Button, Dropdown, Modal, Segmented, Switch, Tooltip } from "antd";
 import { motion } from "motion/react";
 import { nanoid } from "nanoid";
-import ReactMarkdown, { type Components } from "react-markdown";
+import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { ImageGenerationPending } from "@/components/image-generation-pending";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { cn } from "@/lib/utils";
@@ -147,6 +149,7 @@ export function CanvasAssistantPanel({
     const consumedInitialRequestRef = useRef<typeof initialRequest>(null);
     const pendingDeleteRef = useRef<PendingDeleteConfirmation | null>(null);
     const messageListRef = useRef<HTMLDivElement>(null);
+    const followMessagesRef = useRef(true);
     const consumedReferenceNodeClickVersionRef = useRef(0);
     const [view, setView] = useState<"chat" | "history" | "connect">("chat");
     const [prompt, setPrompt] = useState("");
@@ -367,7 +370,8 @@ export function CanvasAssistantPanel({
         },
         onApproval: async ({ method, params }, signal) => {
             if (method === "mcpServer/elicitation/request") {
-                appMessage.info("Codex 工具请求了额外信息，本次请求已取消");
+                const detail = typeof params.message === "string" ? params.message.trim() : "";
+                appMessage.info(`Codex 工具请求了额外信息${detail ? `（${detail}）` : ""}，本次请求已取消`);
                 return { action: "decline", content: null };
             }
             const questions = method === "item/tool/requestUserInput"
@@ -407,13 +411,16 @@ export function CanvasAssistantPanel({
     const codexEffort = agentConfig.codexEffort || codexModel?.defaultReasoningEffort;
     const showCodexConnection = mode === "codex" && (view === "connect" || (view === "chat" && codex.status !== "ready"));
     useEffect(() => {
+        followMessagesRef.current = true;
+    }, [resolvedActiveSessionId, view, showCodexConnection]);
+    useEffect(() => {
         if (view !== "chat" || showCodexConnection) return;
         const frame = window.requestAnimationFrame(() => {
             const element = messageListRef.current;
-            if (element) element.scrollTop = element.scrollHeight;
+            if (element && followMessagesRef.current) element.scrollTop = element.scrollHeight;
         });
         return () => window.cancelAnimationFrame(frame);
-    }, [messages, view, showCodexConnection]);
+    }, [messages, view, showCodexConnection, resolvedActiveSessionId]);
     const codexControls = mode === "codex" ? (
         <>
             <Dropdown trigger={["click"]} placement="topLeft" disabled={isRunning || !codex.models.length} menu={{ selectable: true, selectedKeys: codexModel ? [codexModel.model] : [], items: codex.models.map((item) => ({ key: item.model, label: item.displayName })), onClick: ({ key }) => onAgentConfigChange({ codexModel: key, codexEffort: undefined }) }}>
@@ -463,8 +470,10 @@ export function CanvasAssistantPanel({
         const messageReferenceNodeIds = references.map((reference) => reference.id);
         const userMessage: CanvasAssistantMessage = { id: nanoid(), role: "user", text, references, skills: activeSkills, skillsSelected: showSelectedSkills, status: "success" };
         const assistantId = nanoid();
+        let reasoning = "";
+        followMessagesRef.current = true;
         appendMessage(session.id, userMessage);
-        appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking", activity: "正在理解画布和创作目标" });
+        appendMessage(session.id, { id: assistantId, role: "assistant", text: "", status: "thinking" });
         setPrompt("");
         setComposerReferenceIds([]);
         setSelectedSkills([]);
@@ -568,6 +577,10 @@ export function CanvasAssistantPanel({
                 },
                 signal: controller.signal,
                 onEvent: (event) => updateMessage(session.id, assistantId, { status: event.status, activity: event.label }),
+                onReasoning: (delta) => {
+                    reasoning += delta;
+                    updateMessage(session.id, assistantId, { reasoning });
+                },
                 onContextUsage: (usage) => updateSession(session.id, (current) => ({ ...current, contextUsage: usage })),
                 onCheckpoint: (checkpoint) =>
                     updateSession(session.id, (current) => ({
@@ -710,7 +723,15 @@ export function CanvasAssistantPanel({
                     </div>
                 </div>
 
-                <div ref={messageListRef} className="thin-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+                <div
+                    ref={messageListRef}
+                    className="thin-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4"
+                    onScroll={(event) => {
+                        if (view !== "chat" || showCodexConnection) return;
+                        const { scrollHeight, scrollTop, clientHeight } = event.currentTarget;
+                        followMessagesRef.current = scrollHeight - scrollTop - clientHeight <= 2;
+                    }}
+                >
                     {showCodexConnection ? <CanvasCodexConnectView agent={codex} onChat={() => setView("chat")} /> : view === "history" ? (
                         <AssistantHistory
                             sessions={historySessions}
@@ -726,7 +747,7 @@ export function CanvasAssistantPanel({
                             onDelete={(id) => setDeleteChatIds([id])}
                         />
                     ) : messages.length ? (
-                        <AssistantMessages messages={messages} nodeById={nodeById} onFocusNode={onFocusNode} onRetry={retryMessage} codexMode={mode === "codex"} />
+                        <AssistantMessages messages={messages} nodeById={nodeById} onFocusNode={onFocusNode} onRetry={retryMessage} onSubmitChoice={!isRunning ? submit : undefined} />
                     ) : (
                         <div className="flex h-full flex-col items-center justify-center px-8 text-center">
                             <div className="grid size-12 place-items-center rounded-2xl" style={{ background: theme.node.fill }}>
@@ -892,14 +913,28 @@ function AssistantMarkdown({ children, components }: { children: string; compone
     );
 }
 
-function AssistantMessages({ messages, nodeById, onFocusNode, onRetry, codexMode }: { messages: CanvasAssistantMessage[]; nodeById: ReadonlyMap<string, CanvasNodeData>; onFocusNode: (nodeId: string) => void; onRetry: (message: CanvasAssistantMessage) => void; codexMode?: boolean }) {
+function getAssistantCanvasNode(node: ExtraProps["node"], text: string, nodeById: ReadonlyMap<string, CanvasNodeData>) {
+    return node?.position?.start.line === node?.position?.end.line ? nodeById.get(text.trim()) : undefined;
+}
+
+function assistantChoiceText(node: NonNullable<ExtraProps["node"]>["children"][number], nodeById: ReadonlyMap<string, CanvasNodeData>): string | null {
+    if (node.type === "text") return node.value;
+    if (node.type !== "element" || !["li", "p", "strong", "em", "del", "br", "code"].includes(node.tagName)) return null;
+    if (node.tagName === "br") return "\n";
+    const parts = node.children.map((child) => assistantChoiceText(child, nodeById));
+    if (parts.includes(null)) return null;
+    const text = parts.join("");
+    return node.tagName === "code" && getAssistantCanvasNode(node, text, nodeById) ? null : text;
+}
+
+function AssistantMessages({ messages, nodeById, onFocusNode, onRetry, onSubmitChoice }: { messages: CanvasAssistantMessage[]; nodeById: ReadonlyMap<string, CanvasNodeData>; onFocusNode: (nodeId: string) => void; onRetry: (message: CanvasAssistantMessage) => void; onSubmitChoice?: (text: string) => Promise<void> }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const copyText = useCopyText();
     const markdownComponents = useMemo<Components>(() => ({
         ...ASSISTANT_MARKDOWN_COMPONENTS,
         code: ({ node, className, children, ...props }) => {
-            const canvasNode = nodeById.get(String(children).trim());
-            if (node?.position?.start.line === node?.position?.end.line && canvasNode) {
+            const canvasNode = getAssistantCanvasNode(node, String(children), nodeById);
+            if (canvasNode) {
                 const { Icon, label: typeLabel } = ASSISTANT_NODE_TYPE_META[canvasNode.type];
                 const hasImage = isCanvasImageNodeType(canvasNode.type) && canvasNode.metadata?.content;
                 return (
@@ -920,37 +955,92 @@ function AssistantMessages({ messages, nodeById, onFocusNode, onRetry, codexMode
             return <code {...props} className={className}>{children}</code>;
         },
     }), [nodeById, onFocusNode, theme]);
+    const choiceMessageId = messages.at(-1)?.id;
+    const selectedChoices = useMemo(() => new Map<number, number>(), [choiceMessageId]);
+    const choiceComponents = useMemo<Components>(() => ({
+        ...markdownComponents,
+        ol: ({ node, start, ...props }) => {
+            const options = node?.children
+                .filter((item) => item.type === "element" && item.tagName === "li")
+                .map((item) => assistantChoiceText(item, nodeById)?.trim() ?? "");
+            const listOffset = node?.position?.start.offset;
+            if (listOffset === undefined || !options?.length || options.some((option) => !option)) return <ol start={start} {...props} />;
+
+            return (
+                <form data-assistant-choice className="my-2 grid gap-1 rounded-2xl border p-2.5" style={{ background: theme.node.panel, borderColor: theme.node.stroke, "--choice-active": theme.toolbar.activeBg, "--choice-number-bg": theme.node.text, "--choice-number-text": theme.node.panel } as CSSProperties}>
+                    {options.map((option, index) => (
+                        <label key={index} className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 leading-5 hover:not-has-checked:bg-[var(--agent-markdown-surface)] has-checked:bg-[var(--choice-active)] has-checked:inset-ring-1 has-checked:inset-ring-[var(--agent-markdown-border)] has-focus-visible:outline">
+                            <input type="radio" name="choice" value={option} required className="peer sr-only"
+                                defaultChecked={selectedChoices.get(listOffset) === index}
+                                onChange={() => selectedChoices.set(listOffset, index)}
+                            />
+                            <span aria-hidden="true" className="mt-0.5 grid h-4 min-w-4 shrink-0 place-items-center rounded-sm bg-[var(--agent-markdown-border)] px-0.5 text-[11px] leading-none peer-checked:bg-[var(--choice-number-bg)] peer-checked:text-[color:var(--choice-number-text)]">{(start ?? 1) + index}</span>
+                            <span className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{option}</span>
+                        </label>
+                    ))}
+                    <button type="submit" className="mt-2! h-[26px] w-11 justify-self-end cursor-pointer rounded-lg text-xs! font-medium" style={{ background: theme.node.text, color: theme.node.panel }}>发送</button>
+                </form>
+            );
+        },
+    }), [markdownComponents, nodeById, selectedChoices, theme]);
     let previousUserSkills: CanvasAgentSkillSelection[] = [];
 
     return (
         <>
             {messages.map((message) => {
+                const submitChoice = message.role === "assistant" && message === messages.at(-1) && message.status === "success" ? onSubmitChoice : undefined;
                 const running = message.status === "thinking" || message.status === "running";
+                const reasoning = message.reasoning?.trim();
                 const showSkills = message.skillsSelected ?? Boolean(message.skills?.length && !sameSkillSelections(message.skills, previousUserSkills));
                 if (message.role === "user") previousUserSkills = message.skills || [];
                 return (
-                    <div key={message.id} className={cn("flex flex-col gap-2", message.role === "user" ? "items-end" : "items-start")}>
+                    <div key={message.id} className={cn("flex flex-col gap-2", message.role === "user" ? "items-end" : "items-start")}
+                        onSubmit={submitChoice ? (event) => {
+                            if (!(event.target instanceof HTMLFormElement) || !event.target.hasAttribute("data-assistant-choice")) return;
+                            event.preventDefault();
+                            const choices: string[] = [];
+                            for (const form of event.currentTarget.querySelectorAll<HTMLFormElement>("form[data-assistant-choice]")) {
+                                if (!form.reportValidity()) return;
+                                const choice = new FormData(form).get("choice");
+                                if (typeof choice !== "string") return;
+                                choices.push(choice);
+                            }
+                            void submitChoice(choices.join("\n"));
+                        } : undefined}
+                    >
+                        {running ? (
+                            <div className="w-full text-sm">
+                                <div role="status" className="flex items-center gap-1.5 opacity-75">
+                                    <span className="inline-flex motion-safe:animate-spin" aria-hidden="true"><LoaderCircle className="size-3.5" /></span>
+                                    {message.activity || "思考中…"}
+                                </div>
+                                {reasoning ? (
+                                    <div className="relative mt-1.5 h-20 overflow-hidden leading-5 opacity-65">
+                                        <div className="absolute inset-x-0 bottom-0 min-h-full whitespace-pre-wrap [overflow-wrap:anywhere]">{reasoning}</div>
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : reasoning ? (
+                            <details className="group w-full text-[13px] opacity-75 motion-safe:[interpolate-size:allow-keywords] details-content:h-0 details-content:overflow-clip open:details-content:h-auto motion-safe:details-content:transition-[height,content-visibility] motion-safe:details-content:transition-discrete">
+                                <summary className="group/title flex! w-fit cursor-pointer list-none items-center gap-1.5 text-sm [&::-webkit-details-marker]:hidden">
+                                    <Brain className="size-3.5" /> 思考过程
+                                    <ChevronRight className="size-3 opacity-0 motion-safe:transition-opacity group-hover/title:opacity-100 group-open:rotate-90 group-open:opacity-100" aria-hidden="true" />
+                                </summary>
+                                <div className="mt-1.5 whitespace-pre-wrap leading-5 [overflow-wrap:anywhere]">{reasoning}</div>
+                            </details>
+                        ) : null}
                         {message.text || (message.role === "user" && showSkills && message.skills?.length) ? (
                             <div
-                                className="max-w-[88%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm leading-6"
+                                className={cn("max-w-[88%] whitespace-pre-wrap rounded-2xl py-2 text-sm leading-6", message.role === "user" && "px-3")}
                                 style={
                                     message.role === "user"
                                         ? { background: theme.toolbar.activeBg, color: theme.toolbar.activeText }
-                                        : message.status === "error"
-                                            ? { background: theme.node.fill, color: theme.node.text }
-                                            : { background: theme.node.fill, color: theme.node.text }
+                                        : { color: theme.node.text }
                                 }
                             >
-                                {message.role === "assistant" ? (
-                                    <div className="mb-1 flex items-center gap-1.5 text-xs opacity-60">
-                                        <Bot className="size-3.5" />
-                                        {codexMode ? "Codex" : "Agent"}
-                                    </div>
-                                ) : null}
-                                {message.role === "assistant" ? <AssistantMarkdown components={markdownComponents}>{message.text}</AssistantMarkdown> : <UserMessageContent message={message} showSkills={showSkills} />}
+                                {message.role === "assistant" ? <AssistantMarkdown components={submitChoice ? choiceComponents : markdownComponents}>{message.text}</AssistantMarkdown> : <UserMessageContent message={message} showSkills={showSkills} />}
                             </div>
                         ) : null}
-                        {running ? <ImageGenerationPending compact label={message.activity || "正在执行"} className="w-[250px] rounded-2xl border" /> : null}
                         {!running && message.text ? (
                             <div className="flex gap-1">
                                 <Button shape="circle" size="small" style={{ borderColor: theme.node.stroke }} icon={<Copy className="size-3.5" />} onClick={() => copyText(message.text, "消息已复制")} title="复制" />

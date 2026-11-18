@@ -12,7 +12,7 @@ npx -y @tigerowo/canvas-agent@latest
 
 首次启动自动生成 Token，保存在当前用户的 `~/.infinite-canvas/codex-agent.json`；下次启动复用。终端显示 `Local URL` 和 `Connect token`，默认地址为 `http://127.0.0.1:3210`。网页与服务在同一台电脑运行，不需要克隆仓库或手工创建 `.env`；正确 Token 连接后自动记录网站来源。
 
-Codex 尚未登录时执行 `npx -y @openai/codex@0.159.2 login` 并完成登录，已有登录态会直接复用。
+Codex 尚未登录时执行 `npx -y @openai/codex@0.169.1 login` 并完成登录，已有登录态会直接复用。
 
 ## 插件自动连接
 

@@ -4,9 +4,9 @@ export type CodexRpcEvent = {
     generation: number;
     method: string;
     params: Record<string, unknown> & {
-        threadId?: string; turnId?: string; itemId?: string; delta?: string;
+        threadId?: string; turnId?: string; itemId?: string; delta?: string; summaryIndex?: number; contentIndex?: number;
         tokenUsage?: { last: { totalTokens: number }; modelContextWindow: number | null };
-        item?: { id: string; type: string; text?: string };
+        item?: { id: string; type: string; text?: string; summary?: string[]; content?: string[] };
         turn?: { id: string; status: string; error?: { message: string } };
     };
 };
