@@ -33,7 +33,7 @@ const methods = new Set(["model/list", "thread/start", "thread/resume", "thread/
 
 const videoTool = {
     name: "extract_video_frames",
-    description: "读取当前画布视频节点的画面供你分析。首次调用必须传 newAnalysis: true 且不传 analysisId；后续续取和补查必须传回返回的 analysisId。同一任务总计最多 20 分钟。默认最少间隔 1 秒，需看表情、构图、字幕或短动作时传 detailed: true，最少间隔 0.5 秒。每次最多 90 张，nextStartMs 非空时从该位置继续。按帧的时间戳回答用户。",
+    description: "读取当前画布视频节点的画面供你分析。首次调用必须传 newAnalysis: true 且不传 analysisId；后续续取和补查必须传回返回的 analysisId。同一任务总计最多 20 分钟。默认每 1 秒取一帧，需看表情、构图、字幕或短动作时传 detailed: true，每 0.5 秒取一帧。每次最多 90 张，nextStartMs 非空时从该位置继续。按帧的时间戳回答用户。",
     inputSchema: {
         type: "object",
         properties: {
@@ -256,8 +256,7 @@ async function readVideoFrames(upload, { startMs = 0, endMs, detailed, analysisI
         if (!fromUrl) acknowledge();
         const ffmpeg = await prepareFFmpeg(signal);
         const gap = detailed === true ? 500_000 : 1_000_000;
-        const window = "gt(floor((pts-" + startUs + ")/4000000),floor((prev_selected_pts-" + startUs + ")/4000000))";
-        const select = "if(isnan(prev_selected_pts),1,gte(pts-prev_selected_pts," + gap + ")*(gte(scene,0.1)+" + window + "))";
+        const select = `if(isnan(prev_selected_pts),1,gt(floor((pts-${startUs})/${gap}),floor((prev_selected_pts-${startUs})/${gap})))`;
         const trim = "trim=start=" + startUs + "us" + (endUs === null ? "" : ":end=" + endUs + "us");
         const filter = "settb=AVTB," + trim + ",select='" + select + "',trim=end_frame=" + (maxFrames + 1)
             + ",scale=640:640:force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuvj420p,showinfo=checksum=0";
@@ -278,7 +277,10 @@ async function readVideoFrames(upload, { startMs = 0, endMs, detailed, analysisI
         const times = [...stderr.toString().matchAll(/^\[Parsed_showinfo_\d+ @ [^\]]+\]\s+n:\s*\d+\s+pts:\s*(-?\d+)\s+pts_time:/gm)]
             .map((match) => Number(match[1]) / 1000);
         if (!times.length) throw new Error("所选区间没有可分析的视频帧");
-        const content = [{ type: "text", text: JSON.stringify({ analysisId, nextStartMs: times[maxFrames] ?? null }) }];
+        const nextFrameMs = times[maxFrames];
+        const nextStartMs = nextFrameMs === undefined ? null
+            : (startUs + Math.floor((Math.round(nextFrameMs * 1000) - startUs) / gap) * gap) / 1000;
+        const content = [{ type: "text", text: JSON.stringify({ analysisId, nextStartMs }) }];
         const seen = new Map();
         const boundary = Buffer.from("--canvas_frame\r\n");
         let offset = 0;

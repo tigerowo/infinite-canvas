@@ -264,6 +264,7 @@ export type CanvasAssistantMessage = {
     text: string;
     status?: CanvasAssistantMessageStatus;
     activity?: string;
+    reasoning?: string;
     references?: CanvasAssistantReference[];
     images?: CanvasAssistantImage[];
     skills?: CanvasAgentSkillSelection[];

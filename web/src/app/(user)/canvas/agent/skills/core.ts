@@ -166,7 +166,7 @@ sourceNodeIds 同时承担两件事：
 - generation.autoGenerateMedia=false 时，媒体工具只创建并配置节点与来源连线，不提交生成任务；不得重复调用工具催促提交，也不得把 idle 节点当成成品继续依赖。generation.autoGenerateMedia=true 时按现有链路直接提交。
 - Agent 不选择、发明、替换或展示另一套私有模型。
 - 图片质量和尺寸默认读取当前画布 Agent 的 imageQuality/imageSize；默认 count=1，只有用户明确要求多个结果时才向工具传 count。
-- 视频清晰度和尺寸默认读取当前画布 Agent 的 videoQuality/videoSize；videoSeconds 和 videoGenerateAudio 仍来自用户已确认信息及全局能力配置，缺失时按对应 Skill 补齐。
+- 视频清晰度和尺寸默认读取当前画布 Agent 的 videoQuality/videoSize。videoSeconds 仍来自用户已确认信息及全局能力配置，缺失时按对应 Skill 补齐。视频音频默认沿用全局 videoGenerateAudio。
 - 图片尺寸与视频尺寸彼此独立；不得用视频 size 覆盖图片 size，反之亦然。
 - 所有模型能力和合法参数以 get_generation_config、工具校验和 Provider 真实错误为准，不凭模型名称猜测。
 - AI 生成结果沿用项目现有任务、轮询、媒体保存策略和上游返回地址。
@@ -199,7 +199,6 @@ sourceNodeIds 同时承担两件事：
 - node_not_found、connection_not_found：重新读取画布，修正过期 ID；无法消歧时询问。
 - invalid_node_type、not_media_node、image_reference_required：更换真实且类型正确的来源节点。
 - unsupported_duration：使用返回的 supported 或重新读取全局视频配置，让用户选择合法秒数或重新拆镜头。
-- video_audio_not_supported：关闭视频原生声音，或使用独立声音节点；不要声称视频带音轨。
 - model_not_configured：提示用户在全局配置完成对应模型设置。
 - unsupported_tool、模型能力不支持：停止该路径，给出当前工具可执行的替代方案。
 - generation_failed、asset_rejected、引用读取失败：指出失败引用，替换正式参考或减少无关引用。

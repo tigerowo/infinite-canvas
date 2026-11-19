@@ -59,6 +59,7 @@ export type RunCanvasAgentInput = {
     getContext: (state: CanvasAgentState) => CanvasAgentContext;
     executeAction: (action: CanvasAgentAction, signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
     onEvent?: (event: CanvasAgentRuntimeEvent) => void;
+    onReasoning?: (delta: string) => void;
     onContextUsage?: (usage: CanvasAgentContextUsage) => void;
     onCheckpoint?: (checkpoint: {
         state: CanvasAgentState;
@@ -149,7 +150,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
 
     for (let step = 0; step < MAX_AGENT_STEPS; step++) {
         throwIfAborted(input.signal);
-        input.onEvent?.({ status: "thinking", label: step ? "正在根据画布结果继续" : "正在理解画布和创作目标" });
+        input.onEvent?.({ status: "thinking", label: step ? "正在根据画布结果继续" : "" });
         const context = input.getContext(state);
         const canvasContext = serializeCanvasAgentContext(context);
         const buildPrompt = () => buildCanvasAgentSkillPrompt(state.phase, input.userText, context, activeSkillContents, contextCheckpoint, skillFileToolAvailable, false)
@@ -170,13 +171,14 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         }
 
         const requestTurn = () => requestCanvasAgentTurn({
-            config: input.config,
+            config: { ...input.config, textStreaming: true },
             systemPrompt,
             canvasContext,
             messages: protocolMessages,
             tools: agentTools,
             toolMode,
             onContextUsage: input.onContextUsage,
+            onReasoning: input.onReasoning,
             signal: input.signal,
         });
         let turn: Awaited<ReturnType<typeof requestCanvasAgentTurn>>;

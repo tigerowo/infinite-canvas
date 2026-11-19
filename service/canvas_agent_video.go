@@ -295,7 +295,10 @@ func (task *canvasVideoAnalysis) extractFrames(
 	}
 	pick := fmt.Sprintf("if(isnan(prev_selected_pts),%s,gte(pts-prev_selected_pts,%d))", first, spacingUs)
 	if !window.Original {
-		pick += "*(isnan(prev_selected_pts)+gte(scene,0.1))"
+		pick = fmt.Sprintf(
+			"if(isnan(prev_selected_pts),1,gt(floor((pts-%[1]d)/%[2]d),floor((prev_selected_pts-%[1]d)/%[2]d)))",
+			window.StartMs*1_000, spacingUs,
+		)
 	}
 	start := strconv.FormatInt(window.StartMs, 10) + "ms"
 	end := strconv.FormatInt(window.EndMs, 10) + "ms"

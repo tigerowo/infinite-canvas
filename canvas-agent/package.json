@@ -1,6 +1,6 @@
 {
     "name": "@tigerowo/canvas-agent",
-    "version": "0.1.4",
+    "version": "0.1.5",
     "type": "module",
     "bin": {
         "canvas-agent": "index.mjs"
@@ -23,7 +23,7 @@
     },
     "dependencies": {
         "@modelcontextprotocol/sdk": "^1.12.1",
-        "@openai/codex": "0.159.2",
+        "@openai/codex": "0.169.1",
         "express": "^5.1.0",
         "open": "^11.0.1"
     }
