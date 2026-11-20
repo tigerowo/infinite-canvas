@@ -29,6 +29,7 @@ type RequestCanvasAgentTurnInput = {
     toolMode: CanvasAgentToolMode;
     onContextUsage?: (usage: CanvasAgentContextUsage) => void;
     onReasoning?: (delta: string) => void;
+    onText?: (text: string) => void;
     signal?: AbortSignal;
 };
 
@@ -100,7 +101,7 @@ class CanvasAgentRequestError extends Error {
     }
 }
 
-type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textStreaming?: boolean; skipTokenCalibration?: boolean; canvasVideoAnalysisId?: string };
+type CanvasAgentAiConfig = AiConfig & { textReasoningEnabled?: boolean; textStreaming?: boolean; skipTokenCalibration?: boolean; canvasVideoAnalysisId?: string; onTextDelta?: (delta: string | null) => void };
 
 function applyCanvasAgentReasoning(body: Record<string, unknown>, config: CanvasAgentAiConfig, mode: "chat" | "responses" | "gemini") {
     if (!config.textReasoningEnabled) {
@@ -149,7 +150,35 @@ export async function requestCanvasAgentTurn(input: RequestCanvasAgentTurnInput)
             try {
                 input.onContextUsage?.({ tokens: estimateCanvasAgentInputTokens({ systemPrompt, messages, tools }, canvasAgentTokenCalibrationKey(requestConfig)) });
             } catch { /* 用量展示不影响请求 */ }
-            const message = await requestCompletion(requestConfig, systemPrompt, messages, tools, jsonSchema, input.signal, input.onReasoning);
+            const onText = input.onText;
+            const repairJson = onText && toolMode !== "native" ? (await import("jsonrepair")).jsonrepair : undefined;
+            let content = "";
+            let shown = "";
+            let hasToolCall = false;
+            const config: CanvasAgentAiConfig = onText ? {
+                ...requestConfig,
+                onTextDelta(delta) {
+                    if (input.signal?.aborted || hasToolCall) return;
+                    if (delta === null) {
+                        hasToolCall = true;
+                        if (shown) onText("");
+                        return;
+                    }
+                    content += delta;
+                    let reply = content;
+                    if (repairJson) {
+                        try {
+                            const result = JSON.parse(repairJson(content));
+                            if (!Array.isArray(result?.actions) || result.actions.length || typeof result.reply !== "string") return;
+                            reply = result.reply;
+                        } catch { return; }
+                    }
+                    if (reply.length <= shown.length || !reply.startsWith(shown) || CANVAS_AGENT_JSON_FALLBACK_SIGNAL.startsWith(reply.trim())) return;
+                    shown = reply;
+                    onText(reply);
+                },
+            } : requestConfig;
+            const message = await requestCompletion(config, systemPrompt, messages, tools, jsonSchema, input.signal, input.onReasoning);
             try {
                 input.onContextUsage?.({ tokens: estimateCanvasAgentInputTokens({ systemPrompt, messages: [...messages, { role: "assistant", ...message }], tools }, canvasAgentTokenCalibrationKey(requestConfig)) });
             } catch { /* 用量展示不影响返回 */ }
@@ -259,7 +288,7 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
     const body: Record<string, unknown> = {
         model: config.model,
         messages: [{ role: "system", content: systemPrompt }, ...messages.map(toRequestMessage)],
-        stream: config.textStreaming === true,
+        ...(config.textStreaming === true ? { stream: true } : {}),
     };
     if (config.textStreaming) body.stream_options = { include_usage: true };
     if (tools.length) {
@@ -299,7 +328,11 @@ async function requestCompletion(config: CanvasAgentAiConfig, systemPrompt: stri
                 finish_reason?: string | null;
             }> | undefined)?.[0];
             if (!choice) return;
-            if (typeof choice.delta?.content === "string") content += choice.delta.content;
+            if (choice.delta?.tool_calls?.length) config.onTextDelta?.(null);
+            if (typeof choice.delta?.content === "string") {
+                content += choice.delta.content;
+                config.onTextDelta?.(choice.delta.content);
+            }
             if (typeof choice.delta?.reasoning_content === "string") {
                 reasoningContent += choice.delta.reasoning_content;
                 onReasoning?.(choice.delta.reasoning_content);
@@ -403,6 +436,8 @@ async function requestResponsesCompletion(config: CanvasAgentAiConfig, systemPro
     if (config.textStreaming && response.ok && isEventStreamResponse(response)) {
         let terminal: ResponsesPayload | undefined;
         await readCanvasAgentStream(response, (event) => {
+            if (event.type === "response.output_item.added" && (event.item as ResponsesOutputItem | undefined)?.type === "function_call") config.onTextDelta?.(null);
+            if (event.type === "response.output_text.delta" && typeof event.delta === "string") config.onTextDelta?.(event.delta);
             if (onReasoning && typeof event.delta === "string" && event.delta &&
                 (event.type === "response.reasoning_summary_text.delta" || event.type === "response.reasoning_text.delta")) {
                 const source = event.type === "response.reasoning_summary_text.delta" ? "summary" : "content";
@@ -500,7 +535,7 @@ async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt
     const extraSystemParts = messages.flatMap((message) => message.role !== "system" ? [] : typeof message.content === "string" ? [{ text: message.content }] : message.content.flatMap((part) => part.type === "text" ? [{ text: part.text }] : []));
     const body = {
         model: config.model,
-        stream: config.textStreaming === true,
+        ...(config.textStreaming === true ? { stream: true } : {}),
         systemInstruction: { parts: [{ text: systemPrompt }, ...extraSystemParts] },
         contents,
         ...(tools.length ? { tools: [{ functionDeclarations: tools.map((tool) => tool.function) }] } : {}),
@@ -538,7 +573,9 @@ async function requestGeminiCompletion(config: CanvasAgentAiConfig, systemPrompt
                 if (Array.isArray(content?.parts)) {
                     for (const part of content.parts as Array<Record<string, unknown>>) {
                         parts.push(part);
+                        if (part.functionCall) config.onTextDelta?.(null);
                         if (part.thought === true && typeof part.text === "string") onReasoning?.(part.text);
+                        else if (typeof part.text === "string") config.onTextDelta?.(part.text);
                     }
                 }
                 if (typeof candidate.finishReason === "string") finishReason = candidate.finishReason;
@@ -593,7 +630,7 @@ function canvasAgentJsonSchema(tools: CanvasAgentToolDefinition[]): Record<strin
         properties: {
             actions: {
                 type: "array",
-                maxItems: 12,
+                maxItems: tools.some(({ function: tool }) => tool.name === "present_choices") ? 13 : 12,
                 items: {
                     type: "object",
                     properties: {

@@ -38,6 +38,22 @@
 <table>
   <tr>
     <td width="190" align="center">
+      <a href="https://mozhenzhen.com/go/infinite-canvas" target="_blank" rel="noopener"><img src="https://mozhenzhen.com/mzz-prototype/assets/brand-logo-full-dark.webp" width="163" alt="模真真"></a>
+    </td>
+    <td>
+      🐼 <strong>模真真｜AI 比价与验真</strong> 覆盖 2000+ 模型、35 万+ 渠道，可对比官方订阅、按量 API 和套餐价格。🛡️ 查 5000+ 中转站的用户口碑和 10 万份验真报告，识别套壳、降智。🧭 收录 1200+ 号商、2 万+ 商品，可比较成品号、代充和团队席位的价格、发货速度和售后质保。🎁 每天更新免费额度和优惠活动，另有公益站合集。查询免费，排名只看数据。👉 <a href="https://mozhenzhen.com/go/infinite-canvas">去模真真查询</a>
+    </td>
+  </tr>
+  <tr>
+    <td width="190" align="center">
+      <a href="https://www.infistar.cc/register?aff=U7BN42KW&ref_source=link" target="_blank" rel="noopener"><img src="https://infistar.cc/header-logo.svg" width="163" alt="Infistar.cc 无限星河"></a>
+    </td>
+    <td>
+      <strong>无限画布 × Infistar.cc 无限星河</strong> 一个 Key 接入 Claude、GPT、Gemini、Grok、DeepSeek 等 16 个品牌的 200+ 模型，覆盖文本、生图、视频生成和 Agent 多模态工作流。💥 官方渠道，模型可验真，低至官方价 0.1 折。⚡ 上千条冗余线路，遇故障自动切换。🏆 获 100+ 开源项目推荐，含 10 万+ Star 项目。🎁 通过<a href="https://www.infistar.cc/register?aff=U7BN42KW&ref_source=link">无限画布专属链接</a>注册即送 ¥5。
+    </td>
+  </tr>
+  <tr>
+    <td width="190" align="center">
       <a href="https://tokendance.space/" target="_blank" rel="noopener"><img src="https://tokendance.space/TokenDance%E5%93%81%E7%89%8C%E5%9B%BE%E6%A0%87-%E9%BB%91%E8%89%B2%E5%BA%95.svg" width="163" alt="TokenDance 词元跳动"></a>
     </td>
     <td>

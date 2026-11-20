@@ -258,10 +258,16 @@ export type CanvasAgentProtocolMessage =
 
 export type CanvasAssistantMessageStatus = "thinking" | "running" | "waiting" | "success" | "error";
 
+export type CanvasAssistantQuestion = {
+    question: string;
+    options: string[];
+};
+
 export type CanvasAssistantMessage = {
     id: string;
     role: "user" | "assistant";
     text: string;
+    questions?: CanvasAssistantQuestion[];
     status?: CanvasAssistantMessageStatus;
     activity?: string;
     reasoning?: string;

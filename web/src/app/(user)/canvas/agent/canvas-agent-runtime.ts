@@ -60,6 +60,7 @@ export type RunCanvasAgentInput = {
     executeAction: (action: CanvasAgentAction, signal?: AbortSignal) => Promise<CanvasAgentToolResult>;
     onEvent?: (event: CanvasAgentRuntimeEvent) => void;
     onReasoning?: (delta: string) => void;
+    onText?: (text: string) => void;
     onContextUsage?: (usage: CanvasAgentContextUsage) => void;
     onCheckpoint?: (checkpoint: {
         state: CanvasAgentState;
@@ -171,7 +172,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         }
 
         const requestTurn = () => requestCanvasAgentTurn({
-            config: { ...input.config, textStreaming: true },
+            config: input.config,
             systemPrompt,
             canvasContext,
             messages: protocolMessages,
@@ -179,6 +180,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             toolMode,
             onContextUsage: input.onContextUsage,
             onReasoning: input.onReasoning,
+            onText: input.onText,
             signal: input.signal,
         });
         let turn: Awaited<ReturnType<typeof requestCanvasAgentTurn>>;
@@ -214,7 +216,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         };
         let nativeActions: CanvasAgentAction[] = [];
         let actionError = turn.toolError || (turn.toolCalls.length
-            ? turn.toolCalls.find((toolCall) => toolCall.argumentsError)?.argumentsError
+            ? turn.toolCalls.find((toolCall) => toolCall.name !== "present_choices" && toolCall.argumentsError)?.argumentsError
             : parsedJson.error);
         if (!actionError) {
             try {
@@ -227,6 +229,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             actionError = "本轮必须返回可执行的画布工具指令";
         }
         if (actionError) {
+            input.onText?.("");
             if (protocolError) throw new Error("工具指令仍无效，本批操作未执行：" + actionError);
             protocolError = actionError;
             const feedback = JSON.stringify({
@@ -247,6 +250,7 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
         }
         const arrangeRequested = canvasAgentAllowsArrangement(input.userText);
         const requestedActions = nativeActions.length ? nativeActions : parsedJson.actions;
+        if (requestedActions.length) input.onText?.("");
         const actions = requestedActions.filter((action) => action.name !== "arrange_nodes" || arrangeRequested);
         const rejectedToolMessages: CanvasAgentProtocolMessage[] = nativeActions.filter((action) => action.name === "arrange_nodes" && !arrangeRequested).map((action) => ({
             role: "tool",
@@ -281,12 +285,17 @@ export async function runCanvasAgent(input: RunCanvasAgentInput): Promise<RunCan
             return { reply: finalReply, state, protocolMessages: persistCanvasAgentProtocolMessages(protocolMessages), contextCheckpoint, jsonFallbackMode: usedJsonFallbackMode };
         }
 
-        expectedAction = false;
-        protocolError = undefined;
-        input.onEvent?.({ status: "running", label: actions.length === 1 ? canvasAgentActionLabel(actions[0]) : "正在执行 " + actions.length + " 个画布操作" });
+        const canvasActions = actions.filter((action) => action.name !== "present_choices");
+        if (canvasActions.length) {
+            input.onEvent?.({ status: "running", label: canvasActions.length === 1 ? canvasAgentActionLabel(canvasActions[0]) : "正在执行 " + canvasActions.length + " 个画布操作" });
+        }
 
         const results = await executeActions(actions, state, input.executeAction, input.signal, input.onEvent);
-        hasExecutedActions = true;
+        if (canvasActions.length || results.items.some(({ action, result }) => action.name === "present_choices" && result.ok)) {
+            expectedAction = false;
+            protocolError = undefined;
+            hasExecutedActions = true;
+        }
         state = results.state;
 
         if (nativeActions.length && toolMode === "native") {
@@ -333,7 +342,7 @@ export async function executeActions(
     let state = initialState;
     const executeOne = async (action: CanvasAgentAction) => {
         throwIfAborted(signal);
-        onEvent?.({ status: "running", label: canvasAgentActionLabel(action) });
+        if (action.name !== "present_choices") onEvent?.({ status: "running", label: canvasAgentActionLabel(action) });
         try {
             const result = await executeAction(action);
             if (action.name === "set_agent_state" && result.ok) state = applyAgentState(state, action.arguments);
@@ -351,7 +360,7 @@ export async function executeActions(
         }
     };
 
-    const items = actions.every(isCanvasAgentMediaAction)
+    const items = actions.every((action) => action.name === "present_choices" || isCanvasAgentMediaAction(action))
         ? await Promise.all(actions.map(executeOne))
         : await actions.reduce<Promise<Array<{ action: CanvasAgentAction; result: CanvasAgentToolResult }>>>(
             async (pending, action) => [...(await pending), await executeOne(action)],

@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import type { CanvasAgentPhase } from "../types";
 
 export const CANVAS_AGENT_ACTION_NAMES = [
+    "present_choices",
     "get_canvas_summary",
     "get_selected_nodes",
     "query_canvas_nodes",
@@ -99,6 +100,17 @@ export const CANVAS_AGENT_VIDEO_TOOL = defineTool(
 );
 
 export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
+    defineTool("present_choices", "只在下一步确实需要用户做选择时调用。一次提交一道或多道单选题。", {
+        questions: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: { question: STRING, options: { type: "array", items: STRING } },
+                required: ["question", "options"],
+                additionalProperties: false,
+            },
+        },
+    }, ["questions"]),
     defineTool("get_canvas_summary", "读取当前画布摘要、节点、连线、模型配置和任务状态。"),
     defineTool("get_selected_nodes", "读取用户当前选中的真实画布节点。"),
     defineTool("query_canvas_nodes", "当默认上下文中没有目标节点 ID 时，按 ID、关键词或类型只读查询画布节点；找到 ID 后再用 get_node 读取详情。", {
@@ -189,6 +201,16 @@ export const CANVAS_AGENT_TOOLS: CanvasAgentToolDefinition[] = [
 
 export function normalizeCanvasAgentAction(name: unknown, args: unknown, id = nanoid()): CanvasAgentAction {
     if (typeof name !== "string" || !ACTION_NAME_SET.has(name)) throw new Error("模型返回了不允许的工具");
+    if (name === "present_choices") {
+        const items = isRecord(args) && Array.isArray(args.questions) ? args.questions : [];
+        const questions = items.flatMap((item) => {
+            if (!isRecord(item) || typeof item.question !== "string" || !Array.isArray(item.options)) return [];
+            const question = item.question.trim();
+            const options = [...new Set<string>(item.options.map((option: unknown) => typeof option === "string" ? option.trim() : "").filter(Boolean))];
+            return question && options.length >= 2 ? [{ question, options }] : [];
+        });
+        return { id, name, arguments: { questions } };
+    }
     if (args !== undefined && !isRecord(args)) throw new Error(name + " 的 arguments 必须是对象");
     const input = isRecord(args) ? args : {};
     const definition = canvasAgentToolDefinition(name);
@@ -369,15 +391,23 @@ export async function parseCanvasAgentJson(content: string, { allowRepair = fals
         if (!isRecord(payload) || !Object.prototype.hasOwnProperty.call(payload, "actions")) return { parsed: false, actions: [], reply: content.trim() };
         actionPayload = true;
         if (!Array.isArray(payload.actions)) throw new Error("actions 必须是数组");
-        if (payload.actions.length > 12) throw new Error("单次最多执行 12 个画布操作，请拆分调用");
+        let hasChoiceCall = false;
+        const batch = payload.actions.filter((item) => {
+            if (!isRecord(item) || (item.tool || item.name) !== "present_choices") return true;
+            if (hasChoiceCall) return false;
+            hasChoiceCall = true;
+            return true;
+        });
+        const canvasActionCount = batch.length - (hasChoiceCall ? 1 : 0);
+        if (canvasActionCount > 12) throw new Error("单次最多执行 12 个画布操作，请拆分调用");
         const outerKeys = Object.keys(payload).filter((key) => key !== "actions" && key !== "reply");
         if (outerKeys.length) throw new Error("JSON 外层不支持字段：" + outerKeys.join("、") + "；工具参数必须放在对应 action 的 arguments 中");
-        const actions = payload.actions.map((item) => {
+        const actions = batch.map((item) => {
             if (!isRecord(item)) throw new Error("actions 中的每项必须是工具调用对象");
             const name = item.tool || item.name;
             const misplacedKeys = Object.keys(item).filter((key) => !["id", "tool", "name", "arguments"].includes(key));
             let args = item.arguments;
-            if (misplacedKeys.length) {
+            if (misplacedKeys.length && name !== "present_choices") {
                 if (typeof name !== "string" || !ACTION_NAME_SET.has(name)) throw new Error("模型返回了不允许的工具");
                 if (args !== undefined && !isRecord(args)) throw new Error(name + " 的 arguments 必须是对象");
                 const supported = canvasAgentToolDefinition(name).function.parameters.properties;
@@ -405,6 +435,7 @@ function canvasAgentToolDefinition(name: string) {
 
 export function canvasAgentActionLabel(action: CanvasAgentAction) {
     const labels: Record<CanvasAgentActionName, string> = {
+        present_choices: "正在准备选项",
         get_canvas_summary: "正在读取画布",
         get_selected_nodes: "正在读取选中节点",
         query_canvas_nodes: "正在查找画布节点",
