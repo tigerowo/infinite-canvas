@@ -1,7 +1,8 @@
-name: Docker image
+name: CI Pipeline
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -10,22 +11,30 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository }}
+  UPSTREAM_REPO: tigerowo/infinite-canvas
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   meta:
+    needs: test
     runs-on: ubuntu-latest
     outputs:
+      image: ${{ steps.image.outputs.name }}
       tags: ${{ steps.meta.outputs.tags }}
       labels: ${{ steps.meta.outputs.labels }}
     steps:
+      - id: image
+        run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_NAME }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=ref,event=tag
             type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
 
   build:
     needs: meta
@@ -57,7 +66,7 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ needs.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
+          outputs: type=image,name=${{ needs.meta.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=app-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=app-${{ matrix.arch }}
 
@@ -99,6 +108,7 @@ jobs:
         shell: bash
         env:
           TAGS: ${{ needs.meta.outputs.tags }}
+          IMAGE: ${{ needs.meta.outputs.image }}
         run: |
           tag_args=()
           while IFS= read -r tag; do
@@ -109,7 +119,51 @@ jobs:
 
           digest_args=()
           while IFS= read -r digest_file; do
-            digest_args+=("${IMAGE_NAME}@sha256:${digest_file}")
+            digest_args+=("${IMAGE}@sha256:${digest_file}")
           done < <(find "$RUNNER_TEMP/digests" -type f -printf '%f\n' | sort)
 
           docker buildx imagetools create "${tag_args[@]}" "${digest_args[@]}"
+
+  upstream-pr:
+    needs:
+      - meta
+      - merge
+    if: ${{ vars.ENABLE_UPSTREAM_PR == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_TOKEN }}
+      - name: 同步分支并创建或更新上游 PR
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_TOKEN }}
+          IMAGE_TAGS: ${{ needs.meta.outputs.tags }}
+          BRANCH: ci/upstream-sync
+        run: |
+          if [ "${{ github.repository }}" = "$UPSTREAM_REPO" ]; then
+            echo "当前即源作者仓库，跳过"
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "缺少 secrets.UPSTREAM_TOKEN" >&2
+            exit 1
+          fi
+          git remote add upstream "https://github.com/$UPSTREAM_REPO.git"
+          git fetch upstream main
+          if git diff --quiet upstream/main...HEAD; then
+            echo "与上游无差异，跳过 PR"
+            exit 0
+          fi
+          git checkout -B "$BRANCH"
+          git push -f origin "$BRANCH"
+          existing=$(gh api -X GET "repos/$UPSTREAM_REPO/pulls" -f state=open -f head="${{ github.repository_owner }}:$BRANCH" --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "PR #$existing 已存在，分支已更新"
+          else
+            gh pr create --repo "$UPSTREAM_REPO" --base main --head "${{ github.repository_owner }}:$BRANCH" \
+              --title "Sync from ${{ github.repository }}" \
+              --body "由 CI 自动同步 ${{ github.sha }}。镜像标签：$IMAGE_TAGS"
+          fi

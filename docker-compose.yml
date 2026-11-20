@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/tigerowo/infinite-canvas:latest
+    image: ${IMAGE:-ghcr.io/tigerowo/infinite-canvas:latest}
     build:
       context: .
       dockerfile: Dockerfile
